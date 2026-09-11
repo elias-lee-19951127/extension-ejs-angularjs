@@ -1,0 +1,102 @@
+{
+  "name": "ejs-angularjs-navigator",
+  "displayName": "EJS + AngularJS Navigator",
+  "description": "Track bien/ham giua template EJS va controller AngularJS 1.x",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onLanguage:html",
+    "workspaceContains:**/*.ejs"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ejs",
+        "aliases": [
+          "EJS"
+        ],
+        "extensions": [
+          ".ejs"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ejsng.reindex",
+        "title": "EJS/NG: Danh index lai workspace"
+      },
+      {
+        "command": "ejsng.showStats",
+        "title": "EJS/NG: Thong ke index"
+      }
+    ],
+    "configuration": {
+      "title": "EJS + AngularJS Navigator",
+      "properties": {
+        "ejsng.include": {
+          "type": "array",
+          "default": [
+            "**/*.js",
+            "**/*.ejs",
+            "**/*.html"
+          ],
+          "description": "Glob cac file duoc danh index."
+        },
+        "ejsng.exclude": {
+          "type": "array",
+          "default": [
+            "**/node_modules/**",
+            "**/bower_components/**",
+            "**/dist/**",
+            "**/*.min.js"
+          ],
+          "description": "Glob loai tru."
+        },
+        "ejsng.moduleAliases": {
+          "type": "array",
+          "default": [
+            "myApp",
+            "app",
+            "appModule"
+          ],
+          "description": "Ten bien duoc coi la angular module khi khong tim thay khai bao angular.module() trong cung file."
+        },
+        "ejsng.ejsDelimiter": {
+          "type": "string",
+          "default": "%",
+          "description": "Delimiter EJS. '%' nghia la <% %>."
+        },
+        "ejsng.customDirectives": {
+          "type": "object",
+          "default": {},
+          "description": "Directive tu viet -> kieu bieu thuc. Vi du {\"myOn\":\"statement\"}."
+        },
+        "ejsng.diagnostics.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Bat canh bao bien khong ton tai tren scope. Mac dinh TAT de tranh false positive tren code cu."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  },
+  "scripts": {
+    "compile": "tsc --build && node build.js",
+    "watch": "tsc --build --watch & node build.js --watch",
+    "package": "tsc --build && node build.js --production && npx --yes @vscode/vsce package --no-dependencies"
+  }
+}

@@ -1,0 +1,37 @@
+<idea-plugin>
+    <id>com.ejsng.ejs-angularjs-navigator</id>
+    <name>EJS + AngularJS Navigator</name>
+    <vendor>local</vendor>
+
+    <description><![CDATA[
+      Track bien va ham giua template EJS va controller AngularJS 1.x.
+      Go-to-definition tu {{ bieu thuc }} sang $scope, find-usages nguoc lai tu
+      controller ra template, va phat hien controller/directive/filter khong ai dung.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="com.ejsng.intellij.EjsNgStartupActivity"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="ejsng"
+                name="EJS + AngularJS"
+                factoryClass="com.ejsng.intellij.EjsNgLanguageServerFactory">
+            <description><![CDATA[Language server cho EJS + AngularJS 1.x]]></description>
+        </server>
+        <!--
+          CHU Y: KHONG dung <languageMapping language="JavaScript"/>.
+
+          Language ID "JavaScript" chi ton tai khi plugin JavaScript co mat, ma
+          plugin do khong co o moi ban IDE (IDEA Community truoc 2026.1,
+          Android Studio). Khi thieu, mapping im lang khong lam gi va plugin
+          trong nhu bi hong. Khop theo TEN FILE thi chay o moi ban.
+        -->
+        <fileNamePatternMapping patterns="*.js"  serverId="ejsng" languageId="javascript"/>
+        <fileNamePatternMapping patterns="*.ejs" serverId="ejsng" languageId="html"/>
+        <languageMapping language="HTML" serverId="ejsng" languageId="html"/>
+    </extensions>
+</idea-plugin>

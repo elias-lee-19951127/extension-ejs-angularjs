@@ -1,0 +1,12 @@
+{
+  "name": "@ejsng/server",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "bin": { "ejsng-server": "dist/index.js" },
+  "dependencies": {
+    "@ejsng/core": "0.1.0",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vscode-uri": "^3.0.8"
+  }
+}

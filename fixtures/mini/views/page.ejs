@@ -1,0 +1,16 @@
+<%# Fixture: bam theo dung phong cach cua repo smart-city %>
+<% if (checkViewACL("demo-view")) { %>
+  <div data-ng-controller="demo-view-controller" data-ng-init="init()">
+    <ul>
+      <li data-ng-repeat="row in rows" data-ng-click="pick(row)">
+        {{ row.label }} — {{ busy.saving ? 'dang luu' : 'xong' }}
+      </li>
+    </ul>
+    <input data-ng-model="form.title">
+    <span>{{ total | money }}</span>
+    <my-widget data="form"></my-widget>
+    <input pick-file="onPick($file)">
+  </div>
+<% } else { %>
+  <p><%= denyMessage %></p>
+<% } %>

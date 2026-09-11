@@ -1,0 +1,12 @@
+{
+  "name": "@ejsng/cli",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "bin": {
+    "ejsng": "dist/index.js",
+    "ejsng-probe": "dist/probe.js"
+  },
+  "dependencies": {
+    "@ejsng/core": "0.1.0"
+  }
+}

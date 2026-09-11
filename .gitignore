@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.ejsng-cache/
+*.vsix
+packages/vscode-client/out/
+.kotlin/
+.DS_Store

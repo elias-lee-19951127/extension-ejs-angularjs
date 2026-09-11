@@ -1,0 +1,13 @@
+{
+  "name": "@ejsng/core",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "acorn": "^8.12.1",
+    "acorn-loose": "^8.4.0",
+    "acorn-walk": "^8.3.4",
+    "angular-html-parser": "^5.2.0",
+    "fast-glob": "^3.3.2"
+  }
+}
