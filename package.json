@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
-    "test": "npm run build && node --test packages/core/test/*.test.js"
+    "test": "npm run build && node --test packages/core/test/*.test.js packages/server/test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

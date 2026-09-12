@@ -16,6 +16,7 @@
  *   --offset K dich K ky tu tu dau chuoi tim duoc — de tro vao giua chuoi,
  *              vi du "section.id" voi --offset 8 se tro vao chu 'id'
  *   --refs     chay find-references thay vi go-to-definition
+ *   --rename T xem truoc rename thanh T (KHONG ghi file)
  */
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -27,6 +28,7 @@ interface Args {
   nth: number;
   offset: number;
   refs: boolean;
+  rename: string;
   root: string;
   moduleAliases: string[];
 }
@@ -39,6 +41,7 @@ function parseArgs(argv: string[]): Args {
     nth: 1,
     offset: 0,
     refs: false,
+    rename: '',
     root: process.cwd(),
     moduleAliases: [],
   };
@@ -48,6 +51,7 @@ function parseArgs(argv: string[]): Args {
     if (a === '--nth') args.nth = Number(argv[++i] ?? 1);
     else if (a === '--offset') args.offset = Number(argv[++i] ?? 0);
     else if (a === '--refs') args.refs = true;
+    else if (a === '--rename') args.rename = argv[++i] ?? '';
     else if (a === '--root') args.root = argv[++i] ?? args.root;
     else if (a === '--module-alias') args.moduleAliases.push(argv[++i] ?? '');
     else positional.push(a);
@@ -96,7 +100,20 @@ function main(): void {
   const at = source.slice(offset, offset + 18).split('\n')[0];
   console.log(`${rel}:${line}:${col}  …${around}[${at}`);
 
-  if (args.refs) {
+  if (args.rename) {
+    ws.index(); // rename can fact moi nhat
+    const r = ws.renameAt(rel, offset, args.rename);
+    if (r.reason) {
+      console.log(`  ✗ KHONG DOI TEN: ${r.reason}`);
+      process.exitCode = 1;
+    } else {
+      const perFile = new Map<string, number>();
+      for (const e of r.edits) perFile.set(e.path, (perFile.get(e.path) ?? 0) + 1);
+      console.log(`  rename '${r.query}' -> '${args.rename}': ${r.edits.length} cho (xem truoc, KHONG ghi file)`);
+      for (const [path, n] of perFile) console.log(`    ${String(n).padStart(4)}  ${path}`);
+      if (r.note) console.log(`  ⓘ  ${r.note.split('\n').join('\n  ⓘ  ')}`);
+    }
+  } else if (args.refs) {
     const r = ws.referencesAt(rel, offset);
     console.log(`  refs '${r.query}': ${r.locations.length}`);
     for (const l of r.locations.slice(0, 12)) {

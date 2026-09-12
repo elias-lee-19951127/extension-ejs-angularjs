@@ -356,7 +356,7 @@ function extractScopeMembers(ast: acorn.Program, decl: NgDeclaration, facts: JsF
 }
 
 /** Tim node function ung voi mot khai bao (doi so thu 2, hoac phan tu cuoi cua array). */
-function findFunctionFor(
+export function findFunctionFor(
   ast: acorn.Program,
   decl: NgDeclaration,
 ): acorn.FunctionExpression | acorn.ArrowFunctionExpression | null {
@@ -397,7 +397,7 @@ function findFunctionFor(
   return found;
 }
 
-function scopeParamName(
+export function scopeParamName(
   decl: NgDeclaration,
   fn: acorn.FunctionExpression | acorn.ArrowFunctionExpression,
 ): string | null {

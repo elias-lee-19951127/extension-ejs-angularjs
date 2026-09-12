@@ -404,6 +404,7 @@ nếu chỉ 40% template nối được thì phải đầu tư mạnh vào cơ c
   Feature #4, #6, #10, #12. Client IntelliJ qua LSP4IJ.
 - **M3 (2 tuần)** — Trục A: `res.render` + include chain (#3, #11), bridge A×B. Feature #7.
 - **M4 (3 tuần)** — Completion (#5) và rename (#9), cân nhắc cắm virtual-TS ở bước này.
+  **Đã làm rename và completion theo shape, không cần virtual-TS — phụ lục I.**
 
 ## 9. Cấu trúc repo
 
@@ -1082,3 +1083,492 @@ cục do nền tảng cấp lúc chạy, hoặc là lỗi thật trong codebase 
 Đó chính là thứ tính năng diagnostics sinh ra để phát hiện. Ép cho mọi định danh đều "resolve
 được" sẽ giết mất giá trị đó. Phần còn lại là biến trong file nằm ngoài phạm vi index
 (`web/js/old/utilities` không có đuôi `.js`) và vài global của thư viện bên thứ ba.
+
+---
+
+# PHỤ LỤC I — Rename, completion theo shape, và hai lỗ hổng lộ ra khi làm (2026-09-11)
+
+## I.1 Rename: đổi `$scope.foo` đồng bộ ra mọi template
+
+Seam test do người dùng chọn: **Workspace API** (`prepareRenameAt`, `renameAt`) **và LSP qua
+stdio** (`packages/server/test/lsp.test.js` khởi động server thật, nói JSON-RPC như IDE).
+
+| Nơi được đổi | Cách tìm |
+|---|---|
+| JS — mọi lượt `s.foo`, **cả đọc lẫn ghi** | Quét AST lúc rename. `scopeMembers` chỉ giữ lượt gán đầu tiên: `index.js` có 169 lượt `$scope.x` nhưng chỉ 66 lượt gán |
+| Template — gốc biểu thức | Trích lại fact từ nội dung hiện tại, lọc theo controller bao quanh |
+| Template — giá trị thuộc tính do Linker phân giải | Đi qua chính `linker.resolveCandidates` (`pick-file="onPick($file)"`, `data="form"`) |
+
+Nguyên tắc: **có bất kỳ xung đột nào thì từ chối cả lượt** — đổi tên dở dang tệ hơn không đổi.
+Từ chối luôn kèm lý do, và server trả `ResponseError` chứ không trả `null`, để IDE hiện được lý do:
+
+- tên mới không phải định danh, là từ khoá, bắt đầu bằng `$`, hoặc trùng tên cũ
+- tên mới đã có trên scope (JS đã truy cập `s.<tên mới>`, hoặc template đang dùng)
+- tên mới **bị biến `ng-repeat` che** tại một chỗ dùng (`busy` → `row` trong `<li ng-repeat="row in rows">`)
+- property chỉ **đọc** mà không gán trong controller — có thể kế thừa từ scope cha
+- biến cục bộ của template, thành phần dựng sẵn (`$on`, `$event`), controllerAs, property lồng nhau
+- span không trỏ đúng tên cũ (tức bug ở Layer 2) — từ chối thay vì sửa hỏng
+
+Che bóng phía JS: `s` trong `helper(function (s) {…})` là biến khác, không bị đổi — kiểm bằng
+`resolveBinding`, đúng quy tắc phạm vi của phụ lục H.
+
+**Edit tính trên nội dung hiện tại, không dùng fact trong index.** Index có thể cũ hơn file, mà
+rename lệch một ký tự là sửa hỏng code người dùng.
+
+### Controller khai báo trùng tên ở nhiều file
+
+`smart-city` có `cityos-demo-dha-management-view-controller` ở cả `product/…/index.js` lẫn
+`new-version/fe-be/index.js`, mỗi bản đi với một template riêng. Go-to-definition trả về cả hai
+là vô hại; rename thì ghi vào file. **Người dùng chọn: ghép theo thư mục gần nhất.**
+
+`renameScope()` ghép mỗi template với file `.js` có thư mục chung sâu nhất, rồi chỉ đổi **nhóm**
+chứa điểm bắt đầu. Template hoà khoảng cách giữa hai bản kéo cả hai bản vào nhóm — đổi một bên thì
+template đó hỏng với bên kia — lan dần tới khi ổn định; kéo hết thì đổi hết và báo.
+
+Đo trên `smart-city`, khớp số đếm độc lập bằng grep:
+
+| Bắt đầu từ | Sửa | Giữ nguyên |
+|---|---|---|
+| `product/…/index.js` | 44 JS + 25 template = 69 | `new-version/fe-be/index.js` |
+| `new-version/fe-be/index.js` | 28 JS + 8 template = 36, **kèm cảnh báo 8 chỗ** (mục I.3) | `product/…/index.js` |
+
+Test khứ hồi: áp 69 edit vào overlay rồi nối lại index — mọi gốc biểu thức trong template vẫn resolve.
+
+## I.2 Bug lộ ra khi làm rename: mọi span trong giá trị thuộc tính lệch một ký tự
+
+Rename cần span **chính xác tuyệt đối**, và đó là lúc bug lộ ra. `valueSpan` của
+`angular-html-parser` bắt đầu **từ dấu nháy** (`x="v"` → trỏ vào `"`); không có nháy thì bắt đầu
+từ chính giá trị. Code lấy thẳng `valueSpan.start.offset` làm gốc offset.
+
+| | Biểu thức lệch |
+|---|---|
+| `smart-city` | 146/211 — mọi biểu thức trong thuộc tính; `{{ }}` trong text node thì đúng |
+| fixture | 4/7 |
+
+Vì sao điều hướng không phát hiện được suốt tám phụ lục trước:
+
+- `inSpan` tính **cả hai đầu mút**, nên con trỏ đặt ở ký tự nào của tên cũng "trúng" span lệch.
+- `sweep` dò tại chính `root.span.start` — lệch cùng chiều với span nên vẫn resolve được.
+
+Bị ảnh hưởng: tên `ng-controller`, giá trị thuộc tính giao cho Linker, `{{ }}` nằm trong thuộc
+tính, và vị trí find-references hiển thị cho người dùng (tô sáng lệch vào dấu nháy).
+
+Sửa: `valueStartOf()` chỉ `+1` khi ký tự đầu là dấu nháy. **`PARSER_VERSION` 10 → 11.** Thêm bất
+biến thứ năm, có test riêng (`spans.test.js`: 405 vi phạm trước khi sửa → 0):
+
+> **Mọi span trong fact template phải trỏ đúng vào chữ nó đại diện**: `source.slice(span) === text`.
+
+`sweep` sau khi sửa không đổi (99.2%, 136 chỗ sót như phụ lục H) — sửa không làm thụt lùi.
+
+## I.3 Điểm mù của `sweep`: nó chỉ đếm những gì extractor tìm thấy
+
+"Template 100%" ở phụ lục G là 100% **của các biểu thức đã trích được**. Biểu thức bị extractor bỏ
+sót không bao giờ vào mẫu số.
+
+Rename làm lộ ra điều này: `new-version/fe-be/content.ejs` có 16 lượt `busy` nhưng chỉ 8 được
+trích. Đếm theo dòng: **21/88** dòng có `data-ng-*` hoặc `{{` không sinh ra biểu thức nào.
+
+Nguyên nhân: file thụt lề bằng **U+2003 (EM SPACE)**. Header của bản `product/view/content.ejs`
+có ghi việc này, kèm nhận định "HTML coi nó là whitespace nên vẫn chạy". Nhận định đó **sai** —
+đã kiểm cả hai phía:
+
+- **Trình duyệt:** `DOMParser` của Chrome trả về thuộc tính tên là `"  data-ng-disabled"` — U+2003
+  nằm **trong tên**. Theo đặc tả tokenizer HTML, trong thẻ chỉ tab/LF/FF/space là khoảng trắng,
+  nên AngularJS không chuẩn hoá được tên đó thành `ngDisabled`.
+- **AngularJS 1.8.3:** `Lexer.isWhitespace` chỉ nhận space, `\r`, `\t`, `\n`, `\v`, `\u00A0`.
+  `{{` có chứa U+2003 ném lỗi lexer lúc chạy.
+
+Tức là 21 dòng đó ở bản new-version **chưa bao giờ chạy như directive**. Extractor hành xử đúng
+như runtime — đây không phải bug của extension, và không nên "sửa" để nó trích được.
+
+Rename không đoán mà **báo**: `unparsedOccurrences()` quét các vùng trông giống Angular (giá trị
+của thuộc tính có `ng-`, bên trong `{{ }}`), liệt kê chỗ còn chứa tên cũ mà không được đổi, kèm
+gợi ý U+2003 nếu dòng đó có ký tự này.
+
+**Bài học:** độ phủ đo trên đầu ra của chính công cụ có mẫu số do chính công cụ quyết định. Muốn
+biết cái bị bỏ sót, phải đếm bằng một nguồn **độc lập** — ở đây là grep.
+
+## I.4 Completion theo shape
+
+Gõ `{{ busy.` thì biểu thức **không parse được**, và extractor bỏ hẳn nó: mất chuỗi scope, không
+biết người dùng đang gõ sau cái gì. Cách làm: chèn một định danh giả (`__ejsngCursor__`) vào đúng
+con trỏ rồi trích lại riêng file đó. Biểu thức thành hợp lệ, `ng-repeat` bao quanh vẫn nguyên:
+
+- đoạn cuối chuỗi property chứa định danh giả → đang gõ sau dấu chấm → đi theo shape
+- gốc là biến `ng-repeat` → đi vào **phần tử** của collection (`section.` → khoá của `sections[i]`)
+- còn lại → gợi ý định danh gốc theo đúng chuỗi scope tại chỗ
+- đang gõ trong chuỗi ký tự → không gợi ý
+
+Trên `smart-city`: `busy.` → đúng 9 khoá của object literal ở `index.js` dòng 53; `section.` →
+`id`, `label`, `icon`, `enabled`. `shapeOf()` được tách ra để điều hướng và completion tra shape
+theo cùng một cách.
+
+## I.5 Sai lầm tự gây ra: `String.prototype.replace` và `$'`
+
+Script sửa code dùng `s.replace(from, to)` với `to` chứa `startsWith('$')`. Trong chuỗi thay thế,
+`$'` là mẫu đặc biệt nghĩa là "chèn phần còn lại của chuỗi gốc" — `workspace.ts` bị chèn lặp nguyên
+phần đuôi (11.655 ký tự). Code đó chưa được commit nên git không cứu được; phải dựng lại bằng phép
+tính độ dài (file hỏng = phần trước + đầu chuỗi thay thế + đuôi + cuối chuỗi thay thế + đuôi) và
+kiểm chéo từng đoạn trước khi ghi.
+
+Từ đó mọi lệnh thay thế đều dùng hàm: `s.replace(from, () => to)`.
+
+## I.6 Giới hạn đã biết
+
+- **controllerAs:** rename từ chối (repo thật có 0 chỗ dùng); `this.foo` phía JS chưa được quét.
+- **Khoá trong `angular.extend($scope, {…})`** và bí danh gán lại sau khai báo (`vm = $scope`):
+  không được đổi. Bí danh khai báo thẳng (`var vm = $scope`) và `$scope['busy']` thì có (I.7).
+- **Đổi tên khoá lồng nhau** (`busy.search`): chưa làm — phải đổi khoá trong object literal và mọi
+  đường dẫn tới nó, rất dễ nhầm với object khác có khoá cùng tên.
+- **Chuỗi trong `$watch('busy.search', …)`:** không được đổi. `smart-city` chỉ dùng dạng hàm.
+- **Completion trong file `.js`** (`$scope.busy.`): chưa làm.
+- **Completion vẫn gộp mọi bản** của controller trùng tên. Go-to-definition đã dùng nhóm gần nhất
+  như rename — xem phụ lục K.
+- **VSCode với file `.js`:** TypeScript server có sẵn cũng cung cấp rename, và VSCode có thể hỏi
+  provider đó trước. Chưa kiểm trong IDE thật — test stdio chỉ xác nhận server trả đúng.
+- ~~**Server bỏ qua `workspace/didChangeWatchedFiles`**~~ — **đã sửa, xem phụ lục J.** File đổi
+  ngoài editor (git pull, checkout) nay vào index ngay khi client báo, cả VSCode lẫn IntelliJ.
+
+## I.7 Review trước khi commit: bốn lỗi, đã sửa kèm test hồi quy
+
+Chạy `/code-review` (built-in) trên toàn bộ thay đổi của phiên, như bàn giao đề nghị. Cả bốn đều
+là lỗi thật trong code của chính phiên này; mỗi lỗi có một test tái hiện, đỏ trước khi sửa.
+
+| Lỗi | Hậu quả | Sửa |
+|---|---|---|
+| Rename phía JS chỉ nhận `s.foo` | `var vm = $scope; vm.busy` và `$scope['busy']` bị bỏ sót, không cảnh báo — JS vẫn ghi tên cũ trong khi template đã đọc tên mới | Nhận cả bí danh khai báo thẳng từ `$scope` và truy cập bằng chuỗi viết thẳng |
+| Cảnh báo "chỗ còn sót" chỉ trừ các chỗ được đổi | Báo nhầm `busy` của controller khác, biến `ng-repeat`, khoá trong `ng-class` là "không hiểu được" — xúi người dùng sửa tay chỗ không được đụng | Trừ mọi vùng extractor đã parse: biểu thức, chỗ khai báo biến cục bộ, giá trị thuộc tính Linker hiểu |
+| Điều kiện "phải có lượt gán" kiểm trên mọi bản sao | Bản gần nhất chỉ đọc `foo` (kế thừa), bản kia gán — template bản gần nhất vẫn bị đổi | Kiểm trên đúng các file sẽ bị sửa |
+| Luôn gửi `renameProvider: { prepareProvider: true }` | Sai LSP 3.17 với client không khai báo `prepareSupport` | Chỉ gửi khi client khai báo; ngược lại gửi `true` |
+
+---
+
+# PHỤ LỤC J — File đổi ngoài editor: `workspace/didChangeWatchedFiles` (2026-09-11)
+
+## J.1 Triệu chứng
+
+Server không có handler cho `workspace/didChangeWatchedFiles`. File đổi ngoài editor (git pull,
+checkout, tool khác) chỉ vào index khi chạy lại lệnh reindex — go-to-definition, references,
+completion dùng fact cũ. Rename không bị ảnh hưởng vì luôn trích lại từ nội dung hiện tại (I.1).
+
+Test tái hiện: thêm `s.moi = 1;` vào controller **trên đĩa**, client báo đổi, definition từ
+`{{ moi }}` trong template vẫn trả `null`.
+
+## J.2 LSP4IJ không tự gửi — server phải đăng ký động
+
+`LSPSupport.md` của LSP4IJ chỉ đánh ✅ cho `workspace/didChangeWatchedFiles`, không nói cơ chế.
+Đọc mã nguồn thẻ `0.21.0`:
+
+| Chỗ | Thấy gì |
+|---|---|
+| `ClientCapabilitiesFactory.java:77` | Khai báo `didChangeWatchedFiles: { dynamicRegistration: true }` — **không** khai báo `relativePatternSupport` |
+| `LanguageServerWrapper.registerCapability` | Nhận `client/registerCapability` cho `workspace/didChangeWatchedFiles`, nạp `watchers` vào `FileSystemWatcherManager` |
+| `AbstractLSPFileListener.isMatchFilePatterns` | `if (uri == null \|\| !hasFilePatterns()) return false;` — **chưa đăng ký thì không gửi sự kiện nào** |
+| `AbstractLSPFileListener.after()` → `LSPFileListener.onFileCreateAfter` / `onFileDeleteAfter` | Mỗi sự kiện tạo/xoá của VFS được so khớp theo **chính URI của nó**, không duyệt vào bên trong |
+
+⇒ Với IntelliJ, server **bắt buộc** đăng ký qua `client/registerCapability`, và chỉ đăng ký khi
+client khai báo `workspace.didChangeWatchedFiles.dynamicRegistration` (LSP 3.17). VSCode vốn đã gửi
+nhờ `synchronize.fileEvents` trong `extension.ts`; `vscode-languageclient` 9 cũng khai báo
+`dynamicRegistration` + `relativePatternSupport` nên nhận thêm watcher của server.
+
+Dòng cuối của bảng là cái bẫy: khi VFS báo tạo/xoá **ở cấp thư mục** (git checkout thêm hay bớt
+nguyên một thư mục, `rm -rf`), URI là của thư mục — không khớp `**/*.js`, nên không có sự kiện nào.
+Vì vậy server đăng ký hai loại watcher:
+
+| Watcher | `kind` | Vì sao |
+|---|---|---|
+| Mỗi glob trong `include` | Change | Chỉ file được index mới cần |
+| `**/*` | Create \| Delete | Bắt được sự kiện ở cấp thư mục |
+
+Dạng glob: `RelativePattern` neo vào gốc workspace khi client khai báo `relativePatternSupport`
+(VSCode); chuỗi khi không (LSP4IJ — `PathPatternMatcher` tự neo glob tương đối vào thư mục project).
+
+## J.3 Thiết kế: `Workspace.refreshFiles(paths)`
+
+- **Index là lớp "đĩa", overlay không bị đụng tới.** Buffer đang mở vẫn là nguồn cho chính file đó
+  (`facts()`/`source()` đọc overlay trước). Nhưng index **vẫn** cập nhật theo đĩa cho file đang mở.
+  Phương án "bỏ qua file đang mở" đã cân nhắc và loại: VSCode tự nạp lại buffer chưa sửa khi git
+  pull đổi file — overlay mới, index cũ, và template khác không thấy property mới của controller
+  đó cho tới khi người dùng lưu (mà buffer không bẩn thì chẳng ai lưu).
+- **Không tin loại sự kiện** (Created/Changed/Deleted) — `stat` lấy trạng thái thật. Sự kiện có thể
+  bị gộp, lặp, đến sai thứ tự; VSCode còn gửi trùng từ watcher tĩnh lẫn watcher động.
+- **So hash, không so mtime** — khác `index()`. File được báo là đổi thì đằng nào cũng phải đọc,
+  còn mtime có thể giữ nguyên (`rsync -t`, `tar`, `cp -p`; HFS+ phân giải 1 giây). Đây cũng là lý
+  do không gọi thẳng `index()` cho mỗi sự kiện: nó bỏ qua file khi mtime khớp.
+- **File mới → `index()`**, vì chỉ glob của `index()` quyết `include`/`exclude` đúng. Trước đó lọc
+  `exclude` bằng **chính fast-glob** trên riêng đường dẫn đó — file: đường dẫn tĩnh; thư mục: chỉ
+  duyệt cây con `dir/**` — nên sự kiện trong `node_modules`, `dist`… không kéo theo quét lại. Không
+  tự viết lại luật glob, không thêm dependency. (Kiểm tra tĩnh cho *thư mục* của fast-glob trả `[]`
+  với tên có `(` hoặc `[`, như bị exclude — duyệt `dir/**` thì đúng.)
+- **Xoá:** file trong index → gỡ; đường dẫn không phải file trong index → coi là thư mục, gỡ mọi
+  file có tiền tố `dir/`.
+- Cuối cùng `link()` một lần, và chỉ khi có gì đổi.
+
+Không đổi extractor ⇒ **`PARSER_VERSION` giữ nguyên 11**; fact Layer 2 vẫn là hàm thuần của nội
+dung một file.
+
+## J.4 Đo trên `smart-city`
+
+Store `:memory:`. Các phép đo có sửa file chạy trên **bản chép** trong thư mục tạm (không có
+`node_modules`, `.git`) — repo thật chỉ đọc.
+
+| Thao tác | Trung vị |
+|---|---|
+| `index()` ấm, repo thật (147 file) | 7.1ms |
+| `index()` ấm, bản chép | 3.3ms |
+| `refreshFiles`: 1 file đổi (`index.js`, 511 định danh) | 4.8ms |
+| `refreshFiles`: báo đổi nhưng nội dung y nguyên | 0.09ms |
+| `refreshFiles`: 1 file mới (→ `index()`) | 4.0ms |
+| `refreshFiles`: file + thư mục mới trong `node_modules` | 0.24ms, không quét lại |
+
+Ở 147 file hai cách ngang nhau. Khác nhau ở độ tăng: `index()` tỉ lệ với **tổng số file** (glob +
+`stat` từng file), `refreshFiles` tỉ lệ với **số file đổi**. Và `index()` so mtime nên sai với
+trường hợp mtime giữ nguyên.
+
+`sweep`: 99.2%, 136 chỗ sót — không đổi. Toàn bộ output của `sweep` trùng từng dòng với bản trước
+khi sửa (so trên bản chép).
+
+## J.5 Test
+
+Stdio (`packages/server/test/lsp.test.js`) và core (`packages/core/test/refresh.test.js`). Cả bảy
+test đều đỏ khi chạy trên bản build **trước** khi sửa, xanh sau khi sửa.
+
+| Test | Kiểm |
+|---|---|
+| `.js` đổi trên đĩa + báo → definition tới `moi` | Yêu cầu gốc; kèm đối chứng: trước khi báo vẫn `null` |
+| File bị xoá | Hover không còn trỏ vào file đã xoá; `stats.files` giảm 1 |
+| Cả thư mục tạo/xoá, một sự kiện | Kiểu LSP4IJ; thư mục mới trong `dist/` bị exclude |
+| File đang mở đổi trên đĩa | Buffer thắng: offset trong buffer vẫn trỏ đúng `moi`, không rơi vào `total` |
+| Đăng ký watcher | Kiểu LSP4IJ → chuỗi glob; kiểu VSCode → `RelativePattern`; không khai báo → không đăng ký |
+| (core) mtime giữ nguyên | Hash bắt được thay đổi |
+| (core) file mới bị exclude | Không quét lại toàn bộ |
+
+**Race trong test, đã sửa:** server index đồng bộ lúc nhận `initialized`, còn test sửa file ngay sau
+khi gửi `initialized` — có thể chạy **trước** index, và index đọc luôn bản mới. Chính lỗi này làm
+test "buffer thắng" xanh giả trên bản chưa sửa ở lần chạy đầu. `startServer` nay chờ một request
+sau `initialized`: server xử lý tuần tự, nên khi có phản hồi thì index ban đầu đã xong.
+
+## J.6 Giới hạn đã biết
+
+- **VSCode nhận sự kiện trùng** từ watcher tĩnh (`synchronize.fileEvents`) và watcher động của
+  server. `refreshFiles` idempotent nên vô hại — lúc chạy thật, mỗi lần đổi file chỉ sinh một dòng
+  `1 file doc lai` (J.7), trùng thì cũng bị gộp trong cùng một batch. Vẫn có thể bỏ watcher tĩnh.
+- **Watcher `**/*` (Create \| Delete) báo cả file không liên quan** (`.git/index.lock`…): mỗi sự
+  kiện tốn một `stat` rồi bị bỏ.
+- **File khớp đuôi nhưng không khớp `include`** (vd `.eslintrc.js` — `dot: false`) kéo theo một lần
+  `index()` mỗi khi đổi. Không cache "ngoài phạm vi" theo đường dẫn: file bị tạo/xoá xen kẽ trong
+  lúc quét làm cache đó sai, và sai thì file bị bỏ qua tới khi khởi động lại.
+- **`index()` chạy đồng bộ:** checkout đổi hàng nghìn file sẽ chặn server trong lúc quét, như lúc
+  khởi động.
+- **Ngoài phạm vi, ghi lại để khỏi quên:** server LSP không bao giờ gọi `workspace.close()`, nên
+  cache NDJSON chỉ do CLI ghi — trong IDE mọi lần khởi động đều là index lạnh. Và
+  `didChangeConfiguration` vẫn được đăng ký động mà không kiểm capability của client, cùng loại lỗi
+  với `prepareSupport` ở I.7.
+
+## J.7 Chạy thật trong hai IDE (2026-09-12)
+
+Cùng một cách đo ở cả hai: mở `smart-city`, sửa `dha.controller.js` (60KB, **không** mở trong editor)
+từ bên ngoài, rồi theo dõi tiến trình server.
+
+### IntelliJ — sandbox `runIde`, LSP4IJ 0.21.0
+
+| Mốc | CPU tiến trình server |
+|---|---|
+| nghỉ 12 giây, không đụng gì | 0:01.12 |
+| nghỉ thêm 12 giây | 0:01.12 |
+| 12 giây sau khi file đổi trên đĩa | **0:01.19** |
+| nghỉ tiếp 12 giây | 0:01.19 |
+| sau khi khôi phục 2 file và **xoá** 1 file | **0:01.28** |
+
+Nằm im 24 giây liền, tiêu 70ms ngay sau khi file đổi, rồi lại nằm im — không có gì khác đánh thức
+nó. Chuỗi VFS → LSP4IJ → `didChangeWatchedFiles` → `refreshFiles` chạy thật, đúng như đọc từ mã
+nguồn. Nhánh xoá cũng tới nơi.
+
+Không đối chiếu được **số file** ngay trong IntelliJ: `window/logMessage` chỉ đi vào cửa sổ console
+của LSP4IJ (`ServerMessageHandler.logMessage` → `LSPConsoleToolWindowPanel`), không vào `idea.log`,
+nên script không đọc được — phải mở tool window **Language Servers** mà nhìn.
+
+### VSCode — Extension Development Host, 1.136.2
+
+VSCode ghi nội dung Output channel ra đĩa, nên đọc thẳng được dòng log của server ở
+`~/Library/Application Support/Code/logs/<phiên>/window<N>/exthost/output_logging_*/`:
+
+```
+EJS/NG: bat dau danh index...
+EJS/NG: xong — 0 file moi, 147 khong doi, 4 ref noi them, 158ms
+EJS/NG: file doi ngoai editor — 1 file doc lai, 0 file go, 31ms
+EJS/NG: file doi ngoai editor — 1 file doc lai, 0 file go, 22ms
+```
+
+Hai dòng cuối là hai lần sửa từ ngoài editor (đổi, rồi trả lại): mỗi lần đọc lại **đúng một** file,
+31ms và 22ms — khớp với việc đã làm. CPU cùng hình dạng như bên IntelliJ: 0:00.22 phẳng suốt 24 giây
+nghỉ, +70ms sau lần đổi, +40ms sau lần trả lại.
+
+Dòng thứ hai đáng chú ý vì lý do khác: đây là khởi động **ấm** — 147 file không đổi, 158ms — nhờ
+cache NDJSON mà `ejsng sweep` của CLI ghi ra trước đó. Server tự nó vẫn không ghi cache (J.6), nên
+trong IDE chỉ ấm được khi có ai đó chạy CLI trước.
+
+Và một điều phụ lục D đã đổi giá để học: server chạy bằng **Electron của VSCode** (`Code Helper
+(Plugin)`) và bằng **Node v24.13.1** trong IntelliJ — hai ABI khác hẳn nhau, cùng một bundle, không
+phải build riêng bản nào.
+
+---
+
+# PHỤ LỤC K — Go-to-definition: một đích thay vì danh sách chọn, và `confidence` nói đúng nghĩa (2026-09-12)
+
+## K.1 Câu hỏi của người dùng
+
+"Trong plugin thấy có confidence và nhiều option; nhiều option thì navigate được không? Sao
+extension lại nhảy thẳng — hay VSCode track tốt hơn?"
+
+Không phải VSCode tốt hơn: **hai IDE dùng chung một server**, cùng `definitionAt`. Khác nhau ở hai
+chỗ. Một là UI của client — một đích thì cả hai nhảy thẳng, nhiều đích thì IntelliJ bật popup chọn
+còn VSCode mở peek. Hai là trong file `.js`, VSCode còn có TypeScript built-in trả lời song song và
+gộp kết quả mọi provider; IntelliJ Community không có plugin JavaScript nên server này là nguồn duy
+nhất cho cả `.js` lẫn `.ejs`.
+
+## K.2 Đo trước khi sửa (template của `smart-city`)
+
+| | |
+|---|---|
+| Vị trí resolve được | 244 |
+| Trả về **2 đích** | 168 (68.9%) |
+| `confidence` đếm trên từng đích: `medium` / `high` | 358 / 54 |
+
+Cả 168 chỗ chung một nguyên nhân: controller `cityos-demo-dha-management-view-controller` được khai
+báo ở cả `product/…/index.js` lẫn `new-version/fe-be/index.js` (I.1 đã gặp khi làm rename). Không
+chỗ nào trộn nhiều `kind`.
+
+## K.3 Ưu tiên bản ở thư mục gần nhất
+
+`preferNearest()` dùng lại `nearestFiles()` của rename, nên **definition và rename ghép theo cùng một
+cách** — người dùng không phải nhớ hai luật.
+
+Hai rào chắn, mỗi cái một test:
+
+- **Chỉ gộp khi mọi đích cùng `kind`.** `jsDefinition` cố ý trả về cả khai báo Angular lẫn tham số
+  hàm cùng tên (H.3); hai thứ khác loại, bỏ bản nào cũng sai.
+- **Hoà thì giữ nguyên cả hai.** Template nằm cách đều hai bản thì không phân định được, và không
+  phân định được thì không đoán.
+
+Bản bị loại không biến mất: `DefinitionResult.otherFiles` mang chúng ra hover và CLI.
+
+**Kết quả: 244/244 vị trí còn đúng một đích** — hết popup chọn ở cả hai IDE.
+
+## K.4 `confidence` đang nói sai
+
+```ts
+confidence: walked.span ? m.confidence : ('medium' as const),
+```
+
+Dòng này hạ độ tin cậy xuống `medium` mỗi khi **không đi sâu vào shape** — kể cả `{{ total }}`, thứ
+vốn chẳng có đường dẫn property nào để đi. Symbol thật là `high` (`rows.ts`). Vì vậy 358/412 đích
+hiện "do tin cay: medium" trong hover — đúng thứ người dùng nhìn thấy trong IntelliJ, và nó nói sai
+về sản phẩm: người đọc tưởng công cụ không chắc, trong khi nó rất chắc.
+
+Sửa thành `walked.partial ? 'medium' : m.confidence`. Nay `medium` chỉ còn một nghĩa: **không lần
+được tới khoá đang hỏi, mới nhảy tới chỗ gần đúng** — ví dụ `$scope.stats = fetchStats()` rồi hỏi
+`stats.total`. Sau khi sửa, 244/244 đích là `high`.
+
+## K.5 Kiểm chứng (a) và (d)
+
+- `npm test`: 92/92.
+- Hai test hành vi mới **đỏ** trên bản trước khi sửa (kể cả test trên repo thật). Hai test còn lại
+  là rào chắn (hoà thì giữ cả hai; DI khác loại thì không gộp) nên **xanh ở cả hai bản** — đúng vai
+  trò của chúng: chúng canh cho lần sửa này không phá thứ đang đúng.
+- `sweep`: 99.2%, 136 chỗ sót, output trùng từng dòng với trước khi sửa. Lọc bớt đích không đổi việc
+  một vị trí có resolve được hay không.
+
+## K.6 Completion cũng chỉ lấy bản gần nhất
+
+`membersOf(controller, from)` và `memberCompletions()` dùng chung `nearestRows()` với definition.
+
+Đo trên `smart-city`, cùng một controller khai báo ở hai nhánh:
+
+| Template | Trước | Sau |
+|---|---|---|
+| `new-version/fe-be/content.ejs` | 43 tên | **31 tên** |
+| `product/view/content.ejs` | 43 tên | 43 tên — bản này là tập cha |
+
+12 tên biến mất ở nhánh `new-version` — `uploadForm`, `documents`, `docStorage`, `onFilePicked`,
+`loadDocuments`, `uploadDocument`… — là property **chỉ có trong bản `product`**. Trước đây chúng vẫn
+được gợi ý khi gõ trong template của `new-version`: chọn phải là viết ra biểu thức không bao giờ có
+giá trị, mà không gì báo. Đây là loại sai tệ hơn "thiếu gợi ý", vì nó trông như đã được xác nhận.
+
+## K.7 Hover: đường dẫn thành link bấm được — đã xác nhận trong IntelliJ
+
+Sau khi definition lọc bớt, hover là chỗ **duy nhất** còn chỉ ra bản ở thư mục xa — nên nó phải bấm
+tới được. Hover thật trên `smart-city`, lấy bằng cách nói JSON-RPC thẳng với server:
+
+```
+**sections**
+- scope-member 'sections' cua cityos-demo-dha-management-view-controller — [product/view/public/javascripts/index.js:32](file:///…/index.js#L32)
+- _con 1 ban o thu muc xa hon:_ [new-version/fe-be/index.js](file:///…/new-version/fe-be/index.js)
+```
+
+Ba mảnh trong mã nguồn LSP4IJ 0.21.0 khớp với dạng link này:
+
+| Chỗ | Nội dung |
+|---|---|
+| `LSPDocumentationLinkHandler` | Bắt `url.startsWith("file://")` rồi gọi `LSPIJUtils.openInEditor` — mở trong **editor của IDE**, không văng ra trình duyệt |
+| `openInEditor` javadoc | Cú pháp hỗ trợ: `file:///…/foo.txt#L1:5` |
+| `LSPIJUtils.toPosition` | `int line = toInt(0, positions) - 1; // Line numbers should be 1-based` |
+
+Dòng cuối là chỗ đáng lo nhất, và hoá ra không phải lo: LSP4IJ đếm dòng **từ 1**. Phía VSCode,
+`extractSelection` trong `workbench.desktop.main.js` đọc fragment bằng
+`/^L?(\d+)(?:,(\d+))?(-L?(\d+)(?:,(\d+))?)?/` — cùng quy ước. Một chuỗi link chạy đúng ở cả hai IDE,
+không lệch dòng.
+
+**Chạy thật (2026-09-12):** `./gradlew buildPlugin` (9 giây, phần lớn từ cache) rồi `runIde`, với
+`EJSNG_SERVER_PATH` trỏ vào bản server của worktree. Log sandbox:
+
+```
+Loaded custom plugins: LSP4IJ (0.21.0), EJS + AngularJS Navigator (0.1.0)
+EJSNG: startup activity chay cho project 'smart-city'
+pid 44893  …/node/v24.13.1/bin/node  …/packages/server/dist/index.js --stdio
+```
+
+Người dùng bấm thử trong IDE: **link mở đúng file, đúng dòng** — kể cả link tới bản ở thư mục xa,
+thứ mà go-to-definition đã lọc khỏi danh sách nhảy. Vòng lặp khép kín: lọc bớt cho gọn, nhưng không
+mất đường tới bản kia.
+
+Server vẫn chạy bằng Node v24.13.1 — đúng bản ABI 137 từng làm vỡ `better-sqlite3` ở phụ lục D.
+
+## K.8 Kiểm chứng và phần còn treo
+
+- `npm test`: 95/95. Ba test mới (hai cho completion, một cho hover qua stdio) đều **đỏ** trên bản
+  trước khi sửa; 13 test còn lại xanh ở cả hai bản.
+- `sweep` không đổi — completion và hover không nằm trong đường đo độ phủ.
+- **IntelliJ: đã bấm thử trong IDE thật** — link mở đúng file, đúng dòng (K.7). **VSCode: đã bấm
+  thử trong Extension Development Host (2026-09-12)** — hover tại `sections` dòng 13 của
+  `new-version/fe-be/content.ejs`, bấm link `product/view/public/javascripts/index.js:32` nhảy
+  đúng file đúng dòng. Cả hai IDE đã xác nhận bằng tay — không còn phần treo của phụ lục K.
+
+---
+
+# PHỤ LỤC L — Soát lại trước khi bàn giao: bốn lỗi, đã sửa kèm test (2026-09-12)
+
+Chạy `/code-review` (built-in) trên diff của cả phiên, như I.7 đã làm trước khi commit. Bốn phát
+hiện, đều là lỗi thật trong code của chính phiên này; mỗi lỗi có một test đỏ trước khi sửa.
+
+| Lỗi | Hậu quả | Sửa |
+|---|---|---|
+| `catch` quanh `statSync` coi **mọi** errno là "file đã xoá" | Repo nằm trên volume gắn ngoài (`/Volumes/…`): một lần EACCES hay EIO là file đang tồn tại bị gỡ khỏi index — im lặng, tới tận lần reindex sau | Chỉ `ENOENT`/`ENOTDIR` mới là đã xoá; errno khác nghĩa là *không biết*, bỏ qua path |
+| `fast-glob` mặc định **ném** lỗi (`suppressErrors: false`) | Một thư mục không đọc được làm `refreshFiles` ném **trước** `upsertBatch` → mất sạch cả lô thay đổi hợp lệ trong cùng thông báo | `suppressErrors: true` ở `hasCandidates` **và** ở `index()` — cùng một lỗ hổng |
+| `detail` in cả đường dẫn **đã hỏi** trong khi shape chỉ lần được nửa chừng | Hover nói `row.a.b — phan tu cua rows` nhưng nhảy vào `a`: người đọc tưởng khoá `b` có thật | `detail` gọi tên đoạn **thực sự tới được**, khớp với `confidence` vừa hạ xuống `medium` |
+| Quét tiền tố toàn bộ index cho **mỗi** đường dẫn xoá lạ | Watcher `**/*` báo cả file không index; `rm -rf` gửi hàng nghìn sự kiện → O(số path × số file index) chặn server ngay sau khi checkout | Gom thư mục bị xoá, duyệt `stamps` **một lần** cho cả lô |
+
+Hai lỗi đầu chung một gốc: **xử lý lỗi hệ thống tập tin như thể chỉ có một nguyên nhân duy nhất là
+"file biến mất"**. Trong một tính năng mà đầu vào toàn là sự kiện từ đĩa, đó là giả định sai người.
+Cả hai kiểm được bằng `chmod 000` trong thư mục tạm — `statSync`, `fg.sync` dạng file tĩnh lẫn
+`dir/**` đều ném `EACCES`, đã thử tay trước khi viết test.
+
+Sửa lỗi thứ tư kéo theo một cải thiện không nằm trong bản soát: sự kiện báo về một thư mục **đang
+tồn tại** (client tạo lại, hoặc đổi tên tới) trước đây gỡ sạch mọi file dưới nó rồi để `index()` thêm
+lại từ đầu. Nay thư mục còn thì chỉ quét lại, không gỡ gì — hết cảnh parse lại cả cây con và hết con
+số `removed` sai trong log.
+
+Và một cáo buộc **bị bác bỏ lúc sửa**: bản soát nói cả hai chỗ gán `confidence` đều in nhãn dối. Đọc
+kỹ thì nhánh property trên `$scope` vốn đã dùng `fullPath.slice(0, walked.depth + 1)` — nó gọi đúng
+tên đoạn đường đi tới từ đầu. Chỉ nhánh biến `ng-repeat` mới in cả đường dẫn đã hỏi, nên chỉ sửa một
+chỗ. Soát kỹ thì cũng phải soát lại chính bản soát.

@@ -3,15 +3,21 @@ import {
   createConnection,
   DiagnosticSeverity,
   DidChangeConfigurationNotification,
+  DidChangeWatchedFilesNotification,
   ProposedFeatures,
   TextDocumentSyncKind,
   TextDocuments,
   type CompletionItem,
   CompletionItemKind,
   type Diagnostic,
+  type FileSystemWatcher,
   type InitializeResult,
   type Location,
+  LSPErrorCodes,
   type Range,
+  ResponseError,
+  type TextEdit,
+  WatchKind,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
@@ -22,6 +28,11 @@ const documents = new TextDocuments(TextDocument);
 
 let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
+/**
+ * Client cho dang ky watcher dong (workspace.didChangeWatchedFiles.dynamicRegistration)?
+ * `relative`: client hieu RelativePattern. null = khong dang ky (LSP 3.17).
+ */
+let fileWatch: { relative: boolean } | null = null;
 
 connection.onInitialize((params): InitializeResult => {
   const folder = params.workspaceFolders?.[0]?.uri;
@@ -31,6 +42,11 @@ connection.onInitialize((params): InitializeResult => {
     diagnostics?: { enabled?: boolean };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
+  // LSP 3.17: RenameOptions chi duoc gui khi client khai bao prepareSupport.
+  const prepareSupport = params.capabilities.textDocument?.rename?.prepareSupport === true;
+  const watched = params.capabilities.workspace?.didChangeWatchedFiles;
+  fileWatch =
+    watched?.dynamicRegistration === true ? { relative: watched.relativePatternSupport === true } : null;
 
   workspace = new Workspace({ root, ...settings });
 
@@ -43,6 +59,7 @@ connection.onInitialize((params): InitializeResult => {
       completionProvider: { triggerCharacters: ['.', '{', ' '], resolveProvider: false },
       documentSymbolProvider: true,
       workspaceSymbolProvider: true,
+      renameProvider: prepareSupport ? { prepareProvider: true } : true,
     },
   };
 });
@@ -50,6 +67,12 @@ connection.onInitialize((params): InitializeResult => {
 connection.onInitialized(() => {
   void connection.client.register(DidChangeConfigurationNotification.type, undefined);
   if (!workspace) return;
+  // Dang ky TRUOC khi index: file doi trong luc dang index van duoc bao, xu ly ngay sau.
+  if (fileWatch) {
+    void connection.client.register(DidChangeWatchedFilesNotification.type, {
+      watchers: fileWatchers(workspace, fileWatch.relative),
+    });
+  }
   // Index nen: server tra loi duoc ngay o che do suy giam trong luc dang chay.
   connection.console.log('EJS/NG: bat dau danh index...');
   const r = workspace.index();
@@ -63,6 +86,29 @@ connection.onInitialized(() => {
 function rel(uri: string): string | null {
   if (!workspace) return null;
   return workspace.toRelative(URI.parse(uri).fsPath);
+}
+
+/**
+ * Watcher dang ky voi client.
+ *
+ * LSP4IJ (IntelliJ) chi gui workspace/didChangeWatchedFiles cho duong dan khop watcher do server
+ * dang ky — khong dang ky thi khong co su kien nao. VSCode van gui them theo
+ * `synchronize.fileEvents` cua client; su kien lap thi refreshFiles bo qua.
+ *
+ * - Change: theo glob `include` (bo mau phu dinh '!…' cua fast-glob), chi file duoc index moi can.
+ * - Create/Delete: MOI duong dan. Ca thu muc duoc tao/xoa/doi ten (git checkout them hay bot ca
+ *   thu muc) thi client chi bao MOT su kien cho chinh thu muc, ma ten thu muc khong khop glob
+ *   theo duoi file.
+ */
+function fileWatchers(ws: Workspace, relativePatterns: boolean): FileSystemWatcher[] {
+  const baseUri = URI.file(ws.config.root).toString();
+  const glob = (pattern: string) => (relativePatterns ? { baseUri, pattern } : pattern);
+  return [
+    ...ws.config.include
+      .filter((p) => !p.startsWith('!'))
+      .map((p) => ({ globPattern: glob(p), kind: WatchKind.Change })),
+    { globPattern: glob('**/*'), kind: WatchKind.Create | WatchKind.Delete },
+  ];
 }
 
 function offsetOf(doc: TextDocument, position: { line: number; character: number }): number {
@@ -90,6 +136,22 @@ function toLocation(relPath: string, span: Span): Location | null {
   };
 }
 
+/**
+ * Duong dan trong hover viet thanh link mo duoc: `[path:dong](file://…#L<dong>)`.
+ *
+ * Hover la cho DUY NHAT con chi ra ban o thu muc xa hon (`otherFiles`) sau khi go-to-definition da
+ * loc bot, nen no phai bam toi duoc. VSCode mo dung dong; LSP4IJ dung markdown sang HTML nen con
+ * phai kiem trong IDE that.
+ */
+function fileLink(relPath: string, span?: Span): string {
+  if (!workspace) return `\`${relPath}\``;
+  const uri = URI.file(`${workspace.config.root}/${relPath}`).toString();
+  const source = span ? workspace.source(relPath) : null;
+  if (!span || source === null) return `[${relPath}](${uri})`;
+  const line = toRange(source, span).start.line + 1;
+  return `[${relPath}:${line}](${uri}#L${line})`;
+}
+
 // ------------------------------------------------------------- sync buffers
 
 documents.onDidChangeContent((change) => {
@@ -111,6 +173,22 @@ documents.onDidClose((e) => {
   const r = rel(e.document.uri);
   if (workspace && r) workspace.clearOverlay(r);
   void connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
+});
+
+/**
+ * File doi ngoai editor: git pull, checkout, tool khac. Chi cap nhat lop "dia" cua index — buffer
+ * dang mo khong bi dung toi (xem Workspace.refreshFiles).
+ */
+connection.onDidChangeWatchedFiles(({ changes }) => {
+  if (!workspace) return;
+  const paths = changes.map((c) => rel(c.uri)).filter((p): p is string => p !== null);
+  const r = workspace.refreshFiles(paths);
+  if (r.indexed || r.removed) {
+    connection.console.log(
+      `EJS/NG: file doi ngoai editor — ${r.indexed} file doc lai, ${r.removed} file go` +
+        `${r.rescanned ? ' (co file moi: quet lai)' : ''}, ${r.ms}ms`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------- features
@@ -151,7 +229,12 @@ connection.onHover((params) => {
     lines.push(`**${def.query}**`);
     for (const t of def.targets) {
       const conf = t.confidence === 'high' ? '' : ` _(do tin cay: ${t.confidence})_`;
-      lines.push(`- ${t.detail} — \`${t.path}\`${conf}`);
+      lines.push(`- ${t.detail} — ${fileLink(t.path, t.span)}${conf}`);
+    }
+    // Ban o thu muc xa hon da bi loai khoi ket qua nhay — o day van phai toi duoc.
+    if (def.otherFiles?.length) {
+      const links = def.otherFiles.map((p) => fileLink(p)).join(', ');
+      lines.push(`- _con ${def.otherFiles.length} ban o thu muc xa hon:_ ${links}`);
     }
   } else if (def.reason) {
     lines.push(`_${def.reason}_`);
@@ -182,6 +265,40 @@ connection.onCompletion((params): CompletionItem[] => {
     kind: c.kind === 'variable' ? CompletionItemKind.Variable : CompletionItemKind.Property,
     detail: c.detail,
   }));
+});
+
+/**
+ * Rename bi tu choi thi tra ResponseError kem ly do, KHONG tra null: voi null, IDE chi
+ * bao chung chung "khong doi ten duoc" va nguoi dung khong biet vi sao (bien cuc bo,
+ * trung ten, bi che bong…).
+ */
+connection.onPrepareRename((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const r = rel(params.textDocument.uri);
+  if (!workspace || !doc || !r) return null;
+
+  const result = workspace.prepareRenameAt(r, offsetOf(doc, params.position));
+  if ('reason' in result) return new ResponseError(LSPErrorCodes.RequestFailed, result.reason);
+  return { range: toRange(doc.getText(), result.span), placeholder: result.placeholder };
+});
+
+connection.onRenameRequest((params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const r = rel(params.textDocument.uri);
+  if (!workspace || !doc || !r) return null;
+
+  const result = workspace.renameAt(r, offsetOf(doc, params.position), params.newName);
+  if (result.reason) return new ResponseError(LSPErrorCodes.RequestFailed, result.reason);
+
+  const changes: Record<string, TextEdit[]> = {};
+  for (const e of result.edits) {
+    const loc = toLocation(e.path, e.span);
+    // Thieu mot file la doi ten do dang — tu choi ca lan thay vi tra edit thieu.
+    if (!loc) return new ResponseError(LSPErrorCodes.RequestFailed, `Khong doc duoc ${e.path}`);
+    (changes[loc.uri] ??= []).push({ range: loc.range, newText: e.newText });
+  }
+  if (result.note) void connection.window.showInformationMessage(`EJS/NG: ${result.note}`);
+  return { changes };
 });
 
 connection.onDocumentSymbol((params) => {

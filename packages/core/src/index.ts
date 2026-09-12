@@ -14,3 +14,4 @@ export * from './resolve/rows';
 export * from './resolve/workspace';
 export * from './resolve/linker';
 export * from './extract/bindings';
+export * from './resolve/rename';

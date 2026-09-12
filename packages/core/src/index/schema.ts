@@ -5,8 +5,10 @@
  * Day la co che duy nhat chong "cache sai" giua cac ban extension. Trong qua
  * trinh phat trien da co dung mot lan quen tang: doi `inferShape` ma khong bump,
  * ket qua la go-to-definition tra ve vi tri cu cho toi khi bump so nay.
+ *
+ * 11: span trong gia tri thuoc tinh het lech mot ky tu (phu luc I).
  */
-export const PARSER_VERSION = 10;
+export const PARSER_VERSION = 11;
 
 /** Ten file cache trong thu muc .ejsng-cache/ */
 export const INDEX_FILENAME = 'index.ndjson';

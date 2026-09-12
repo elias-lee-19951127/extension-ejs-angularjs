@@ -159,7 +159,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
     if (normalized === 'ngController' && valueSpan) {
       const m = value.match(/^\s*([^\s]+)(?:\s+as\s+([$\w]+))?\s*$/);
       if (m) {
-        const nameOffset = valueSpan.start.offset + value.indexOf(m[1]!);
+        const nameOffset = valueStartOf(valueSpan) + value.indexOf(m[1]!);
         const frame: ScopeFrame = {
           kind: 'controller',
           controllerName: m[1]!,
@@ -168,7 +168,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
           elementSpan,
         };
         if (m[2]) {
-          const aliasOffset = valueSpan.start.offset + value.lastIndexOf(m[2]);
+          const aliasOffset = valueStartOf(valueSpan) + value.lastIndexOf(m[2]);
           frame.locals.push({
             name: m[2],
             span: { start: aliasOffset, end: aliasOffset + m[2].length },
@@ -186,7 +186,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
     }
 
     if (!valueSpan) continue;
-    const base = valueSpan.start.offset;
+    const base = valueStartOf(valueSpan);
 
     const kind = directiveExprKind(normalized, config.customDirectives);
 
@@ -317,6 +317,21 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
 
   const childChain = newFrames.length ? [...newFrames.reverse(), ...chain] : chain;
   for (const child of el.children) visit(child, childChain, facts, config);
+}
+
+/**
+ * Offset cua KY TU DAU TIEN trong gia tri thuoc tinh.
+ *
+ * `valueSpan` cua angular-html-parser bat dau tu DAU NHAY khi gia tri co nhay
+ * (`x="v"` -> tro vao `"`), va tu chinh gia tri khi khong nhay (`x=v`). Lay thang
+ * `valueSpan.start.offset` lam goc thi moi span trong thuoc tinh lech trai mot ky
+ * tu. Dieu huong van chay (`inSpan` tinh ca hai dau mut) nen bug nam im cho toi
+ * khi lam rename — xem docs/kien-truc.md phu luc I.
+ */
+function valueStartOf(valueSpan: { start: { offset: number; file: { content: string } } }): number {
+  const at = valueSpan.start.offset;
+  const c = valueSpan.start.file.content[at];
+  return c === '"' || c === "'" ? at + 1 : at;
 }
 
 /** Cat doan text ung voi `span` ra khoi gia tri thuoc tinh bat dau tai `base`. */

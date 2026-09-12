@@ -11,26 +11,10 @@ const assert = require('node:assert');
 const { join } = require('node:path');
 const { existsSync, rmSync } = require('node:fs');
 const C = require('../dist');
+const { at, textAt } = require('./helpers');
 
 const REAL = '/Volumes/mac-dev/project/smart-city';
 const FIXTURE = join(__dirname, '..', '..', '..', 'fixtures', 'mini');
-
-/** Vi tri cua lan xuat hien thu `nth` cua `needle`, dich them `offset` ky tu. */
-function at(ws, rel, needle, { nth = 1, offset = 0 } = {}) {
-  const src = ws.source(rel);
-  assert.ok(src, `khong doc duoc ${rel}`);
-  let idx = -1;
-  for (let n = 0; n < nth; n++) {
-    idx = src.indexOf(needle, idx + 1);
-    assert.notStrictEqual(idx, -1, `khong tim thay lan ${nth} cua ${JSON.stringify(needle)} trong ${rel}`);
-  }
-  return idx + offset;
-}
-
-function textAt(ws, target) {
-  const src = ws.source(target.path) ?? '';
-  return src.slice(target.span.start, target.span.end);
-}
 
 // --------------------------------------------------------------- fixture
 
@@ -202,6 +186,14 @@ test('repo that smart-city', { skip: !existsSync(REAL) && 'khong co repo smart-c
     // ng-repeat khac trong cung file
     const other = ws.definitionAt(TPL, at(ws, TPL, 'row in statRows', { offset: 7 }));
     assert.strictEqual(textAt(ws, other.targets[0]), 'statRows');
+  });
+
+  await t.test('controller trung ten o 2 file: definition chi tra ban GAN NHAT', () => {
+    // Truoc day tra ve ca hai ban -> IDE bat danh sach chon o 168/244 vi tri.
+    const d = ws.definitionAt(TPL, at(ws, TPL, 'section in sections', { offset: 11 }));
+    assert.strictEqual(d.targets.length, 1);
+    assert.ok(d.targets[0].path.startsWith('product/'), d.targets[0].path);
+    assert.deepStrictEqual(d.otherFiles, ['new-version/fe-be/index.js']);
   });
 
   await t.test('property long nhau: busy.stats, searchForm.query', () => {

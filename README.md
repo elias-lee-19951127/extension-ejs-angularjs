@@ -8,7 +8,7 @@ Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **Int
 
 > Thiết kế đầy đủ và số liệu đo từ codebase thật: [docs/kien-truc.md](docs/kien-truc.md)
 
-## Hiện đã làm được (M1)
+## Hiện đã làm được
 
 | | Ví dụ |
 |---|---|
@@ -27,6 +27,9 @@ Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **Int
 | Biến toàn cục | `window`, `JSON`, `$event` → báo "dựng sẵn", không phải lỗi |
 | Trục EJS | `<%= denyMessage %>` → locals của `res.render` |
 | Dead code | controller / directive / filter / property không ai dùng |
+| Rename | `$scope.busy` → đổi đồng bộ mọi lượt đọc/ghi trong JS và mọi template; từ chối kèm lý do khi xung đột |
+| Completion theo shape | `busy.` → `search`, `ingest`…; `section.` → khoá của phần tử trong `sections` |
+| File đổi ngoài editor | `git pull` / checkout / tool khác → index tự cập nhật (VSCode và IntelliJ), không cần đánh index lại |
 
 ## Bắt đầu
 
@@ -62,6 +65,12 @@ node packages/cli/dist/index.js sweep --root /duong/dan/toi/repo
 
 ```bash
 node packages/cli/dist/probe.js <file> "section.enabled" --offset 8 --root /duong/dan/toi/repo
+```
+
+Xem trước rename — liệt kê mọi chỗ sẽ sửa, **không ghi file**:
+
+```bash
+node packages/cli/dist/probe.js <file> "\$scope.busy = " --offset 7 --rename isBusy --root /duong/dan/toi/repo
 ```
 
 `ejsng scan <file>` in ra toàn bộ fact trích được từ một file — công cụ debug chính.
@@ -118,10 +127,12 @@ packages/core/            Toàn bộ logic — không dính LSP, test độc l�
   src/ng/normalize.ts       data-ng-* → ngX, bảng cú pháp directive
   src/extract/js.ts         Layer 2: fact từ .js (thuần theo file)
   src/extract/template.ts   Layer 2: fact từ .ejs (thuần theo file)
-  src/index/store.ts        Layer 3: SQLite
+  src/index/store.ts        Layer 3: NDJSON + bảng tra trong bộ nhớ (phụ lục D)
   src/resolve/linker.ts     Layer 4: nối liên file
-  src/resolve/workspace.ts  Truy vấn: definition / references / completion
+  src/resolve/workspace.ts  Truy vấn: definition / references / completion / rename
+  src/resolve/rename.ts     Rename: quét $scope, phạm vi khi controller trùng tên
 packages/server/          LSP server
+  test/lsp.test.js          Test qua stdio: server thật, JSON-RPC như IDE
 packages/cli/             CLI — debug và benchmark không cần IDE
 packages/vscode-client/   Extension VSCode
 packages/intellij-client/ Plugin IntelliJ (Kotlin + LSP4IJ)
@@ -139,3 +150,7 @@ và cho kết quả sai.
 ```bash
 npm test
 ```
+
+Chạy test core và test LSP qua stdio (khởi động server thật). Các test trên repo `smart-city` tự
+bỏ qua nếu máy không có repo đó. `spans.test.js` giữ bất biến "mọi span trỏ đúng vào chữ nó đại
+diện" — xem [phụ lục I](docs/kien-truc.md).

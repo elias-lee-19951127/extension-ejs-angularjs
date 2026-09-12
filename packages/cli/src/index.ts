@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
-import { Workspace, type Config } from '@ejsng/core';
+import { Workspace, type Config, type RenameResult } from '@ejsng/core';
 
 /**
  * CLI cua bo cong cu.
@@ -19,6 +19,8 @@ ejsng — cong cu track bien/ham giua EJS va AngularJS 1.x
   ejsng stats [root]                    Thong ke index
   ejsng def   <file> <line> <col>       Go-to-definition tai vi tri
   ejsng refs  <file> <line> <col>       Find-all-references tai vi tri
+  ejsng rename <file> <line> <col> <ten-moi>
+                                        Xem truoc rename — KHONG ghi file
   ejsng members <controller> [root]     Liet ke property tren scope cua controller
   ejsng unused [root]                   Symbol khong ai dung (ung vien dead code)
   ejsng sweep [root]                    Thu resolve MOI dinh danh trong moi template,
@@ -138,6 +140,27 @@ function toLineCol(source: string, offset: number): { line: number; col: number 
   return { line, col };
 }
 
+/** In ket qua rename o dang xem truoc. CLI khong bao gio ghi file. */
+function printRename(ws: Workspace, r: RenameResult, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
+  if (r.reason) {
+    console.log(`Khong doi ten duoc: ${r.reason}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`'${r.query}' — ${r.edits.length} cho can sua (xem truoc, KHONG ghi file):`);
+  for (const e of r.edits) {
+    const src = ws.source(e.path) ?? '';
+    const lc = toLineCol(src, e.span.start);
+    const lineText = src.split('\n')[lc.line - 1]?.trim().slice(0, 80) ?? '';
+    console.log(`  ${e.path}:${lc.line}:${lc.col}  ${lineText}`);
+  }
+  if (r.note) console.log(`\n${r.note}`);
+}
+
 function main(): void {
   const [cmd, ...argv] = process.argv.slice(2);
   if (!cmd) usage();
@@ -184,6 +207,9 @@ function main(): void {
             const lc = toLineCol(src, t.span.start);
             console.log(`  ${t.path}:${lc.line}:${lc.col}  [${t.kind}, ${t.confidence}] ${t.detail}`);
           }
+          if (r.otherFiles?.length) {
+            console.log(`  (con ${r.otherFiles.length} ban o thu muc xa hon: ${r.otherFiles.join(', ')})`);
+          }
         }
       } else {
         const r = ws.referencesAt(rel, offset);
@@ -198,6 +224,18 @@ function main(): void {
           }
         }
       }
+      ws.close();
+      break;
+    }
+
+    case 'rename': {
+      const [file, lineStr, colStr, newName] = opts.rest;
+      if (!file || !lineStr || !colStr || !newName) usage();
+      const ws = makeWorkspace(opts);
+      ws.index(); // index cu thi span cu — rename can fact moi nhat
+      const source = readFileSync(resolvePath(file), 'utf8');
+      const r = ws.renameAt(ws.toRelative(file), toOffset(source, Number(lineStr), Number(colStr)), newName);
+      printRename(ws, r, opts.json);
       ws.close();
       break;
     }
