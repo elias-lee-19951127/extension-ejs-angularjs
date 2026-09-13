@@ -3,7 +3,7 @@
   "displayName": "EJS + AngularJS Navigator",
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
   "version": "0.1.0",
-  "publisher": "local",
+  "publisher": "phule",
   "license": "MIT",
   "repository": {
     "type": "git",
