@@ -1,19 +1,11 @@
-# 02 — Bắt log browser-side qua CDP (AngularJS 1.x)
+# 02 — (đã tách) Bắt log browser-side qua CDP
 
-**What to build:** Nguồn log thứ hai — `console.log` chạy trong code AngularJS phía trình duyệt —
-hiện inline giống hệt server-side, dùng lại đúng pipeline/notification `ejsng/runtimeLog` đã có.
-Đây là mục bị loại khỏi v1 (spec.md quyết định #1: "Chứng minh pipeline với 1 nguồn trước khi nhân
-đôi"), nên ticket này chỉ mở khi v1 đã chạy ổn.
+Sau phiên `/grill-me` ngày 2026-09-14, ticket này phình to hơn dự kiến ban đầu — không chỉ là
+"thêm CDP cho browser" mà kéo theo đổi cả mô hình kết nối server từ 1-socket sang nhiều kết nối
+đồng thời. Tách thành hai ticket theo đúng tracer-bullet (mỗi ticket verify được độc lập):
 
-**Blocked by:** 01 — Hoàn thiện client VSCode v1
+- **02a** — đổi server sang multi-connection + kết nối qua host:port (test được hết bằng Node,
+  không cần Chrome thật)
+- **02b** — xác minh với Chrome/Edge thật (blocked by 02a)
 
-**Status:** ready-for-agent
-
-- [ ] Chốt kịch bản kết nối tới trình duyệt (remote-debugging port có sẵn, hay extension tự mở
-      trình duyệt) — đây là quyết định kiến trúc khó hoàn tác, nên chạy `/grill-me` riêng cho
-      ticket này trước khi code, đúng khuyến nghị trong
-      `docs/research/console-ninja-inline-log.md`
-- [ ] `console.log`/`warn`/`error` chạy trong code AngularJS phía client hiện inline đúng dòng,
-      qua kết nối CDP tới `Runtime.consoleAPICalled` của trình duyệt
-- [ ] Không sửa đổi hành vi pipeline server-side đã có (seam 1-3 của v1 giữ nguyên, chỉ thêm
-      nguồn dữ liệu thứ hai)
+Xem chi tiết quyết định kiến trúc trong hai file đó.
