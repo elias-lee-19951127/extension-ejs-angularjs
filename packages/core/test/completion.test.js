@@ -1,8 +1,9 @@
 /**
- * Completion trong template: di theo SHAPE suy tu object literal khi go `busy.`.
+ * Completion in a template: follow the SHAPE inferred from an object literal when typing `busy.`.
  *
- * Mo phong dung luc dang go: bieu thuc chua xong (`{{ busy. }}`) KHONG parse duoc —
- * extractor bo han no — nen test dat buffer dang go vao overlay, khong dung file goc.
+ * Simulates the moment of typing: an unfinished expression (`{{ busy. }}`) CANNOT be
+ * parsed — the extractor drops it entirely — so the test puts the in-progress buffer
+ * into the overlay instead of using the original file.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -12,11 +13,11 @@ const C = require('../dist');
 const FIXTURE = join(__dirname, '..', '..', '..', 'fixtures', 'mini');
 const TPL = 'views/page.ejs';
 
-/** Chen `before` + `after` ngay sau `anchor` trong buffer; tra ve offset con tro (giua hai doan). */
+/** Insert `before` + `after` right after `anchor` in the buffer; returns the cursor offset (between the two pieces). */
 function typeAt(ws, rel, anchor, before, after = '') {
   const src = ws.source(rel);
   const idx = src.indexOf(anchor);
-  assert.notStrictEqual(idx, -1, `khong tim thay ${JSON.stringify(anchor)}`);
+  assert.notStrictEqual(idx, -1, `${JSON.stringify(anchor)} not found`);
   const cut = idx + anchor.length;
   ws.setOverlay(rel, src.slice(0, cut) + before + after + src.slice(cut));
   return cut + before.length;
@@ -30,31 +31,31 @@ function fixtureWs() {
   return ws;
 }
 
-test('go `busy.` -> goi y cac khoa trong object literal cua $scope.busy', () => {
+test('typing `busy.` -> suggests the keys of the $scope.busy object literal', () => {
   const ws = fixtureWs();
   const offset = typeAt(ws, TPL, '<span>', '{{ busy.', ' }}');
   assert.deepStrictEqual(names(ws.completionAt(TPL, offset)), ['loading', 'saving']);
 });
 
-test('go `row.` trong ng-repeat -> khoa cua PHAN TU trong $scope.rows', () => {
+test('typing `row.` inside ng-repeat -> keys of an ELEMENT in $scope.rows', () => {
   const ws = fixtureWs();
   const offset = typeAt(ws, TPL, '{{ row.label }}', ' {{ row.', ' }}');
   assert.deepStrictEqual(names(ws.completionAt(TPL, offset)), ['id', 'label', 'tags']);
 });
 
-test('con tro o cuoi mot khoa dang go do van goi y cung cap: `busy.sa|`', () => {
+test('cursor at the end of a key being typed still gets suggestions: `busy.sa|`', () => {
   const ws = fixtureWs();
   const offset = typeAt(ws, TPL, '<span>', '{{ busy.sa', ' }}');
   assert.deepStrictEqual(names(ws.completionAt(TPL, offset)), ['loading', 'saving']);
 });
 
-test('trong gia tri thuoc tinh directive cung goi y theo shape', () => {
+test('a directive attribute value also gets shape-based suggestions', () => {
   const ws = fixtureWs();
   const offset = typeAt(ws, TPL, '<input data-ng-model="form.title"', ' data-ng-click="form.', '"');
   assert.deepStrictEqual(names(ws.completionAt(TPL, offset)), ['body', 'title']);
 });
 
-test('dang go trong chuoi thi khong goi y', () => {
+test('typing inside a string gets no suggestions', () => {
   const ws = fixtureWs();
   const offset = typeAt(ws, TPL, '<span>', "{{ 'busy.", "' }}");
   assert.deepStrictEqual(ws.completionAt(TPL, offset), []);
@@ -64,13 +65,13 @@ const { existsSync } = require('node:fs');
 const REAL = '/Volumes/mac-dev/project/smart-city';
 
 test(
-  'smart-city: `busy.` va `section.` goi y dung khoa trong object literal that',
-  { skip: !existsSync(REAL) && 'khong co repo smart-city' },
+  'smart-city: `busy.` and `section.` suggest the real object literal keys',
+  { skip: !existsSync(REAL) && 'smart-city repo not available' },
   () => {
     const ws = new C.Workspace({ root: REAL }, ':memory:');
     ws.index();
     const T = 'product/view/content.ejs';
-    // Doc tay tu product/view/public/javascripts/index.js (2026-09-11): dong 53 va dong 32-38.
+    // Read by hand from product/view/public/javascripts/index.js (2026-09-11): line 53 and lines 32-38.
     const busy = typeAt(ws, T, 'DHA Management</div>', '{{ busy.', ' }}');
     assert.deepStrictEqual(names(ws.completionAt(T, busy)), [
       'docStatus', 'documents', 'ingest', 'maintain', 'search', 'stats', 'upload', 'voicePreview', 'voices',

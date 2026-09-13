@@ -5,18 +5,18 @@ import type { BindingKind, JsBinding, Span } from '../types';
 export type { BindingKind, JsBinding };
 
 /**
- * Trich cac khai bao bien/ham cua JavaScript thuan, kem pham vi.
+ * Extract plain JavaScript variable/function declarations, along with their scope.
  *
- * VI SAO CAN: IntelliJ IDEA Community khong co plugin JavaScript (chi IDE tra
- * phi moi co, truoc 2026.1 — xem docs/kien-truc.md phu luc B). Tren nhung ban
- * do, language server nay la NGUON DUY NHAT tra loi cho file .js: khong tu lam
- * thi Ctrl+Click vao mot `const` trong cung file cung khong chay.
+ * WHY THIS IS NEEDED: IntelliJ IDEA Community has no JavaScript plugin (only the
+ * paid IDEs have one, before 2026.1 — see docs/kien-truc.md appendix B). On those
+ * installs, this language server is the ONLY SOURCE answering for .js files: without
+ * doing this ourselves, even Ctrl+Click on a `const` in the same file wouldn't work.
  *
- * Quy tac pham vi bam theo dung ngu nghia JavaScript:
- *   - `var` va `function`  -> pham vi HAM (hoac toan file)
- *   - `let` / `const`      -> pham vi KHOI
- *   - tham so ham          -> pham vi chinh ham do
- *   - tham so catch        -> pham vi khoi catch
+ * Scoping rules follow JavaScript semantics exactly:
+ *   - `var` and `function`  -> FUNCTION scope (or the whole file)
+ *   - `let` / `const`       -> BLOCK scope
+ *   - function parameters   -> scope of that function itself
+ *   - catch parameters      -> scope of the catch block
  */
 export function extractBindings(ast: acorn.Program): JsBinding[] {
   const out: JsBinding[] = [];
@@ -34,8 +34,9 @@ export function extractBindings(ast: acorn.Program): JsBinding[] {
     n.type === 'SwitchStatement';
 
   /**
-   * Pham vi bao quanh, tinh tu `ancestors` (khong ke phan tu cuoi neu `skipSelf`).
-   * `blockScoped` quyet dinh co dung lai o BlockStatement hay di tiep len ham.
+   * The enclosing scope, computed from `ancestors` (excluding the last element when
+   * `skipSelf` is set). `blockScoped` decides whether to stop at a BlockStatement or
+   * keep going up to the enclosing function.
    */
   const scopeOf = (ancestors: acorn.Node[], blockScoped: boolean, skipSelf: boolean): Span => {
     const end = skipSelf ? ancestors.length - 2 : ancestors.length - 1;
@@ -49,7 +50,7 @@ export function extractBindings(ast: acorn.Program): JsBinding[] {
     return { start: ast.start, end: ast.end };
   };
 
-  /** Mot pattern co the sinh ra nhieu ten: `{a, b: {c}}`, `[x, ...rest]`. */
+  /** A single pattern can yield multiple names: `{a, b: {c}}`, `[x, ...rest]`. */
   const eachName = (pattern: acorn.Pattern, visit: (id: acorn.Identifier) => void): void => {
     switch (pattern.type) {
       case 'Identifier':
@@ -97,7 +98,7 @@ export function extractBindings(ast: acorn.Program): JsBinding[] {
 
     FunctionDeclaration(node, _state, ancestors) {
       if (node.id) {
-        // Ten ham thuoc pham vi BAO QUANH, khong phai than ham.
+        // The function name belongs to the ENCLOSING scope, not the function body.
         out.push({
           name: node.id.name,
           span: { start: node.id.start, end: node.id.end },
@@ -109,7 +110,7 @@ export function extractBindings(ast: acorn.Program): JsBinding[] {
     },
 
     FunctionExpression(node) {
-      // `var f = function inner() {}` — `inner` chi nhin thay duoc trong chinh no.
+      // `var f = function inner() {}` — `inner` is only visible within itself.
       if (node.id) {
         out.push({
           name: node.id.name,
@@ -152,8 +153,8 @@ export function extractBindings(ast: acorn.Program): JsBinding[] {
 }
 
 /**
- * Khai bao ap dung cho `name` tai `offset`: chon pham vi HEP NHAT bao quanh.
- * Do la dung quy tac che bong (shadowing) cua JavaScript.
+ * The declaration that applies to `name` at `offset`: pick the NARROWEST enclosing
+ * scope. This is exactly JavaScript's shadowing rule.
  */
 export function resolveBinding(
   bindings: JsBinding[],
@@ -170,11 +171,11 @@ export function resolveBinding(
 }
 
 /**
- * Bien toan cuc cua trinh duyet / Node — khong co khai bao trong code nguoi dung.
- * Bao "khong tim thay" cho `window` la sai va gay nhieu.
+ * Global variables from the browser / Node — not declared anywhere in user code.
+ * Reporting "not found" for `window` would be wrong and noisy.
  */
 export const JS_GLOBALS = new Set([
-  // trinh duyet
+  // browser
   'window', 'document', 'navigator', 'location', 'history', 'screen', 'localStorage',
   'sessionStorage', 'fetch', 'XMLHttpRequest', 'FormData', 'Blob', 'File', 'FileReader',
   'URL', 'URLSearchParams', 'WebSocket', 'Worker', 'alert', 'confirm', 'prompt',
@@ -185,7 +186,7 @@ export const JS_GLOBALS = new Set([
   'MediaRecorder', 'Notification', 'performance', 'crypto', 'TextEncoder',
   'TextDecoder', 'event', 'self', 'top', 'parent', 'frames', 'structuredClone',
   'queueMicrotask', 'ResizeObserver', 'DOMParser', 'Headers', 'Request', 'Response',
-  // ngon ngu
+  // language
   'console', 'JSON', 'Math', 'Date', 'Object', 'Array', 'String', 'Number', 'Boolean',
   'RegExp', 'Error', 'TypeError', 'RangeError', 'Promise', 'Symbol', 'Map', 'Set',
   'WeakMap', 'WeakSet', 'Proxy', 'Reflect', 'BigInt', 'Infinity', 'NaN', 'undefined',
@@ -195,24 +196,25 @@ export const JS_GLOBALS = new Set([
   'SpeechSynthesisUtterance', 'speechSynthesis', 'SpeechRecognition',
   'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent',
   'decodeURIComponent', 'encodeURI', 'decodeURI', 'globalThis', 'arguments',
-  // he sinh thai
+  // ecosystem
   'angular', 'jQuery', '$', 'moment', 'lodash', '_',
   // Node
   'require', 'module', 'exports', 'process', 'Buffer', '__dirname', '__filename',
 ]);
 
 /**
- * Vi tri cua cac dinh danh o VI TRI THAM CHIEU trong mot file .js.
+ * Positions of identifiers at REFERENCE POSITIONS in a .js file.
  *
- * Dung cho `ejsng sweep` de do do phu. Phai di qua AST chu khong quet regex:
- * quet regex se dem ca tu khoa (`const`, `return`) va khoa cua object literal
- * (`{ word: 'x' }`) thanh dinh danh, lam mau so sai hoan toan — lan dau do bang
- * regex cho ra "49.4%" trong khi con so that hoan toan khac.
+ * Used by `ejsng sweep` to measure coverage. Must walk the AST rather than scan
+ * with regex: a regex scan would count keywords (`const`, `return`) and object
+ * literal keys (`{ word: 'x' }`) as identifiers, making the denominator completely
+ * wrong — the first measurement using regex gave "49.4%" while the real number was
+ * entirely different.
  *
- * Loai tru:
- *   - khoa object literal khong computed:  `{ word: 1 }`
- *   - ten property khong computed:         `a.b`  (tru khi doi tuong la $scope/this)
- *   - nhan cua label / thuoc tinh JSX
+ * Excluded:
+ *   - non-computed object literal keys:  `{ word: 1 }`
+ *   - non-computed property names:       `a.b`  (unless the object is $scope/this)
+ *   - label names / JSX attribute names
  */
 export function collectReferenceOffsets(ast: acorn.Program): number[] {
   const skip = new Set<acorn.Node>();
@@ -220,7 +222,7 @@ export function collectReferenceOffsets(ast: acorn.Program): number[] {
   walkLib.simple(ast, {
     MemberExpression(node) {
       if (node.computed) return;
-      // Giu lai `$scope.foo` / `this.foo`: do la property tren scope, co dinh nghia.
+      // Keep `$scope.foo` / `this.foo`: they're properties on the scope, with a definition.
       const obj = node.object;
       const isScopeObject =
         obj.type === 'ThisExpression' || (obj.type === 'Identifier' && obj.name === '$scope');

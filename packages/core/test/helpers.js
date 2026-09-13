@@ -1,19 +1,19 @@
 /**
- * Tien ich dung chung cho cac file test.
+ * Shared utilities for the test files.
  *
- * Dinh vi bang CHUOI chu khong bang so dong/cot: dem cot bang tay da vai lan
- * lam ket luan sai ve san pham (docs/kien-truc.md phu luc F.3).
+ * Locates positions by STRING rather than line/column numbers: counting columns by hand
+ * has led to wrong conclusions about the product more than once (docs/kien-truc.md Appendix F.3).
  */
 const assert = require('node:assert');
 
-/** Vi tri cua lan xuat hien thu `nth` cua `needle`, dich them `offset` ky tu. */
+/** Position of the `nth` occurrence of `needle`, shifted by `offset` characters. */
 function at(ws, rel, needle, { nth = 1, offset = 0 } = {}) {
   const src = ws.source(rel);
-  assert.ok(src, `khong doc duoc ${rel}`);
+  assert.ok(src, `could not read ${rel}`);
   let idx = -1;
   for (let n = 0; n < nth; n++) {
     idx = src.indexOf(needle, idx + 1);
-    assert.notStrictEqual(idx, -1, `khong tim thay lan ${nth} cua ${JSON.stringify(needle)} trong ${rel}`);
+    assert.notStrictEqual(idx, -1, `occurrence ${nth} of ${JSON.stringify(needle)} not found in ${rel}`);
   }
   return idx + offset;
 }
@@ -24,8 +24,8 @@ function textAt(ws, target) {
 }
 
 /**
- * Ap cac edit cua mot lan rename, tra ve { [path]: noi dung moi } — chi file bi sua.
- * Ap tu cuoi file len dau de edit phia sau khong lam lech offset cua edit phia truoc.
+ * Apply the edits of a rename, returning { [path]: new content } — only the changed files.
+ * Applied from the end of the file backward so a later edit doesn't shift the offset of an earlier one.
  */
 function applyEdits(ws, edits) {
   const byPath = new Map();

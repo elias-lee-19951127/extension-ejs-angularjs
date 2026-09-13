@@ -1,14 +1,16 @@
 /**
- * Phien ban logic trich fact. TANG SO NAY moi khi extractor doi hanh vi —
- * moi ban ghi cu se tu dong bi coi la cu va parse lai.
+ * Version of the fact-extraction logic. BUMP THIS NUMBER whenever an extractor's
+ * behavior changes — every old record is then automatically treated as stale and
+ * re-parsed.
  *
- * Day la co che duy nhat chong "cache sai" giua cac ban extension. Trong qua
- * trinh phat trien da co dung mot lan quen tang: doi `inferShape` ma khong bump,
- * ket qua la go-to-definition tra ve vi tri cu cho toi khi bump so nay.
+ * This is the only mechanism guarding against "stale cache" across extension
+ * builds. During development there was one incident of forgetting to bump it:
+ * `inferShape` was changed without bumping, and go-to-definition kept returning
+ * the old position until this number was bumped.
  *
- * 11: span trong gia tri thuoc tinh het lech mot ky tu (phu luc I).
+ * 11: fixed the one-character offset bug in attribute value spans (appendix I).
  */
 export const PARSER_VERSION = 11;
 
-/** Ten file cache trong thu muc .ejsng-cache/ */
+/** Cache file name inside the .ejsng-cache/ directory. */
 export const INDEX_FILENAME = 'index.ndjson';

@@ -12,10 +12,11 @@ import { EJS_GLOBALS, parseJsTolerant } from './js-common';
 const INTERPOLATION_RE = /\{\{([\s\S]*?)\}\}/g;
 
 /**
- * Trich fact tu mot file .ejs / .html.
+ * Extract facts from a .ejs / .html file.
  *
- * BAT BUOC la ham thuan cua `source` (docs/kien-truc.md muc 3): khong doc file khac,
- * khong tra cuu index. Moi thu can thong tin lien file duoc lam o tang resolver.
+ * MUST be a pure function of `source` (docs/kien-truc.md section 3): does not read
+ * other files, does not query the index. Anything needing cross-file information
+ * is done at the resolver layer.
  */
 export function extractTemplate(source: string, config: Config): TemplateFacts {
   const facts: TemplateFacts = {
@@ -35,21 +36,22 @@ export function extractTemplate(source: string, config: Config): TemplateFacts {
   extractEjsAxis(regions, facts);
   extractBridges(source, regions, facts);
 
-  // Virtual HTML: region EJS -> khoang trang cung do dai, nen offset trung khit file goc.
+  // Virtual HTML: EJS region -> whitespace of the same length, so offsets line up
+  // exactly with the original file.
   const virtualHtml = toVirtualHtml(source, regions);
   let parsed;
   try {
     parsed = parseHtml(virtualHtml, { canSelfClose: true, allowHtmComponentClosingTags: true });
   } catch (e) {
     facts.parseErrors.push({
-      message: `Khong parse duoc HTML: ${(e as Error).message}`,
+      message: `Failed to parse HTML: ${(e as Error).message}`,
       span: { start: 0, end: source.length },
     });
     return facts;
   }
 
-  // Loi HTML la CHUYEN BINH THUONG voi EJS (`<% if %><div><% } %>` lam ho the).
-  // Chi ghi nhan, khong dung lai. Xem docs/kien-truc.md phu luc A.3.
+  // HTML errors are NORMAL with EJS (`<% if %><div><% } %>` breaks tag balance).
+  // Just record them, don't stop. See docs/kien-truc.md appendix A.3.
   for (const err of parsed.errors) {
     facts.parseErrors.push({
       message: err.msg,
@@ -65,18 +67,19 @@ export function extractTemplate(source: string, config: Config): TemplateFacts {
 }
 
 /**
- * Thuoc tinh nay co dang mot directive/binding khong?
+ * Does this attribute look like a directive/binding?
  *
- * Loai bo thuoc tinh HTML/ARIA chuan de khong bien `aria-label="Search"` thanh
- * mot tham chieu gia. Chi giu lai thuoc tinh co dau '-' (dang directive tu viet)
- * hoac thuoc tinh la tren the custom.
+ * Excludes standard HTML/ARIA attributes so `aria-label="Search"` doesn't turn
+ * into a false reference. Keeps only attributes with a '-' (looks like a custom
+ * directive) or unknown attributes on a custom element.
  */
 function isCandidateAttr(rawName: string, tagName: string): boolean {
   const lower = rawName.toLowerCase();
   if (lower.startsWith('aria-') || lower.startsWith('data-')) return false;
   if (STANDARD_DASHED_ATTRS.has(lower)) return false;
   if (lower.includes('-')) return true;
-  // Thuoc tinh khong dau '-' chi dang ngo khi nam tren the custom (isolate binding).
+  // An attribute without a '-' only looks suspicious when it's on a custom element
+  // (isolate binding).
   return tagName.includes('-') && !STANDARD_ATTRS.has(lower);
 }
 
@@ -109,8 +112,8 @@ function localsOf(chain: ScopeFrame[]): string[] {
 }
 
 /**
- * Lay dinh danh goc cua mot bieu thuc collection: `vm.orders | filter:q` -> vm.orders.
- * Bo qua filter vi filter khong doi shape phan tu.
+ * Get the root identifier of a collection expression: `vm.orders | filter:q` -> vm.orders.
+ * Filters are skipped since they don't change the element's shape.
  */
 function firstRootOf(program: Program): { root: string; path: string[] } | undefined {
   const roots = collectRoots(program);
@@ -124,7 +127,7 @@ function isElement(node: Node): node is Element {
 
 function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Config): void {
   if (!isElement(node)) {
-    // Node text: tim {{ }}
+    // Text node: look for {{ }}
     const text = (node as { value?: string }).value;
     const span = node.sourceSpan;
     if (typeof text === 'string' && span) {
@@ -139,7 +142,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
     end: el.sourceSpan.end.offset,
   };
 
-  // The custom (co dau '-') co the la directive tu viet.
+  // Custom element (has a '-') may be a custom directive.
   if (el.name.includes('-')) {
     facts.customElements.push({
       tag: normalizeDirectiveName(el.name),
@@ -147,7 +150,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
     });
   }
 
-  // Cac tang scope MOI do chinh element nay tao ra.
+  // The NEW scope frames created by this very element.
   const newFrames: ScopeFrame[] = [];
 
   for (const attr of el.attrs) {
@@ -155,7 +158,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
     const valueSpan = attr.valueSpan;
     const value = attr.value ?? '';
 
-    // ng-controller: nguon link template<->controller tin cay nhat.
+    // ng-controller: the most reliable template<->controller link source.
     if (normalized === 'ngController' && valueSpan) {
       const m = value.match(/^\s*([^\s]+)(?:\s+as\s+([$\w]+))?\s*$/);
       if (m) {
@@ -210,18 +213,19 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
       }
       newFrames.push({ kind: 'repeat', locals, elementSpan });
 
-      // QUAN TRONG: chi luu BIEU THUC CON, khong luu ca chuoi microsyntax.
-      // `section in sections` khong phai bieu thuc Angular hop le (`in` khong
-      // phai toan tu), nen neu luu ca chuoi thi resolver parse lai se hong va
-      // bao "vi tri khong nam trong bieu thuc Angular" — dung cho ve phai
-      // `sections` la thu nguoi dung hay Ctrl+Click nhat.
+      // IMPORTANT: store only the SUB-EXPRESSION, not the whole microsyntax string.
+      // `section in sections` is not a valid Angular expression (`in` is not an
+      // operator), so storing the whole string would make the resolver's re-parse
+      // fail and report "position not inside an Angular expression" — which is
+      // exactly what's on the right-hand side, `sections`, the thing users most
+      // often Ctrl+Click.
       if (rep.collection) {
         pushExpression(
           rep.collection,
           sliceOf(value, base, rep.collectionSpan),
           rep.collectionSpan.start,
           normalized,
-          chain, // collection duoc danh gia o scope CHA, khong phai scope moi
+          chain, // the collection is evaluated in the PARENT scope, not the new one
           facts,
         );
       }
@@ -274,12 +278,12 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
       const program = tryParseExpression(value, base);
       if (!program) {
         facts.parseErrors.push({
-          message: `Khong parse duoc bieu thuc cua ${attr.name}`,
+          message: `Failed to parse expression for ${attr.name}`,
           span: { start: base, end: base + value.length },
         });
         continue;
       }
-      // ng-init dua bien moi vao scope hien tai.
+      // ng-init introduces new variables into the current scope.
       if (normalized === 'ngInit') {
         const frame: ScopeFrame = { kind: 'init', locals: [], elementSpan };
         for (const root of collectRoots(program)) {
@@ -291,13 +295,13 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
       continue;
     }
 
-    // Thuoc tinh HTML thuong: van co the chua {{ }}
+    // A regular HTML attribute: can still contain {{ }}
     if (value.includes('{{')) {
       extractInterpolations(value, base, [...newFrames, ...chain], normalized, facts, config);
       continue;
     }
 
-    // Con lai: chua biet la gi. Ghi lai de Linker phan giai o Layer 4.
+    // Otherwise: unknown for now. Recorded so the Linker can resolve it at Layer 4.
     if (kind === undefined && value.trim() && isCandidateAttr(attr.name, el.name)) {
       const activeChain = [...newFrames, ...chain];
       facts.attrCandidates.push({
@@ -320,13 +324,14 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
 }
 
 /**
- * Offset cua KY TU DAU TIEN trong gia tri thuoc tinh.
+ * Offset of the FIRST CHARACTER in the attribute value.
  *
- * `valueSpan` cua angular-html-parser bat dau tu DAU NHAY khi gia tri co nhay
- * (`x="v"` -> tro vao `"`), va tu chinh gia tri khi khong nhay (`x=v`). Lay thang
- * `valueSpan.start.offset` lam goc thi moi span trong thuoc tinh lech trai mot ky
- * tu. Dieu huong van chay (`inSpan` tinh ca hai dau mut) nen bug nam im cho toi
- * khi lam rename — xem docs/kien-truc.md phu luc I.
+ * angular-html-parser's `valueSpan` starts at the QUOTE CHARACTER when the value
+ * is quoted (`x="v"` -> points at `"`), and at the value itself when unquoted
+ * (`x=v`). Using `valueSpan.start.offset` directly as the base would shift every
+ * span inside the attribute one character to the left. Navigation still worked
+ * (`inSpan` counts both endpoints), so the bug stayed hidden until rename was
+ * implemented — see docs/kien-truc.md appendix I.
  */
 function valueStartOf(valueSpan: { start: { offset: number; file: { content: string } } }): number {
   const at = valueSpan.start.offset;
@@ -334,7 +339,7 @@ function valueStartOf(valueSpan: { start: { offset: number; file: { content: str
   return c === '"' || c === "'" ? at + 1 : at;
 }
 
-/** Cat doan text ung voi `span` ra khoi gia tri thuoc tinh bat dau tai `base`. */
+/** Slice the text corresponding to `span` out of an attribute value starting at `base`. */
 function sliceOf(value: string, base: number, span: Span): string {
   return value.slice(span.start - base, span.end - base);
 }
@@ -379,7 +384,7 @@ function extractInterpolations(
     const program = tryParseExpression(inner, innerStart);
     if (!program) {
       facts.parseErrors.push({
-        message: `Khong parse duoc bieu thuc noi suy {{${inner.trim()}}}`,
+        message: `Failed to parse interpolation expression {{${inner.trim()}}}`,
         span: { start: innerStart, end: innerStart + inner.length },
       });
       continue;
@@ -388,7 +393,7 @@ function extractInterpolations(
   }
 }
 
-/** Truc A: bien locals cua EJS va cac lan include. */
+/** Axis A: EJS local variables and include calls. */
 function extractEjsAxis(regions: ReturnType<typeof scanEjs>, facts: TemplateFacts): void {
   const vjs = toVirtualJs(regions);
   if (!vjs.code.trim()) return;
@@ -396,7 +401,7 @@ function extractEjsAxis(regions: ReturnType<typeof scanEjs>, facts: TemplateFact
   const ast = parseJsTolerant(vjs.code);
   if (!ast) return;
 
-  // Bien khai bao ngay trong template khong phai locals do server bom vao.
+  // Variables declared directly in the template are not locals injected by the server.
   const declared = new Set<string>();
   walkLib.simple(ast, {
     VariableDeclarator(n) {
@@ -417,7 +422,7 @@ function extractEjsAxis(regions: ReturnType<typeof scanEjs>, facts: TemplateFact
       const src = mapVirtualJsOffset(vjs, n.start);
       if (src === -1) return;
 
-      // Gom duong dan property: `user.profile.name` -> path ['profile','name'].
+      // Collect the property path: `user.profile.name` -> path ['profile','name'].
       const path: string[] = [];
       for (let i = ancestors.length - 2; i >= 0; i--) {
         const a = ancestors[i];
@@ -461,9 +466,9 @@ function extractEjsAxis(regions: ReturnType<typeof scanEjs>, facts: TemplateFact
 }
 
 /**
- * Giao diem truc A x truc B (docs/kien-truc.md muc 0):
+ * The intersection of axis A and axis B (docs/kien-truc.md section 0):
  *   <script>window.BOOT = <%- JSON.stringify(data) %>;</script>
- * Day la cho khong tool nao hien co noi duoc hai dau.
+ * This is the spot no existing tool can currently connect both ends of.
  */
 function extractBridges(
   source: string,
@@ -472,11 +477,11 @@ function extractBridges(
 ): void {
   for (const r of regions) {
     if (r.kind !== 'output-raw' && r.kind !== 'output-escaped') continue;
-    // Nhin nguoc lai tim `<ten> =` ngay truoc region.
+    // Look backward for `<name> =` right before the region.
     const before = source.slice(Math.max(0, r.span.start - 120), r.span.start);
     const m = before.match(/([$\w.[\]'"]+)\s*=\s*$/);
     if (!m) continue;
-    // Chi tinh la bridge khi nam trong the <script>.
+    // Only counts as a bridge when it's inside a <script> tag.
     const scriptOpen = source.lastIndexOf('<script', r.span.start);
     const scriptClose = source.lastIndexOf('</script', r.span.start);
     const inScript = scriptOpen !== -1 && scriptOpen > scriptClose;

@@ -19,9 +19,9 @@ const DECL_METHODS = new Set<NgDeclKind>([
 ]);
 
 /**
- * Trich fact tu mot file .js.
+ * Extract facts from a .js file.
  *
- * BAT BUOC la ham thuan cua `source` (docs/kien-truc.md muc 3).
+ * MUST be a pure function of `source` (docs/kien-truc.md section 3).
  */
 export function extractJs(source: string, config: Config): JsFacts {
   const facts: JsFacts = {
@@ -37,7 +37,7 @@ export function extractJs(source: string, config: Config): JsFacts {
 
   const ast = parseJsTolerant(source);
   if (!ast) {
-    facts.parseErrors.push({ message: 'Khong parse duoc file', span: { start: 0, end: source.length } });
+    facts.parseErrors.push({ message: 'Failed to parse file', span: { start: 0, end: source.length } });
     return facts;
   }
 
@@ -62,7 +62,7 @@ export function extractJs(source: string, config: Config): JsFacts {
 }
 
 /**
- * Tim cac bien giu ket qua cua `angular.module(...)`.
+ * Find variables holding the result of `angular.module(...)`.
  *   const appModule = angular.module("cityosDemo", []);
  *   var myApp = angular.module("app");
  */
@@ -81,7 +81,7 @@ function collectModuleAliases(ast: acorn.Program, facts: JsFacts): void {
   });
 }
 
-/** Tra ve ten module neu `node` la `angular.module('x', ...)`, nguoc lai null. */
+/** Returns the module name if `node` is `angular.module('x', ...)`, otherwise null. */
 function moduleNameOf(node: acorn.Expression | acorn.Node): string | null {
   if (node.type !== 'CallExpression') return null;
   const call = node as acorn.CallExpression;
@@ -94,19 +94,20 @@ function moduleNameOf(node: acorn.Expression | acorn.Node): string | null {
 }
 
 /**
- * Nhan dien mot khai bao Angular.
+ * Recognize an Angular declaration.
  *
- * QUAN TRONG — phai xac thuc chuoi module truoc khi nhan.
- * Trong repo smart-city, 54/54 lan `.filter(` la `Array.prototype.filter`, KHONG co
- * Angular filter nao. Cach lam dua regex se cho 100% false positive.
- * Xem docs/kien-truc.md phu luc A.2 muc 5.
+ * IMPORTANT — the module chain must be verified before recognizing it.
+ * In the smart-city repo, 54/54 occurrences of `.filter(` are `Array.prototype.filter`,
+ * NOT an Angular filter. A regex-based approach would give 100% false positives.
+ * See docs/kien-truc.md appendix A.2 item 5.
  *
- * Ba muc do tin cay:
- *   high   - chuoi bat dau tu `angular.module(...)`, hoac bien da biet giu module,
- *            hoac bien nam trong config.moduleAliases
- *   medium - bien la nay chua ro, nhung doi so dau la chuoi va doi so hai la
- *            function/array/object (dung hinh dang mot khai bao Angular)
- *   (khong nhan) - moi truong hop con lai
+ * Three confidence levels:
+ *   high   - the chain starts from `angular.module(...)`, or a variable already known
+ *            to hold a module, or a variable listed in config.moduleAliases
+ *   medium - the chain's base variable is not yet known, but the first argument is a
+ *            string and the second is a function/array/object (matching the shape of
+ *            an Angular declaration)
+ *   (not recognized) - every other case
  */
 function tryExtractDeclaration(
   node: acorn.CallExpression,
@@ -122,13 +123,13 @@ function tryExtractDeclaration(
   if (!DECL_METHODS.has(method)) return;
 
   const name = stringOf(node.arguments[0] as acorn.Node);
-  if (name === null) return; // `.filter(Boolean)`, `.filter(fn)` -> loai ngay tai day
+  if (name === null) return; // `.filter(Boolean)`, `.filter(fn)` -> rejected right here
 
   const second = node.arguments[1];
   if (!second) return;
-  // Doi so thu hai phai co hinh dang mot dinh nghia Angular. `CallExpression` duoc
-  // chap nhan vi mau factory rat pho bien: `.directive("aocsBarChart", barLike("y"))`
-  // — bo qua no se mat 2/3 directive trong web/js/charts.js cua repo smart-city.
+  // The second argument must have the shape of an Angular definition. `CallExpression`
+  // is accepted because the factory pattern is very common: `.directive("aocsBarChart", barLike("y"))`
+  // — skipping it would lose 2/3 of the directives in web/js/charts.js in the smart-city repo.
   const shapeOk =
     second.type === 'FunctionExpression' ||
     second.type === 'ArrowFunctionExpression' ||
@@ -162,7 +163,8 @@ function tryExtractDeclaration(
 }
 
 /**
- * Di nguoc chuoi `.module(...).controller(...).service(...)` de xem goc co phai module khong.
+ * Walk back along the `.module(...).controller(...).service(...)` chain to check
+ * whether the root is a module.
  */
 function resolveModuleChain(
   objectNode: acorn.Expression | acorn.Super,
@@ -177,22 +179,22 @@ function resolveModuleChain(
     const direct = moduleNameOf(cur);
     if (direct !== null) return { moduleRef: direct, confidence: 'high' };
 
-    // Bien: appModule / myApp
+    // Variable: appModule / myApp
     if (cur.type === 'Identifier') {
       const ident = (cur as acorn.Identifier).name;
       if (ident in facts.moduleAliases) {
         return { moduleRef: facts.moduleAliases[ident]!, confidence: 'high' };
       }
       if (config.moduleAliases.includes(ident) || aliasSet.has(ident)) {
-        // `myApp` la global do platform cap, khong khai bao trong file nay.
-        // Xem docs/kien-truc.md phu luc A.4 muc b.
+        // `myApp` is a global provided by the platform, not declared in this file.
+        // See docs/kien-truc.md appendix A.4 item b.
         return { moduleRef: ident, confidence: 'high' };
       }
-      // Bien la: chap nhan nhung ha do tin cay, de nguoi dung them vao config.
+      // Unknown variable: accept it but lower confidence, letting the user add it to config.
       return { moduleRef: ident, confidence: 'medium' };
     }
 
-    // Chuoi tiep: `.controller(...).directive(...)` — lui ve mot buoc.
+    // Chain continues: `.controller(...).directive(...)` — step back one level.
     if (cur.type === 'CallExpression') {
       const call = cur as acorn.CallExpression;
       if (call.callee.type === 'MemberExpression' && !call.callee.computed) {
@@ -210,10 +212,10 @@ function resolveModuleChain(
 }
 
 /**
- * Trich danh sach dependency inject vao, ho tro ca ba dang:
- *   function ($scope, UserSvc) {}              - implicit (vo khi minify)
+ * Extract the list of injected dependencies, supporting all three forms:
+ *   function ($scope, UserSvc) {}              - implicit (breaks when minified)
  *   ['$scope', 'UserSvc', function (a, b) {}]  - array annotation
- *   Foo.$inject = ['$scope']                   - xu ly rieng o noi khac
+ *   Foo.$inject = ['$scope']                   - handled separately elsewhere
  */
 function extractDeps(node: acorn.Node): NgDeclaration['deps'] {
   if (node.type === 'ArrayExpression') {
@@ -229,7 +231,7 @@ function extractDeps(node: acorn.Node): NgDeclaration['deps'] {
       .map((p) => ({ name: p.name, span: { start: p.start, end: p.end } }));
   }
   if (node.type === 'ObjectExpression') {
-    // component({controller: [...]}): lay deps tu thuoc tinh controller
+    // component({controller: [...]}): get deps from the controller property
     const obj = node as acorn.ObjectExpression;
     for (const prop of obj.properties) {
       if (prop.type !== 'Property') continue;
@@ -239,7 +241,7 @@ function extractDeps(node: acorn.Node): NgDeclaration['deps'] {
   return [];
 }
 
-/** Trich directive definition object. */
+/** Extract the directive definition object. */
 function extractDdo(node: acorn.Node): NgDeclaration['ddo'] {
   let obj: acorn.ObjectExpression | null = null;
   if (node.type === 'ObjectExpression') obj = node as acorn.ObjectExpression;
@@ -310,10 +312,11 @@ function returnedObject(fn: acorn.FunctionExpression | acorn.ArrowFunctionExpres
 }
 
 /**
- * Trich cac property gan len $scope / this trong than mot khai bao.
+ * Extract properties assigned onto $scope / this within a declaration's body.
  *
- * Ten bien giu $scope lay tu VI TRI cua '$scope' trong danh sach deps, khong phai
- * tu ten '$scope' co dinh — nho vay van dung khi code da minify hoac doi ten tham so:
+ * The variable name holding $scope is taken from the POSITION of '$scope' in the
+ * deps list, not from a fixed '$scope' name — this way it still works when the
+ * code is minified or the parameter is renamed:
  *   ['$scope', 'aocs', function (s, a) { s.busy = ... }]
  */
 function extractScopeMembers(ast: acorn.Program, decl: NgDeclaration, facts: JsFacts): void {
@@ -338,7 +341,7 @@ function extractScopeMembers(ast: acorn.Program, decl: NgDeclaration, facts: JsF
 
       const name = node.left.property.name;
       const key = via + '.' + name;
-      if (seen.has(key)) return; // chi giu lan gan DAU TIEN lam noi khai bao
+      if (seen.has(key)) return; // keep only the FIRST assignment as the declaration site
       seen.add(key);
 
       facts.scopeMembers.push({
@@ -355,7 +358,7 @@ function extractScopeMembers(ast: acorn.Program, decl: NgDeclaration, facts: JsF
   void alias;
 }
 
-/** Tim node function ung voi mot khai bao (doi so thu 2, hoac phan tu cuoi cua array). */
+/** Find the function node corresponding to a declaration (2nd argument, or the last array element). */
 export function findFunctionFor(
   ast: acorn.Program,
   decl: NgDeclaration,
@@ -403,7 +406,7 @@ export function scopeParamName(
 ): string | null {
   const idx = decl.deps.findIndex((d) => d.name === '$scope');
   if (idx === -1) {
-    // DI implicit: ten tham so CHINH LA ten service.
+    // Implicit DI: the parameter name IS the service name.
     const p = fn.params.find((p) => p.type === 'Identifier' && p.name === '$scope');
     return p ? '$scope' : null;
   }
@@ -412,8 +415,9 @@ export function scopeParamName(
 }
 
 /**
- * Suy shape tu bieu thuc khoi tao. Du cho completion, khong phai type system.
- * Xem docs/kien-truc.md muc 5.3 va phu luc A.2 muc 4 — pattern thuc te rat "ngoan":
+ * Infer shape from the initializer expression. Good enough for completion, not a
+ * type system. See docs/kien-truc.md section 5.3 and appendix A.2 item 4 — the
+ * real-world pattern is very "well-behaved":
  *   $scope.busy = { search: false, ingest: false, ... }
  */
 export function inferShape(node: acorn.Node, depth = 0): ValueShape {
@@ -452,7 +456,7 @@ export function inferShape(node: acorn.Node, depth = 0): ValueShape {
   }
 }
 
-/** $emit / $broadcast / $on — "bien dang chuoi" ma khong IDE nao track duoc. */
+/** $emit / $broadcast / $on — a "string-typed variable" that no IDE tracks. */
 function tryExtractEvent(node: acorn.CallExpression, facts: JsFacts): void {
   if (node.callee.type !== 'MemberExpression' || node.callee.computed) return;
   if (node.callee.property.type !== 'Identifier') return;
@@ -468,7 +472,7 @@ function tryExtractEvent(node: acorn.CallExpression, facts: JsFacts): void {
   });
 }
 
-/** Truc A: res.render('view', { user, orders }) */
+/** Axis A: res.render('view', { user, orders }) */
 function tryExtractRender(node: acorn.CallExpression, facts: JsFacts): void {
   if (node.callee.type !== 'MemberExpression' || node.callee.computed) return;
   if (node.callee.property.type !== 'Identifier' || node.callee.property.name !== 'render') return;

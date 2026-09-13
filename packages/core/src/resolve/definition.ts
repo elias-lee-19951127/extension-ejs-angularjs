@@ -10,20 +10,20 @@ import { tryParseExpression } from '../ng/parser';
 import { BUILTIN_FILTERS, NG_INJECTED_VARS, SCOPE_BUILTINS } from '../ng/normalize';
 
 /**
- * Go-to-definition tai mot vi tri trong file .js hoac .ejs da duoc danh index.
+ * Go-to-definition at a position in an already-indexed .js or .ejs file.
  *
- * Thu tu resolve trong template (docs/kien-truc.md muc 5.2):
- *   1. bien cuc bo cua template (ng-repeat / ng-init) -> nhay trong cung file
- *   2. controllerAs alias -> khai bao controller
- *   3. property tren $scope / this cua controller dang bao quanh
+ * Resolution order in a template (docs/kien-truc.md section 5.2):
+ *   1. a local variable of the template (ng-repeat / ng-init) -> jump within the same file
+ *   2. a controllerAs alias -> the controller's declaration
+ *   3. a property on $scope / this of the enclosing controller
  *   4. filter / directive / service
  *
- * Khong loc "ban gan nhat" khi trung ten o nhieu file — do la viec cua
- * `Workspace.definitionAt` (goi `preferNearest` sau khi goi ham nay).
+ * Does NOT filter down to the "nearest copy" when a name is declared in multiple files
+ * — that's `Workspace.definitionAt`'s job (it calls `preferNearest` after calling this).
  */
 export function resolveDefinition(deps: FactSource, relPath: string, offset: number): DefinitionResult {
   const facts = deps.facts(relPath);
-  if (!facts) return { targets: [], query: '', reason: 'File chua duoc danh index' };
+  if (!facts) return { targets: [], query: '', reason: 'File has not been indexed' };
 
   return facts.kind === 'template'
     ? templateDefinition(deps, relPath, offset, facts)
@@ -36,7 +36,7 @@ function templateDefinition(
   offset: number,
   facts: TemplateFacts,
 ): DefinitionResult {
-  // ng-controller="Ten" -> nhay toi khai bao controller
+  // ng-controller="Name" -> jump to the controller's declaration
   for (const c of facts.controllers) {
     if (inSpan(c.span, offset)) {
       return {
@@ -46,9 +46,9 @@ function templateDefinition(
     }
   }
 
-  // Ten filter: `{{ x | money }}` -> .filter('money', ...)
-  // Phai xet TRUOC khi phan giai scope, vi ten filter cung nam trong span cua
-  // bieu thuc nhung khong phai property tren scope.
+  // A filter name: `{{ x | money }}` -> .filter('money', ...)
+  // Must be checked BEFORE resolving scope, because a filter name also sits inside the
+  // expression's span but is not a property on scope.
   for (const expr of facts.expressions) {
     for (const f of expr.filters) {
       if (!inSpan(f.span, offset)) continue;
@@ -56,12 +56,12 @@ function templateDefinition(
         return {
           targets: [],
           query: f.name,
-          reason: `'${f.name}' la filter dung san cua AngularJS`,
+          reason: `'${f.name}' is a built-in AngularJS filter`,
         };
       }
       const rows = deps.findSymbols(f.name, null).filter((r) => r.kind === 'filter');
       if (rows.length) return { query: f.name, targets: symbolTargets(rows, 'filter') };
-      return { targets: [], query: f.name, reason: `Khong tim thay filter '${f.name}'` };
+      return { targets: [], query: f.name, reason: `Filter '${f.name}' not found` };
     }
   }
 
@@ -70,31 +70,31 @@ function templateDefinition(
 
   const { expr, node } = hit;
   const { root, path } = unwind(node);
-  if (!root) return { targets: [], query: '', reason: 'Khong xac dinh duoc dinh danh' };
+  if (!root) return { targets: [], query: '', reason: 'Could not determine the identifier' };
 
-  // Bien do Angular bom vao ($event, $index…) — khong co dinh nghia trong code
-  // nguoi dung, va khong phai loi.
-  // Ap dung cho CA duong dan property: `$event.keyCode` cung khong co dinh
-  // nghia trong code nguoi dung, khong chi rieng `$event`.
+  // A variable injected by Angular ($event, $index…) — has no definition in user code,
+  // and this is NOT an error.
+  // Applies to the WHOLE property path too: `$event.keyCode` also has no definition in
+  // user code, not just `$event` alone.
   if (NG_INJECTED_VARS.includes(root.name) || SCOPE_BUILTINS.includes(root.name)) {
     const full = path.length ? `${root.name}.${path.join('.')}` : root.name;
     return {
       targets: [],
       query: full,
-      reason: `'${root.name}' la bien dung san cua AngularJS`,
+      reason: `'${root.name}' is a built-in variable of AngularJS`,
       builtin: true,
     };
   }
 
-  // Vi tri con tro nam tren chinh dinh danh goc hay tren mot property phia sau?
+  // Is the cursor on the root identifier itself, or on a property further along?
   const onRoot = inSpan(root.span, offset);
   const alias = aliasOf(expr.scopeChain);
   const container = controllerOf(expr.scopeChain);
 
-  // 1. Bien cuc bo cua template (ng-repeat / ng-init)
+  // 1. A local variable of the template (ng-repeat / ng-init)
   const local = findLocal(root.name, expr.scopeChain);
   if (local) {
-    // 1a. Con tro tren chinh bien -> nhay toi cho khai bao trong template
+    // 1a. Cursor on the variable itself -> jump to its declaration site in the template
     if (onRoot) {
       return {
         query: root.name,
@@ -103,39 +103,42 @@ function templateDefinition(
             path: relPath,
             span: local.span,
             kind: local.frame.kind === 'repeat' ? 'repeat-var' : 'init-var',
-            detail: `Bien cuc bo cua template (${local.frame.kind})`,
+            detail: `Local variable of the template (${local.frame.kind})`,
             confidence: 'high',
           },
         ],
       };
     }
 
-    // 1b. Con tro tren MOT PROPERTY cua bien cuc bo: `section.id`.
-    //     Di tu bieu thuc collection (`sections`) xuong shape phan tu roi
-    //     tra khoa. Thieu nhanh nay thi `{{ section.icon }}` khong nhay duoc —
-    //     ma do lai la dang bieu thuc pho bien nhat trong template Angular.
+    // 1b. Cursor on A PROPERTY of the local variable: `section.id`.
+    //     Walk from the collection expression (`sections`) down into the element
+    //     shape, then look up the key. Without this branch, `{{ section.icon }}`
+    //     wouldn't jump anywhere — yet that's one of the most common expression shapes
+    //     in an Angular template.
     if (local.collection && container) {
       const depth = depthAt(node, offset, false);
       const rest = path.slice(0, Math.max(depth - 1, 1));
       const members = deps.findSymbols(local.collection.root, container);
 
       if (members.length) {
-        // `sections` la mang -> walkShape tu dong di vao shape phan tu.
+        // `sections` is an array -> walkShape automatically steps into the element shape.
         const full = [...local.collection.path, ...rest];
         const targets = members.map((m) => {
           const walked = walkShape(deps, m, full);
-          // Ten trong `detail` phai la doan THUC SU toi duoc: di nua chung roi tac ma van in ca
-          // duong dan da hoi la noi doi — cung ly do `confidence` bi ha xuong medium ngay duoi.
+          // The name in `detail` must be the segment ACTUALLY reached: walking halfway
+          // and then printing the whole path asked for would be a lie — the same
+          // reason `confidence` is dropped to medium right below.
           const reached = rest.slice(0, Math.max(walked.depth - local.collection!.path.length, 0));
           return {
             path: m.path,
             span: walked.span ?? m.span,
             kind: walked.span ? 'shape-property' : 'scope-member',
             detail: walked.span
-              ? `${[root.name, ...reached].join('.')} — phan tu cua ${local.collection!.root}`
-              : `${local.collection!.root} (khong suy duoc shape phan tu)`,
-            // `medium` = KHONG lan duoc theo shape toi khoa dang hoi, chu khong phai
-            // "khong chac day la dung cho". Duong dan di het thi giu do tin cay cua symbol.
+              ? `${[root.name, ...reached].join('.')} — element of ${local.collection!.root}`
+              : `${local.collection!.root} (could not infer the element shape)`,
+            // `medium` = could NOT walk the shape to the requested key, not "not sure
+            // this is the right target." When the path is walked fully, the symbol's own
+            // confidence is kept.
             confidence: walked.partial ? ('medium' as const) : m.confidence,
           };
         });
@@ -146,34 +149,34 @@ function templateDefinition(
     return {
       targets: [],
       query: root.name,
-      reason: `'${root.name}' la bien cuc bo cua template; khong suy duoc shape de tra property`,
+      reason: `'${root.name}' is a local variable of the template; could not infer a shape to resolve the property`,
     };
   }
 
   // 2. controllerAs alias
   if (onRoot && alias && root.name === alias) {
-    if (!container) return { targets: [], query: alias, reason: 'Khong ro controller' };
+    if (!container) return { targets: [], query: alias, reason: 'Unknown controller' };
     return {
       query: container,
       targets: symbolTargets(deps.findSymbols(container, null), 'controller'),
     };
   }
 
-  // 3. Property tren controller — co the la property long nhau (`busy.search`).
+  // 3. A property on the controller — may be a nested property (`busy.search`).
   if (!container) {
     return {
       targets: [],
       query: root.name,
-      reason: 'Khong tim thay ng-controller bao quanh — chua biet controller nao',
+      reason: 'No enclosing ng-controller found — the controller is unknown',
     };
   }
 
-  // Duong dan day du tinh tu goc scope, va so doan can di de toi vi tri con tro.
+  // Full path counted from the scope root, and how many segments to walk to reach the cursor.
   const usesAlias = !!alias && root.name === alias;
   const fullPath = usesAlias ? path : [root.name, ...path];
   const rootMember = fullPath[0];
   if (!rootMember) {
-    return { targets: [], query: root.name, reason: 'Khong xac dinh duoc property' };
+    return { targets: [], query: root.name, reason: 'Could not determine the property' };
   }
 
   const depth = onRoot && !usesAlias ? 1 : depthAt(node, offset, usesAlias);
@@ -182,11 +185,11 @@ function templateDefinition(
     return {
       targets: [],
       query: rootMember,
-      reason: `Khong tim thay '${rootMember}' tren scope cua '${container}'`,
+      reason: `'${rootMember}' not found on the scope of '${container}'`,
     };
   }
 
-  // Di theo shape de nhay thang vao khoa long nhau khi biet duoc.
+  // Walk the shape to jump straight into a nested key when it's known.
   const targets = members.map((m) => {
     const walked = walkShape(deps, m, fullPath.slice(1, Math.max(depth, 1)));
     return {
@@ -194,10 +197,10 @@ function templateDefinition(
       span: walked.span ?? m.span,
       kind: walked.span ? 'shape-property' : 'scope-member',
       detail: walked.span
-        ? `${fullPath.slice(0, walked.depth + 1).join('.')} tren scope cua ${container}`
+        ? `${fullPath.slice(0, walked.depth + 1).join('.')} on the scope of ${container}`
         : walked.partial
-          ? `${rootMember} tren scope cua ${container} (khong suy duoc shape cua '${fullPath[walked.depth] ?? ''}')`
-          : `scope-member '${rootMember}' cua ${container}`,
+          ? `${rootMember} on the scope of ${container} (could not infer the shape of '${fullPath[walked.depth] ?? ''}')`
+          : `scope-member '${rootMember}' of ${container}`,
       confidence: walked.partial ? ('medium' as const) : m.confidence,
     };
   });
@@ -206,9 +209,9 @@ function templateDefinition(
 }
 
 /**
- * Go-to-definition trong mot thuoc tinh chua duoc phan giai o Layer 2
+ * Go-to-definition inside an attribute not resolved at Layer 2
  * (`kbm-file="onFilePicked($file)"`, `<cityos-dha data="CTX">`).
- * Can bang directive cua Linker nen chi lam duoc o day, khong lam duoc luc trich fact.
+ * Needs the Linker's directive table so can only be done here, not while extracting facts.
  */
 function candidateDefinition(
   deps: FactSource,
@@ -216,13 +219,13 @@ function candidateDefinition(
   offset: number,
   facts: TemplateFacts,
 ): DefinitionResult {
-  // Con tro dat ngay tren CHO KHAI BAO mot bien cuc bo — `section` trong
-  // `ng-repeat="section in sections"`. Day khong phai loi: no la dinh nghia.
-  // Tra ve chinh no thay vi bao "khong nam trong bieu thuc Angular".
+  // Cursor sitting right on the DECLARATION SITE of a local variable — `section` in
+  // `ng-repeat="section in sections"`. This is not an error: it IS the definition.
+  // Return it directly instead of reporting "not inside an Angular expression".
   for (const expr of facts.expressions) {
     for (const frame of expr.scopeChain) {
       for (const local of frame.locals) {
-        if (local.span.start === local.span.end) continue; // bien dung san ($index…)
+        if (local.span.start === local.span.end) continue; // a built-in variable ($index…)
         if (!inSpan(local.span, offset)) continue;
         return {
           query: local.name,
@@ -232,8 +235,8 @@ function candidateDefinition(
               span: local.span,
               kind: frame.kind === 'repeat' ? 'repeat-var' : 'init-var',
               detail: local.collection
-                ? `Bien vong lap tren '${local.collection.root}' (day la cho khai bao)`
-                : `Bien cuc bo cua template (day la cho khai bao)`,
+                ? `Loop variable over '${local.collection.root}' (this is the declaration site)`
+                : `Local variable of the template (this is the declaration site)`,
               confidence: 'high',
             },
           ],
@@ -243,11 +246,11 @@ function candidateDefinition(
   }
 
   for (const cand of facts.attrCandidates) {
-    // Con tro tren TEN thuoc tinh -> nhay toi khai bao directive.
+    // Cursor on the ATTRIBUTE NAME -> jump to the directive's declaration.
     if (inSpan(cand.attrSpan, offset)) {
       const rows = deps.findSymbols(cand.attr, null);
       if (rows.length) return { query: cand.attr, targets: symbolTargets(rows, 'directive') };
-      return { targets: [], query: cand.attr, reason: `Khong tim thay directive '${cand.attr}'` };
+      return { targets: [], query: cand.attr, reason: `Directive '${cand.attr}' not found` };
     }
 
     if (!inSpan(cand.valueSpan, offset)) continue;
@@ -262,62 +265,63 @@ function candidateDefinition(
       return {
         targets: [],
         query: root.name,
-        reason: `'${root.name}' la bien cuc bo do directive dua vao`,
+        reason: `'${root.name}' is a local variable introduced by the directive`,
       };
     }
     if (!cand.container) {
-      return { targets: [], query: root.name, reason: 'Khong ro controller bao quanh' };
+      return { targets: [], query: root.name, reason: 'No enclosing controller found' };
     }
     const rows = deps.findSymbols(root.name, cand.container);
     if (rows.length) return { query: root.name, targets: symbolTargets(rows, 'scope-member') };
     return {
       targets: [],
       query: root.name,
-      reason: `Khong tim thay '${root.name}' tren scope cua '${cand.container}'`,
+      reason: `'${root.name}' not found on the scope of '${cand.container}'`,
     };
   }
 
-  // Con tro tren the custom: `<cityos-dha>` -> khai bao component
+  // Cursor on a custom element: `<cityos-dha>` -> the component's declaration
   for (const el of facts.customElements) {
     if (!inSpan(el.span, offset)) continue;
     const rows = deps.findSymbols(el.tag, null);
     if (rows.length) return { query: el.tag, targets: symbolTargets(rows, 'directive') };
   }
 
-  return { targets: [], query: '', reason: 'Vi tri khong nam trong bieu thuc Angular' };
+  return { targets: [], query: '', reason: 'This position is not inside an Angular expression' };
 }
 
 /**
- * Go-to-definition ben trong file .js.
+ * Go-to-definition inside a .js file.
  *
- * Thu tu uu tien:
- *   1. `$scope.foo` / `this.foo`  -> property tren scope cua controller bao quanh
- *   2. Ten duoc inject (DI)       -> khai bao Angular, roi moi toi tham so ham
- *   3. Khai bao Angular cung ten  -> .service/.factory/.controller/...
- *   4. Khai bao JavaScript thuan  -> var/let/const/function/tham so, theo pham vi
- *   5. Bien toan cuc              -> bao la dung san, KHONG phai loi
- *   6. Chuoi trong dau nhay       -> ten controller / event / view
+ * Priority order:
+ *   1. `$scope.foo` / `this.foo`  -> a property on the scope of the enclosing controller
+ *   2. An injected name (DI)      -> the Angular declaration, then the function parameter
+ *   3. An Angular declaration under the same name -> .service/.factory/.controller/...
+ *   4. A plain JavaScript declaration -> var/let/const/function/parameter, by scope
+ *   5. A global variable          -> reported as built-in, NOT an error
+ *   6. A string in quotes         -> a controller/event/view name
  */
 function jsDefinition(deps: FactSource, relPath: string, offset: number): DefinitionResult {
   const source = deps.source(relPath);
-  if (!source) return { targets: [], query: '', reason: 'Khong doc duoc file' };
+  if (!source) return { targets: [], query: '', reason: 'Could not read the file' };
 
   const word = wordAt(source, offset);
-  if (!word) return { targets: [], query: '', reason: 'Khong co dinh danh tai vi tri nay' };
+  if (!word) return { targets: [], query: '', reason: 'No identifier at this position' };
 
   const facts = deps.facts(relPath);
   const jsFacts = facts?.kind === 'js' ? facts : null;
 
-  // 1. `$scope.foo` / `this.foo` — property tren scope.
+  // 1. `$scope.foo` / `this.foo` — a property on scope.
   const owner = jsFacts && declarationAround(jsFacts, offset);
   if (owner && isMemberOfScopeObject(source, word.span.start)) {
     const rows = deps.findSymbols(word.text, owner);
     if (rows.length) return { query: word.text, targets: symbolTargets(rows, 'scope-member') };
   }
 
-  // Chi lay khai bao Angular THAT SU. `findSymbols` con tra ve ca 'js-global'
-  // va 'bridge' cung ten, va neu de lot thi mot `const aocs` toan cuc o file
-  // khac se chen len truoc `.factory("aocs")` — sai thu tu uu tien.
+  // Only accept REAL Angular declarations. `findSymbols` also returns 'js-global' and
+  // 'bridge' entries under the same name, and letting one slip through would put a
+  // global `const aocs` from another file ahead of `.factory("aocs")` — the wrong
+  // priority order.
   const angular = deps.findSymbols(word.text, null).filter((r) => ANGULAR_DECL_KINDS.has(r.kind));
   const binding = jsFacts ? resolveBinding(jsFacts.bindings, word.text, offset) : null;
 
@@ -333,8 +337,8 @@ function jsDefinition(deps: FactSource, relPath: string, offset: number): Defini
       ]
     : [];
 
-  // 2. Ten duoc inject: tham so ham la cau tra loi dung ve tu vung, nhung
-  //    cai nguoi dung muon xem la NOI DINH NGHIA service. Dat Angular len truoc.
+  // 2. An injected name: the function parameter is the lexically correct answer, but
+  //    what the user wants to see is WHERE THE SERVICE IS DEFINED. Put Angular first.
   const isInjected =
     binding?.kind === 'param' &&
     !!jsFacts?.declarations.some((d) => d.deps.some((dep) => dep.name === word.text));
@@ -346,7 +350,7 @@ function jsDefinition(deps: FactSource, relPath: string, offset: number): Defini
     };
   }
 
-  // 3./4. Khai bao JavaScript thuan.
+  // 3./4. A plain JavaScript declaration.
   if (binding) {
     return {
       query: word.text,
@@ -354,34 +358,34 @@ function jsDefinition(deps: FactSource, relPath: string, offset: number): Defini
     };
   }
 
-  // 5. Khai bao o pham vi file KHAC (global kieu <script> tag).
+  // 5. A declaration at file scope in ANOTHER file (a global via <script> tags).
   const globals = deps.findSymbols(word.text, null).filter((r) => r.kind === 'js-global' && r.path !== relPath);
   if (globals.length) {
     return { query: word.text, targets: symbolTargets(globals, 'js-global') };
   }
 
-  // 6. Bien toan cuc cua trinh duyet, hoac module Angular do nen tang cap
-  //    (`myApp`) — khong co khai bao trong repo, va khong phai loi.
+  // 6. A built-in browser global, or an Angular module alias provided by the platform
+  //    (`myApp`) — no declaration in the repo, and this is NOT an error.
   if (JS_GLOBALS.has(word.text) || deps.moduleAliases.includes(word.text)) {
     return {
       targets: [],
       query: word.text,
-      reason: `'${word.text}' la bien toan cuc dung san`,
+      reason: `'${word.text}' is a built-in global variable`,
       builtin: true,
     };
   }
 
-  // 7. Chuoi trong dau nhay: ten controller / ten event / ten view.
+  // 7. A string in quotes: a controller name / event name / view name.
   const quoted = quotedStringAt(source, offset);
   if (quoted) {
     const hits = deps.findSymbols(quoted.text, null);
     if (hits.length) return { query: quoted.text, targets: symbolTargets(hits, 'declaration') };
   }
 
-  return { targets: [], query: word.text, reason: `Khong tim thay khai bao cho '${word.text}'` };
+  return { targets: [], query: word.text, reason: `No declaration found for '${word.text}'` };
 }
 
-/** Khai bao Angular (controller/service/...) bao quanh mot offset. */
+/** The Angular declaration (controller/service/...) enclosing an offset. */
 function declarationAround(facts: JsFacts, offset: number): string | null {
   let best: { name: string; size: number } | null = null;
   for (const d of facts.declarations) {
@@ -397,15 +401,15 @@ function symbolTargets(rows: SymbolRow[], fallbackKind: string): DefinitionResul
     path: r.path,
     span: r.span,
     kind: r.kind || fallbackKind,
-    detail: r.container ? `${r.kind} '${r.name}' cua ${r.container}` : `${r.kind} '${r.name}'`,
+    detail: r.container ? `${r.kind} '${r.name}' of ${r.container}` : `${r.kind} '${r.name}'`,
     confidence: r.confidence,
   }));
 }
 
 /**
- * Con tro dang dat tren doan thu may cua chuoi `a.b.c`?
- * Tra ve 1 cho 'a', 2 cho 'b', 3 cho 'c'. Voi controllerAs (`vm.a.b`) doan
- * dau tien la alias nen khong tinh.
+ * Which segment of the chain `a.b.c` is the cursor sitting on?
+ * Returns 1 for 'a', 2 for 'b', 3 for 'c'. With controllerAs (`vm.a.b`) the first
+ * segment is the alias, so it doesn't count.
  */
 function depthAt(node: Expr, offset: number, usesAlias: boolean): number {
   const segs: Array<{ span: Span }> = [];
@@ -429,7 +433,7 @@ function depthAt(node: Expr, offset: number, usesAlias: boolean): number {
   return usesAlias ? Math.max(oneBased - 1, 1) : oneBased;
 }
 
-/** Dinh danh nay co phai property cua `$scope` / `this` khong? */
+/** Is this identifier a property of `$scope` / `this`? */
 function isMemberOfScopeObject(source: string, start: number): boolean {
   const before = source.slice(Math.max(0, start - 40), start);
   return /(?:\$scope|this|[A-Za-z_$][\w$]*)\s*\.\s*$/.test(before);

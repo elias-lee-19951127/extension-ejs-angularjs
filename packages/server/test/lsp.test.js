@@ -1,10 +1,11 @@
 /**
- * Kiem thu tang LSP qua stdio: khoi dong server THAT, noi chuyen JSON-RPC nhu IDE,
- * kiem capability, Range, WorkspaceEdit va ResponseError tra ve, va dong bo file doi
- * ngoai editor (workspace/didChangeWatchedFiles).
+ * LSP-layer test over stdio: starts a REAL server, speaks JSON-RPC like an IDE would,
+ * checks capabilities, Range, WorkspaceEdit and the ResponseErrors returned, and
+ * synchronizes files changed outside the editor (workspace/didChangeWatchedFiles).
  *
- * Logic da co test o packages/core. O day chi bat loi tang chuyen doi (offset ->
- * Range, gom edit theo URI, bao loi) — thu ma test core khong nhin thay.
+ * The logic already has tests in packages/core. Here we only catch bugs in the
+ * conversion layer (offset -> Range, grouping edits by URI, error reporting) — things
+ * the core tests can't see.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -18,13 +19,13 @@ const rpc = require('vscode-jsonrpc/node');
 const SERVER = join(__dirname, '..', 'dist', 'index.js');
 const FIXTURE = join(__dirname, '..', '..', '..', 'fixtures', 'mini');
 
-/** Duong dan that sau URI — so URI theo duong dan de khong vuong cach ma hoa ky tu. */
+/** The real path behind a URI — compares URIs by path so character-encoding differences don't trip us up. */
 const pathOf = (uri) => decodeURIComponent(new URL(uri).pathname);
 
-/** Vi tri LSP (dong/cot 0-based) cua `needle`, dich them `offset` ky tu. */
+/** LSP position (0-based line/character) of `needle`, shifted by `offset` characters. */
 function positionOf(text, needle, offset = 0) {
   const idx = text.indexOf(needle);
-  assert.notStrictEqual(idx, -1, `khong tim thay ${JSON.stringify(needle)}`);
+  assert.notStrictEqual(idx, -1, `${JSON.stringify(needle)} not found`);
   const before = text.slice(0, idx + offset);
   return { line: before.split('\n').length - 1, character: before.length - (before.lastIndexOf('\n') + 1) };
 }
@@ -42,11 +43,11 @@ function applyTextEdits(text, edits) {
     .reduce((acc, e) => acc.slice(0, e.start) + e.text + acc.slice(e.end), text);
 }
 
-/** Capability client mac dinh — nhu VSCode: co khai bao prepareRename. */
+/** Default client capabilities — like VSCode: declares prepareRename support. */
 const CLIENT_CAPS = { textDocument: { rename: { prepareSupport: true } } };
 
 async function startServer(t, capabilities = CLIENT_CAPS) {
-  // Ban sao tam: server ghi cache .ejsng-cache/ vao goc workspace.
+  // A temp copy: the server writes its .ejsng-cache/ into the workspace root.
   const root = mkdtempSync(join(tmpdir(), 'ejsng-lsp-'));
   cpSync(FIXTURE, root, { recursive: true });
 
@@ -66,9 +67,9 @@ async function startServer(t, capabilities = CLIENT_CAPS) {
   conn.onRequest(() => null);
   conn.listen();
   t.after(async () => {
-    // Tat dung trinh tu LSP (shutdown -> exit) de goi tin dang bay duoc ghi xong. Giet
-    // tien trinh ngay thi phan hoi cho client/registerCapability bi ghi vao stream da
-    // dong (ERR_STREAM_DESTROYED) khi test ket thuc som.
+    // Go through the LSP shutdown sequence (shutdown -> exit) so in-flight messages get
+    // written out. Killing the process immediately writes the client/registerCapability
+    // response into an already-closed stream (ERR_STREAM_DESTROYED) if the test ends early.
     const exited =
       child.exitCode !== null ? Promise.resolve() : new Promise((resolve) => child.once('exit', resolve));
     const fallback = setTimeout(() => child.kill(), 3000);
@@ -76,7 +77,7 @@ async function startServer(t, capabilities = CLIENT_CAPS) {
       await Promise.race([conn.sendRequest('shutdown'), exited]);
       conn.sendNotification('exit');
     } catch {
-      /* server da tat */
+      /* the server has already shut down */
     }
     await exited;
     clearTimeout(fallback);
@@ -92,11 +93,12 @@ async function startServer(t, capabilities = CLIENT_CAPS) {
     capabilities,
   });
   conn.sendNotification('initialized', {});
-  // Server xu ly tuan tu: initialized (dang ky watcher, index dong bo) -> request nay. Cho no de
-  // index ban dau xong TRUOC khi test sua file tren dia — neu khong, index co the doc luon ban moi.
+  // The server handles these sequentially: initialized (registers the watcher, indexes
+  // synchronously) -> this request. Wait for it so the initial indexing finishes BEFORE
+  // the test edits a file on disk — otherwise the index might pick up the new content right away.
   await conn.sendRequest('ejsng/stats');
 
-  // `text`: noi dung buffer — mac dinh bang dia; truyen vao khi buffer co thay doi chua luu.
+  // `text`: the buffer's content — defaults to disk; pass it in when the buffer has unsaved changes.
   const open = (rel, languageId, text = readFileSync(join(root, rel), 'utf8')) => {
     const uri = pathToFileURL(join(root, rel)).href;
     conn.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId, version: 1, text } });
@@ -105,7 +107,7 @@ async function startServer(t, capabilities = CLIENT_CAPS) {
   return { conn, root, init, open, shown, registrations };
 }
 
-test('LSP: prepareRename + rename tra ve WorkspaceEdit dung cho ca JS lan template', async (t) => {
+test('LSP: prepareRename + rename return a WorkspaceEdit correct for both JS and the template', async (t) => {
   const { conn, init, open, root } = await startServer(t);
   assert.deepStrictEqual(init.capabilities.renameProvider, { prepareProvider: true });
   const tpl = open('views/page.ejs', 'html');
@@ -133,7 +135,7 @@ test('LSP: prepareRename + rename tra ve WorkspaceEdit dung cho ca JS lan templa
   assert.ok(applyTextEdits(readFileSync(jsPath, 'utf8'), byPath[jsPath]).includes('s.grandTotal = 0;'));
 });
 
-test('LSP: rename bi tu choi thi tra ResponseError kem ly do de IDE hien ra', async (t) => {
+test('LSP: a refused rename returns a ResponseError with a reason for the IDE to show', async (t) => {
   const { conn, open } = await startServer(t);
   const tpl = open('views/page.ejs', 'html');
   await assert.rejects(
@@ -141,7 +143,7 @@ test('LSP: rename bi tu choi thi tra ResponseError kem ly do de IDE hien ra', as
       textDocument: { uri: tpl.uri },
       position: positionOf(tpl.text, 'row.label'),
     }),
-    (err) => /bien cuc bo/.test(err.message),
+    (err) => /local variable/.test(err.message),
   );
   await assert.rejects(
     conn.sendRequest('textDocument/rename', {
@@ -149,11 +151,11 @@ test('LSP: rename bi tu choi thi tra ResponseError kem ly do de IDE hien ra', as
       position: positionOf(tpl.text, 'total | money'),
       newName: 'busy',
     }),
-    (err) => /da co/.test(err.message),
+    (err) => /already exists/.test(err.message),
   );
 });
 
-test('LSP: completion sau `busy.` tra ve khoa theo shape, kieu Property', async (t) => {
+test('LSP: completion after `busy.` returns shape-based keys, kind Property', async (t) => {
   const { conn, open } = await startServer(t);
   const tpl = open('views/page.ejs', 'html');
   const cut = tpl.text.indexOf('<span>') + '<span>'.length;
@@ -173,20 +175,20 @@ test('LSP: completion sau `busy.` tra ve khoa theo shape, kieu Property', async 
   assert.ok(items.every((i) => i.kind === 10), 'CompletionItemKind.Property');
 });
 
-test('LSP: client khong khai bao prepareSupport thi chi quang ba renameProvider: true', async (t) => {
-  // LSP 3.17: RenameOptions chi duoc gui khi client khai bao textDocument.rename.prepareSupport.
+test('LSP: a client that doesn\'t declare prepareSupport only gets renameProvider: true', async (t) => {
+  // LSP 3.17: RenameOptions is only sent when the client declares textDocument.rename.prepareSupport.
   const { init } = await startServer(t, {});
   assert.strictEqual(init.capabilities.renameProvider, true);
 });
 
 // ------------------------------------------------ workspace/didChangeWatchedFiles
 
-/** FileChangeType cua LSP. */
+/** LSP's FileChangeType. */
 const CREATED = 1;
 const CHANGED = 2;
 const DELETED = 3;
 
-/** Gui workspace/didChangeWatchedFiles nhu client; moi su kien la [duong dan tuong doi, loai]. */
+/** Send workspace/didChangeWatchedFiles as a client would; each event is [relative path, type]. */
 function notifyWatched(conn, root, ...events) {
   conn.sendNotification('workspace/didChangeWatchedFiles', {
     changes: events.map(([rel, type]) => ({ uri: pathToFileURL(join(root, rel)).href, type })),
@@ -202,41 +204,41 @@ function definition(conn, doc, needle, offset = 0) {
 
 function insertAfter(text, anchor, extra) {
   const idx = text.indexOf(anchor);
-  assert.notStrictEqual(idx, -1, `khong tim thay ${JSON.stringify(anchor)}`);
+  assert.notStrictEqual(idx, -1, `${JSON.stringify(anchor)} not found`);
   return text.slice(0, idx + anchor.length) + extra + text.slice(idx + anchor.length);
 }
 
-/** Mo template voi buffer co them `{{ moi }}` — tren dia van la ban cu. */
-function openWithMoi(root, open) {
+/** Opens the template with a buffer that has an extra `{{ added }}` — on disk it's still the old copy. */
+function openWithAdded(root, open) {
   const disk = readFileSync(join(root, 'views', 'page.ejs'), 'utf8');
-  return open('views/page.ejs', 'html', insertAfter(disk, '<span>{{ total | money }}</span>', '<b>{{ moi }}</b>'));
+  return open('views/page.ejs', 'html', insertAfter(disk, '<span>{{ total | money }}</span>', '<b>{{ added }}</b>'));
 }
 
-/** Them `s.moi = 1;` vao controller TREN DIA (nhu git pull), tra ve noi dung moi. */
-function writeMoi(appJs) {
-  const js = insertAfter(readFileSync(appJs, 'utf8'), 's.total = 0;\n', '  s.moi = 1;\n');
+/** Adds `s.added = 1;` to the controller ON DISK (as a git pull would), returns the new content. */
+function writeAdded(appJs) {
+  const js = insertAfter(readFileSync(appJs, 'utf8'), 's.total = 0;\n', '  s.added = 1;\n');
   writeFileSync(appJs, js);
   return js;
 }
 
-test('LSP: .js doi tren dia + didChangeWatchedFiles -> definition tu template toi property moi', async (t) => {
+test('LSP: .js changed on disk + didChangeWatchedFiles -> definition from the template reaches the new property', async (t) => {
   const { conn, root, open } = await startServer(t);
-  const tpl = openWithMoi(root, open);
+  const tpl = openWithAdded(root, open);
   const appJs = join(root, 'js', 'app.js');
-  const js = writeMoi(appJs);
+  const js = writeAdded(appJs);
 
-  // Chua bao thi index van giu fact cu — dung trieu chung truoc khi sua.
-  assert.strictEqual(await definition(conn, tpl, '{{ moi }}', 3), null);
+  // Before it's reported, the index still holds the old facts — the symptom before the fix.
+  assert.strictEqual(await definition(conn, tpl, '{{ added }}', 3), null);
 
   notifyWatched(conn, root, ['js/app.js', CHANGED]);
-  const locs = await definition(conn, tpl, '{{ moi }}', 3);
+  const locs = await definition(conn, tpl, '{{ added }}', 3);
   assert.deepStrictEqual(
     (locs ?? []).map((l) => [pathOf(l.uri), l.range]),
-    [[appJs, { start: positionOf(js, 's.moi', 2), end: positionOf(js, 's.moi', 5) }]],
+    [[appJs, { start: positionOf(js, 's.added', 2), end: positionOf(js, 's.added', 7) }]],
   );
 });
 
-test('LSP: file bi xoa tren dia -> go khoi index', async (t) => {
+test('LSP: a file deleted on disk -> removed from the index', async (t) => {
   const { conn, root, open } = await startServer(t);
   const tpl = open('views/page.ejs', 'html');
   const hover = () =>
@@ -250,26 +252,27 @@ test('LSP: file bi xoa tren dia -> go khoi index', async (t) => {
   rmSync(join(root, 'js', 'app.js'));
   notifyWatched(conn, root, ['js/app.js', DELETED]);
 
-  // Hover doc thang symbol trong index (khong loc file mat nhu definition) — con fact cu la lo ngay.
-  assert.match((await hover()).contents.value, /Khong tim thay 'total'/);
+  // Hover reads the symbol straight from the index (unlike definition, it doesn't filter
+  // out a missing file) — so a stale fact shows up immediately.
+  assert.match((await hover()).contents.value, /'total' not found on the scope of/);
   const after = await conn.sendRequest('ejsng/stats');
   assert.deepStrictEqual([after.files, after.controllers], [before.files - 1, 0]);
 });
 
-test('LSP: ca thu muc duoc tao/xoa (LSP4IJ chi bao o cap thu muc) — index theo kip, exclude van ap', async (t) => {
+test('LSP: a whole directory created/deleted (LSP4IJ only reports at the directory level) — index keeps up, exclude still applies', async (t) => {
   const { conn, root, open } = await startServer(t);
-  const tpl = openWithMoi(root, open);
+  const tpl = openWithAdded(root, open);
   const before = await conn.sendRequest('ejsng/stats');
 
-  // Thu muc moi khai bao them `moi` cho CUNG controller; ban trong dist/ bi exclude.
-  const src = "myApp.controller('demo-view-controller', ['$scope', function (s) {\n  s.moi = 1;\n}]);\n";
+  // The new directory declares an extra `added` for the SAME controller; the copy under dist/ is excluded.
+  const src = "myApp.controller('demo-view-controller', ['$scope', function (s) {\n  s.added = 1;\n}]);\n";
   for (const dir of ['more', 'dist']) {
     mkdirSync(join(root, dir, 'sub'), { recursive: true });
     writeFileSync(join(root, dir, 'sub', 'more.js'), src);
   }
   notifyWatched(conn, root, ['more', CREATED], ['dist', CREATED]);
 
-  const locs = await definition(conn, tpl, '{{ moi }}', 3);
+  const locs = await definition(conn, tpl, '{{ added }}', 3);
   assert.deepStrictEqual((locs ?? []).map((l) => pathOf(l.uri)), [join(root, 'more', 'sub', 'more.js')]);
   assert.strictEqual((await conn.sendRequest('ejsng/stats')).files, before.files + 1);
 
@@ -278,56 +281,58 @@ test('LSP: ca thu muc duoc tao/xoa (LSP4IJ chi bao o cap thu muc) — index theo
   assert.strictEqual((await conn.sendRequest('ejsng/stats')).files, before.files);
 });
 
-test('LSP: file dang mo doi tren dia — buffer van thang cho chinh file do', async (t) => {
+test('LSP: an open file changes on disk — the buffer still wins for that file', async (t) => {
   const { conn, root, open } = await startServer(t);
-  const tpl = openWithMoi(root, open);
-  // Tren dia template doi khac han: them 3 dong dau file -> moi offset lech so voi buffer.
+  const tpl = openWithAdded(root, open);
+  // On disk the template changes completely differently: 3 lines added at the top of the
+  // file -> every offset is now shifted relative to the buffer.
   const tplPath = join(root, 'views', 'page.ejs');
   writeFileSync(tplPath, '<%# 1 %>\n<%# 2 %>\n<%# 3 %>\n' + readFileSync(tplPath, 'utf8'));
   const appJs = join(root, 'js', 'app.js');
-  const js = writeMoi(appJs);
+  const js = writeAdded(appJs);
   notifyWatched(conn, root, ['views/page.ejs', CHANGED], ['js/app.js', CHANGED]);
 
-  // Fact tren dia ma de len buffer thi offset cua `moi` trong buffer roi vao `total`.
-  const locs = await definition(conn, tpl, '{{ moi }}', 3);
+  // If the on-disk facts were laid over the buffer, the offset of `added` in the buffer
+  // would land on `total` instead.
+  const locs = await definition(conn, tpl, '{{ added }}', 3);
   assert.deepStrictEqual(
     (locs ?? []).map((l) => [pathOf(l.uri), l.range.start]),
-    [[appJs, positionOf(js, 's.moi', 2)]],
+    [[appJs, positionOf(js, 's.added', 2)]],
   );
 });
 
-test('LSP: chi dang ky watcher dong khi client khai bao dynamicRegistration', async (t) => {
+test('LSP: only registers a dynamic watcher when the client declares dynamicRegistration', async (t) => {
   const watchersOf = async (capabilities) => {
     const s = await startServer(t, capabilities);
     const regs = s.registrations.filter((r) => r.method === 'workspace/didChangeWatchedFiles');
     return { root: s.root, watchers: regs.map((r) => r.registerOptions.watchers) };
   };
 
-  // Nhu LSP4IJ 0.21: dynamicRegistration, KHONG co relativePatternSupport -> glob dang chuoi.
+  // Like LSP4IJ 0.21: dynamicRegistration, WITHOUT relativePatternSupport -> globs as plain strings.
   const ij = await watchersOf({ workspace: { didChangeWatchedFiles: { dynamicRegistration: true } } });
   assert.deepStrictEqual(ij.watchers, [
     [
       { globPattern: '**/*.js', kind: 2 },
       { globPattern: '**/*.ejs', kind: 2 },
       { globPattern: '**/*.html', kind: 2 },
-      { globPattern: '**/*', kind: 5 }, // Create | Delete — ke ca thu muc
+      { globPattern: '**/*', kind: 5 }, // Create | Delete — directories included
     ],
   ]);
 
-  // Nhu VSCode: co relativePatternSupport -> RelativePattern neo vao goc workspace.
+  // Like VSCode: has relativePatternSupport -> a RelativePattern anchored at the workspace root.
   const vs = await watchersOf({
     workspace: { didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: true } },
   });
   const last = vs.watchers[0].at(-1);
   assert.deepStrictEqual([pathOf(last.globPattern.baseUri), last.globPattern.pattern, last.kind], [vs.root, '**/*', 5]);
 
-  // Khong khai bao -> khong dang ky.
+  // Not declared -> nothing is registered.
   assert.deepStrictEqual((await watchersOf(CLIENT_CAPS)).watchers, []);
 });
 
-test('LSP: hover viet duong dan thanh link, va chi ra ban o thu muc xa hon', async (t) => {
+test('LSP: hover renders paths as links, and points to a copy in a farther directory', async (t) => {
   const { conn, root, open } = await startServer(t);
-  // Ban thu hai cua cung controller, dat canh template cua no -> ban nay moi la "gan nhat".
+  // A second copy of the same controller, sitting next to its own template -> this copy is now the "nearest" one.
   mkdirSync(join(root, 'far'), { recursive: true });
   writeFileSync(join(root, 'far', 'index.js'), readFileSync(join(root, 'js', 'app.js'), 'utf8'));
   writeFileSync(join(root, 'far', 'content.ejs'), readFileSync(join(root, 'views', 'page.ejs'), 'utf8'));
@@ -340,9 +345,9 @@ test('LSP: hover viet duong dan thanh link, va chi ra ban o thu muc xa hon', asy
   });
   const value = hover.contents.value;
 
-  // Dich (ban gan nhat) la link co so dong.
+  // The target (the nearest copy) is a link with a line number.
   assert.match(value, /\[far\/index\.js:\d+\]\(file:\/\/\S*far\/index\.js#L\d+\)/, value);
-  // Ban bi loai khoi go-to-definition van toi duoc tu day.
-  assert.match(value, /con 1 ban o thu muc xa hon/, value);
+  // The copy filtered out of go-to-definition can still be reached from here.
+  assert.match(value, /1 more match\(es\) in a farther directory/, value);
   assert.match(value, /\[js\/app\.js\]\(file:\/\/\S*js\/app\.js\)/, value);
 });

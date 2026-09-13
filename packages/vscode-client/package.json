@@ -1,7 +1,7 @@
 {
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
-  "description": "Track bien/ham giua template EJS va controller AngularJS 1.x",
+  "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
   "version": "0.1.0",
   "publisher": "local",
   "engines": {
@@ -49,7 +49,7 @@
             "**/*.ejs",
             "**/*.html"
           ],
-          "description": "Glob cac file duoc danh index."
+          "description": "Glob patterns for files to index."
         },
         "ejsng.exclude": {
           "type": "array",
@@ -59,7 +59,7 @@
             "**/dist/**",
             "**/*.min.js"
           ],
-          "description": "Glob loai tru."
+          "description": "Glob patterns to exclude."
         },
         "ejsng.moduleAliases": {
           "type": "array",
@@ -68,22 +68,22 @@
             "app",
             "appModule"
           ],
-          "description": "Ten bien duoc coi la angular module khi khong tim thay khai bao angular.module() trong cung file."
+          "description": "Variable names treated as an Angular module when no angular.module() declaration is found in the same file."
         },
         "ejsng.ejsDelimiter": {
           "type": "string",
           "default": "%",
-          "description": "Delimiter EJS. '%' nghia la <% %>."
+          "description": "EJS delimiter. '%' means <% %>."
         },
         "ejsng.customDirectives": {
           "type": "object",
           "default": {},
-          "description": "Directive tu viet -> kieu bieu thuc. Vi du {\"myOn\":\"statement\"}."
+          "description": "Custom directives -> expression kind. Example: {\"myOn\":\"statement\"}."
         },
         "ejsng.diagnostics.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Bat canh bao bien khong ton tai tren scope. Mac dinh TAT de tranh false positive tren code cu."
+          "description": "Enables warnings for variables that don't exist on scope. Defaults to OFF to avoid false positives on legacy code."
         }
       }
     }

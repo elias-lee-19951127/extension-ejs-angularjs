@@ -29,18 +29,19 @@ export interface Location {
 
 export interface DefinitionResult {
   targets: Array<Location & { kind: string; detail: string; confidence: string }>;
-  /** Ten symbol dang duoc hoi — dung cho thong bao khi khong tim thay. */
+  /** The name of the symbol being queried — used for messages when nothing is found. */
   query: string;
   reason?: string;
   /**
-   * true khi day la bien dung san cua AngularJS ($event, $index…).
-   * Khong co dinh nghia de nhay toi, nhung CUNG KHONG PHAI LOI — diagnostics
-   * phai bo qua, neu khong moi ng-click co $event deu bi gach do.
+   * true when this is a built-in AngularJS variable ($event, $index…).
+   * Has no definition to jump to, but this is NOT AN ERROR — diagnostics must ignore it,
+   * or every ng-click with $event would get flagged.
    */
   builtin?: boolean;
   /**
-   * File cung khai bao ten nay nhung o thu muc XA hon, da bi loai khoi `targets`
-   * (xem preferNearest). Giu lai de hover va CLI con chi ra duoc — khong giau ban nao.
+   * Files that also declare this name but in a FARTHER directory, already filtered out
+   * of `targets` (see preferNearest). Kept so hover and the CLI can still point to them
+   * — no copy is hidden.
    */
   otherFiles?: string[];
 }
@@ -48,14 +49,14 @@ export interface DefinitionResult {
 export type RenameEdit = Location & { newText: string };
 
 export interface RenameResult {
-  /** Ten cu. */
+  /** The old name. */
   query: string;
   edits: RenameEdit[];
-  /** File khai bao controller cung ten nhung co tinh KHONG sua. */
+  /** Files that declare the same-named controller but are intentionally NOT changed. */
   untouched: string[];
-  /** Thong bao cho nguoi dung khi controller bi khai bao o nhieu file. */
+  /** Note to the user when the controller is declared in multiple files. */
   note?: string;
-  /** Co khi khong doi ten duoc — khi do `edits` rong. */
+  /** Set when the rename couldn't be done — in that case `edits` is empty. */
   reason?: string;
 }
 
@@ -74,11 +75,11 @@ export interface IndexProgress {
 }
 
 export interface RefreshResult {
-  /** File doc lai tu dia vi noi dung doi (ke ca file moi khi phai quet lai). */
+  /** Files re-read from disk because their content changed (including new files that needed a rescan). */
   indexed: number;
-  /** File go khoi index: da xoa, hoac nam trong thu muc bi xoa. */
+  /** Files removed from the index: deleted, or under a deleted directory. */
   removed: number;
-  /** Co file/thu muc moi -> da chay index() de ap include/exclude dung nhu luc quet. */
+  /** Set when a new file/directory appeared -> ran index() to apply include/exclude exactly as at scan time. */
   rescanned: boolean;
   ms: number;
 }
@@ -86,7 +87,7 @@ export interface RefreshResult {
 export const TEMPLATE_EXT = /\.(ejs|html|htm)$/i;
 export const JS_EXT = /\.js$/i;
 
-/** Loai file theo duoi; null = khong index. */
+/** File kind by extension; null = not indexed. */
 function kindOf(path: string): 'js' | 'template' | null {
   return TEMPLATE_EXT.test(path) ? 'template' : JS_EXT.test(path) ? 'js' : null;
 }
@@ -94,17 +95,17 @@ function kindOf(path: string): 'js' | 'template' | null {
 export class Workspace implements FactSource, RenameSource {
   readonly config: Config;
   private store: IndexStore;
-  /** Noi dung dang mo trong editor, de len tren noi dung tren dia. */
+  /** Content currently open in the editor, layered on top of the on-disk content. */
   private overlays = new Map<string, string>();
   private overlayFacts = new Map<string, FileFacts>();
   private linker = new Linker();
 
-  /** FactSource.moduleAliases — dung cho definition resolution (packages/core/src/resolve/definition.ts). */
+  /** FactSource.moduleAliases — used by definition resolution (packages/core/src/resolve/definition.ts). */
   get moduleAliases(): string[] {
     return this.config.moduleAliases;
   }
 
-  /** FactSource.findSymbols — dung cho definition/shape resolution ben ngoai class. */
+  /** FactSource.findSymbols — used by definition/shape resolution outside the class. */
   findSymbols(name: string, container: string | null): SymbolRow[] {
     return this.store.findSymbols(name, container);
   }
@@ -121,11 +122,11 @@ export class Workspace implements FactSource, RenameSource {
   // ---------------------------------------------------------------- indexing
 
   /**
-   * Danh index toan workspace.
+   * Index the whole workspace.
    *
-   * File chi duoc parse lai khi mtime HOAC hash HOAC parser_version lech.
-   * So sanh hash chu khong chi mtime: `git checkout` doi mtime cua ca nghin file
-   * ma noi dung phan lon khong doi.
+   * A file is only re-parsed when its mtime OR hash OR parser_version differs. Compared
+   * by hash, not just mtime: `git checkout` changes the mtime of thousands of files whose
+   * content mostly hasn't changed.
    */
   index(onProgress?: (p: IndexProgress) => void): {
     indexed: number;
@@ -141,7 +142,7 @@ export class Workspace implements FactSource, RenameSource {
       absolute: false,
       onlyFiles: true,
       dot: false,
-      // Mot thu muc khong doc duoc khong duoc phep lam hong CA lan index (xem hasCandidates).
+      // An unreadable directory must not be allowed to break the WHOLE indexing run (see hasCandidates).
       suppressErrors: true,
     });
 
@@ -188,8 +189,8 @@ export class Workspace implements FactSource, RenameSource {
       batch.push({ path: rel, kind, mtimeMs: st.mtimeMs, size: st.size, hash, facts });
       indexed++;
 
-      // Ghi theo lo 500: moi lan ghi keo theo mot lan dung lai bang tra nguoc,
-      // nen gom lo re hon nhieu so voi ghi tung file.
+      // Written in batches of 500: each write triggers rebuilding the reverse lookup
+      // table, so batching is far cheaper than writing file by file.
       if (batch.length >= 500) {
         this.store.upsertBatch(batch.splice(0));
       }
@@ -207,11 +208,11 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
-   * Layer 4 — noi lai cac tham chieu can thong tin lien file.
+   * Layer 4 — join references that need cross-file information.
    *
-   * Re hon parse rat nhieu: chi doc lai fact da co san, khong dung toi parser.
-   * Vi vay sua mot controller chi ton mot lan chay ham nay, khong phai
-   * parse lai template nao.
+   * Much cheaper than parsing: only reads facts already computed, never touches the
+   * parser. So fixing one controller costs only one run of this function, never a
+   * re-parse of any template.
    */
   link(): number {
     const all = this.store.allFacts();
@@ -222,7 +223,7 @@ export class Workspace implements FactSource, RenameSource {
     for (const { path, facts } of all) {
       if (facts.kind !== 'template') continue;
       const refs = this.linker.resolveCandidates(facts.attrCandidates);
-      // The custom trung ten mot directive da biet -> tham chieu that.
+      // A custom element matching a known directive's name -> a real reference.
       for (const el of facts.customElements) {
         if (this.linker.resolveElement(el.tag)) {
           refs.push({ name: el.tag, container: null, axis: 'ng-directive', span: el.span });
@@ -238,18 +239,20 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
-   * Cap nhat index cho cac duong dan client bao la doi tren dia (workspace/didChangeWatchedFiles):
-   * git pull, checkout, tool khac.
+   * Update the index for paths the client reports as changed on disk (workspace/didChangeWatchedFiles):
+   * git pull, checkout, another tool.
    *
-   * Index la lop "dia" va KHONG dung toi overlay: buffer dang mo van la nguon cho chinh file do
-   * (`facts()`/`source()` doc overlay truoc). Nhung index phai theo dia de tra loi dung cho file
-   * KHAC — VSCode tu nap lai buffer chua sua khi file doi tren dia, va template dang mo phai thay
-   * ngay property moi cua controller.
+   * The index is the "disk" layer and does NOT use the overlay: an open buffer is still
+   * the source of truth for its own file (`facts()`/`source()` read the overlay first).
+   * But the index must follow disk to answer correctly for OTHER files — VSCode
+   * auto-reloads an unmodified buffer when the file changes on disk, and an open template
+   * must immediately see the controller's new property.
    *
-   * Khong dua vao loai su kien (Created/Changed/Deleted) ma doc trang thai that tren dia: su kien
-   * co the bi gop, lap, hoac den sai thu tu. So theo HASH chu khong theo mtime nhu index(): file da
-   * duoc bao la doi thi dang doc, con mtime co the giu nguyen (rsync -t, tar, cp -p; HFS+ chi phan
-   * giai 1 giay).
+   * Doesn't rely on the event kind (Created/Changed/Deleted), reads the actual state on
+   * disk instead: events can be coalesced, duplicated, or arrive out of order. Compared
+   * by HASH rather than mtime like index() does: a file reported as changed is read
+   * regardless, while mtime can stay the same (rsync -t, tar, cp -p; HFS+ only resolves
+   * to 1 second).
    */
   refreshFiles(relPaths: string[]): RefreshResult {
     const t0 = Date.now();
@@ -260,28 +263,30 @@ export class Workspace implements FactSource, RenameSource {
     let rescan = false;
 
     for (const rel of new Set(relPaths)) {
-      if (!rel || /^\.\.(?:[\\/]|$)/.test(rel) || isAbsolute(rel)) continue; // ngoai workspace
+      if (!rel || /^\.\.(?:[\\/]|$)/.test(rel) || isAbsolute(rel)) continue; // outside the workspace
       const abs = join(this.config.root, rel);
       let st: Stats | null = null;
       try {
         st = statSync(abs);
       } catch (err) {
-        // CHI ENOENT/ENOTDIR moi nghia la "da xoa". Loi khac (EACCES, EIO, volume roi ra) nghia la
-        // KHONG BIET — bo qua path, tuyet doi khong go mot file dang ton tai khoi index.
+        // ONLY ENOENT/ENOTDIR mean "deleted". Any other error (EACCES, EIO, the volume
+        // dropping out) means we DON'T KNOW — skip the path, and never remove a file that
+        // still exists from the index.
         const code = (err as NodeJS.ErrnoException).code;
         if (code !== 'ENOENT' && code !== 'ENOTDIR') continue;
       }
 
       if (!st?.isFile()) {
         if (st?.isDirectory()) {
-          // Thu muc con day thi file cua no cung con — khong go gi. Chi index() moi biet file moi
-          // nao ben trong thuoc include.
+          // The directory still exists, so its files still exist too — nothing to
+          // remove. Only index() knows which new files inside it belong to include.
           if (this.hasCandidates(rel, true)) rescan = true;
         } else if (stamps.has(rel)) {
           removed.add(rel);
         } else if (kindOf(rel) === null) {
-          // Khong con tren dia va khong mang duoi file duoc index -> co the la CA THU MUC bi xoa,
-          // vi client chi bao MOT su kien cho chinh thu muc. Gom lai, quet mot lan sau vong lap.
+          // No longer on disk and doesn't carry an indexed extension -> may be a WHOLE
+          // DIRECTORY that was deleted, since the client reports only ONE event for the
+          // directory itself. Collect it, scan once after the loop.
           deletedDirs.push(rel);
         }
         continue;
@@ -291,7 +296,8 @@ export class Workspace implements FactSource, RenameSource {
       if (!kind) continue;
       const prev = stamps.get(rel);
       if (!prev) {
-        // File moi: include/exclude chi index() quyet dung duoc — cung bo glob voi luc quet.
+        // A new file: only index() can decide correctly under include/exclude — using
+        // the same glob as at scan time.
         if (this.hasCandidates(rel, false)) rescan = true;
         continue;
       }
@@ -314,8 +320,9 @@ export class Workspace implements FactSource, RenameSource {
       });
     }
 
-    // Mot lan duyet `stamps` cho MOI thu muc bi xoa, thay vi quet lai theo tung path: `rm -rf` hay
-    // doi nhanh gui hang nghin su kien, ma moi lan quet la O(so file da index).
+    // One pass over `stamps` for ALL deleted directories combined, instead of scanning
+    // per path: `rm -rf` or a fast checkout sends thousands of events, and each scan is
+    // O(number of indexed files).
     if (deletedDirs.length) {
       const dirs = new Set(deletedDirs);
       for (const p of stamps.keys()) {
@@ -340,15 +347,15 @@ export class Workspace implements FactSource, RenameSource {
         ms: Date.now() - t0,
       };
     }
-    // Sua mot controller khong can parse lai template nao — chi noi lai (Layer 4).
+    // Fixing one controller doesn't require re-parsing any template — only re-linking (Layer 4).
     if (upserts.length || removed.size) this.link();
     return { indexed: upserts.length, removed: removed.size, rescanned: false, ms: Date.now() - t0 };
   }
 
   /**
-   * Duong dan moi co file nao CO THE vao index khong: dung duoi, khong bi `exclude`. Exclude ap
-   * bang chinh fast-glob (khong tu viet lai luat glob), voi thu muc chi duyet cay con cua no.
-   * Include de index() quyet.
+   * Could ANY file at this path end up in the index: right extension, not excluded.
+   * Exclusion is applied by fast-glob itself (we don't reimplement glob rules), and for
+   * a directory only its own subtree is walked. Inclusion is left for index() to decide.
    */
   private hasCandidates(relPath: string, isDir: boolean): boolean {
     const pattern = fg.escapePath(relPath) + (isDir ? '/**' : '');
@@ -358,8 +365,9 @@ export class Workspace implements FactSource, RenameSource {
         ignore: this.config.exclude,
         onlyFiles: true,
         dot: false,
-        // Mac dinh cua fast-glob la NEM loi (EACCES…). Mot thu muc khong doc duoc ma lam hong ca
-        // lo cap nhat thi te hon nhieu so voi viec coi nhu no khong co ung vien nao.
+        // fast-glob's default is to THROW on errors (EACCES…). An unreadable directory
+        // breaking the whole update batch is far worse than treating it as having no
+        // candidates.
         suppressErrors: true,
       })
       .some((p) => kindOf(p) !== null);
@@ -369,7 +377,7 @@ export class Workspace implements FactSource, RenameSource {
     return kind === 'js' ? extractJs(source, this.config) : extractTemplate(source, this.config);
   }
 
-  /** Cap nhat mot file tu buffer trong editor, khong cham dia. */
+  /** Update a file from the editor's buffer, without touching disk. */
   setOverlay(relPath: string, source: string): void {
     this.overlays.set(relPath, source);
     const kind = TEMPLATE_EXT.test(relPath) ? 'template' : 'js';
@@ -383,7 +391,7 @@ export class Workspace implements FactSource, RenameSource {
     this.overlayFacts.delete(relPath);
   }
 
-  /** Ghi overlay xuong index (goi khi save). */
+  /** Write the overlay down to the index (called on save). */
   flushOverlay(relPath: string): void {
     const source = this.overlays.get(relPath);
     const facts = this.overlayFacts.get(relPath);
@@ -396,7 +404,7 @@ export class Workspace implements FactSource, RenameSource {
       mtimeMs = st.mtimeMs;
       size = st.size;
     } catch {
-      /* file moi chua ton tai tren dia */
+      /* a new file that doesn't exist on disk yet */
     }
     this.store.upsertBatch([
       {
@@ -429,12 +437,13 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
-   * Glob can theo doi de biet FILE NAO doi noi dung (dang duoc index).
+   * The globs to watch to know WHICH FILES have changed content (are being indexed).
    *
-   * Bo cac mau phu dinh `!…` cua `config.include` — chung loai tru khoi tap hop can index
-   * (xem `index()`, dung chung voi `fast-glob`), khong phai mau can dang ky watcher rieng.
-   * Chi Workspace moi biet ngu nghia `include`/`exclude`; server (LSP) chi goi ham nay,
-   * khong tu doc `config.include` roi doan.
+   * Drops the negation patterns `!…` from `config.include` — they exclude paths from
+   * the set to index (see `index()`, shared with `fast-glob`), they aren't a separate
+   * pattern to register a watcher for. Only Workspace knows the semantics of
+   * `include`/`exclude`; the server (LSP) just calls this function instead of reading
+   * `config.include` and guessing.
    */
   changeWatchPatterns(): string[] {
     return this.config.include.filter((p) => !p.startsWith('!'));
@@ -445,8 +454,8 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
-   * Vi tri cua moi dinh danh o vi tri tham chieu trong mot file .js.
-   * Dung cho lenh `sweep` de do do phu.
+   * The position of every identifier at a reference site in a .js file.
+   * Used by the `sweep` command to measure coverage.
    */
   jsReferenceOffsets(relPath: string): number[] {
     const source = this.source(relPath);
@@ -455,7 +464,7 @@ export class Workspace implements FactSource, RenameSource {
     return ast ? collectReferenceOffsets(ast) : [];
   }
 
-  /** Duong dan tuong doi cua moi file .js da index. */
+  /** Relative path of every indexed .js file. */
   jsPaths(): string[] {
     return this.store
       .allFacts()
@@ -463,7 +472,7 @@ export class Workspace implements FactSource, RenameSource {
       .map((f) => f.path);
   }
 
-  /** Duong dan tuong doi cua moi template da index. */
+  /** Relative path of every indexed template. */
   templatePaths(): string[] {
     return this.store
       .allFacts()
@@ -473,13 +482,13 @@ export class Workspace implements FactSource, RenameSource {
 
   // -------------------------------------------------------------- queries
 
-  /** Go-to-definition. Thuat toan chinh: packages/core/src/resolve/definition.ts. */
+  /** Go-to-definition. Main algorithm: packages/core/src/resolve/definition.ts. */
   definitionAt(relPath: string, offset: number): DefinitionResult {
     return preferNearest(relPath, resolveDefinition(this, relPath, offset));
   }
 
   /**
-   * Find-all-references. Tra ve moi noi dung symbol, ca trong template lan trong JS.
+   * Find-all-references. Returns every place a symbol is used, both in templates and in JS.
    */
   referencesAt(relPath: string, offset: number): { query: string; locations: Array<Location & { axis: string }> } {
     const facts = this.facts(relPath);
@@ -492,7 +501,7 @@ export class Workspace implements FactSource, RenameSource {
       const source = this.source(relPath);
       if (!source) return { query: '', locations: [] };
 
-      // Con tro tren `$scope.foo` / `this.foo` -> tim ref theo (foo, controller chua no)
+      // Cursor on `$scope.foo` / `this.foo` -> find refs by (foo, its enclosing controller)
       const member = facts.scopeMembers.find((m) => inSpan(m.span, offset));
       if (member) {
         name = member.name;
@@ -537,45 +546,35 @@ export class Workspace implements FactSource, RenameSource {
 
   // ---------------------------------------------------------------- rename
 
-  /**
-   * Doi ten mot property tren $scope, dong bo ra moi template dung no.
-   *
-   * Edit tinh tren noi dung HIEN TAI cua file (buffer dang mo, roi toi dia) va
-   * trich fact lai ngay luc do, khong dung fact trong index: index co the cu hon
-   * file, ma mot span lech mot ky tu la sua hong code nguoi dung.
-   *
-   * Gap BAT KY xung dot nao thi tu choi ca lan doi ten, khong sua mot phan: doi
-   * ten do dang con te hon khong doi.
-   */
-  /** Doi ten mot property tren $scope, dong bo qua ca JS lan template. Thuat toan chinh: packages/core/src/resolve/rename-orchestrator.ts. */
+  /** Rename a property on $scope, synchronized across both JS and templates. Main algorithm: packages/core/src/resolve/rename-orchestrator.ts. */
   renameAt(relPath: string, offset: number, newName: string): RenameResult {
     return doRenameAt(this, relPath, offset, newName);
   }
 
   /**
-   * Buoc hoi truoc cua rename (LSP textDocument/prepareRename): con tro co nam tren
-   * thu doi ten duoc khong, va ten hien tai de IDE dien san vao o nhap.
+   * The pre-check step of rename (LSP textDocument/prepareRename): is the cursor on
+   * something renameable, and what's its current name so the IDE can pre-fill the input.
    */
   prepareRenameAt(relPath: string, offset: number): PrepareRenameResult {
     return doPrepareRenameAt(this, relPath, offset);
   }
 
-  /** RenameSource.openTemplatePaths — template dang mo (overlay) nhung chua co trong index. */
+  /** RenameSource.openTemplatePaths — templates open (overlay) but not yet in the index. */
   openTemplatePaths(): string[] {
     return [...this.overlays.keys()].filter((p) => TEMPLATE_EXT.test(p));
   }
 
-  /** RenameSource.resolveScopeRefs — boc Linker, khong lo Linker ra ngoai Workspace. */
+  /** RenameSource.resolveScopeRefs — wraps the Linker, keeping it from leaking out of Workspace. */
   resolveScopeRefs(candidates: AttrCandidate[]): RefInput[] {
     return this.linker.resolveCandidates(candidates);
   }
 
-  /** Symbol khong ai dung — ung vien dead code. */
+  /** Symbols nobody uses — dead-code candidates. */
   unused(): SymbolRow[] {
     return this.store.unusedSymbols(['controller', 'filter', 'directive', 'service', 'factory', 'scope-member']);
   }
 
-  /** Chuoi scope tai mot vi tri — dung cho hover va completion. */
+  /** The scope chain at a position — used by hover and completion. */
   scopeChainAt(relPath: string, offset: number): ScopeFrame[] | null {
     const facts = this.facts(relPath);
     if (!facts || facts.kind !== 'template') return null;
@@ -585,19 +584,20 @@ export class Workspace implements FactSource, RenameSource {
     return null;
   }
 
-  /** Goi y tai mot vi tri trong template. */
+  /** Suggestions at a position in a template. */
   completionAt(relPath: string, offset: number): CompletionEntry[] {
     const facts = this.facts(relPath);
     const source = this.source(relPath);
     if (!facts || facts.kind !== 'template' || source === null) return [];
 
-    // Bieu thuc dang go do (`{{ busy. }}`) khong parse duoc nen extractor bo han no.
-    // Chen mot dinh danh gia vao dung con tro roi trich lai: bieu thuc thanh hop le, va
-    // node chua dinh danh do cho biet nguoi dung dang go sau chuoi property nao.
+    // An expression still being typed (`{{ busy. }}`) can't be parsed, so the extractor
+    // drops it entirely. Insert a dummy identifier right at the cursor and re-extract:
+    // the expression becomes valid, and the node containing the dummy tells us which
+    // property chain the user is typing after.
     const patched = source.slice(0, offset) + COMPLETION_DUMMY + source.slice(offset);
     const hit = expressionAt(extractTemplate(patched, this.config), offset);
     if (hit) {
-      if (hit.node.type === 'Literal') return []; // dang go trong chuoi
+      if (hit.node.type === 'Literal') return []; // typing inside a string
       const { root, path } = unwind(hit.node);
       if (root && path.at(-1)?.includes(COMPLETION_DUMMY)) {
         return this.memberCompletions(relPath, root.name, path.slice(0, -1), hit.expr.scopeChain);
@@ -605,14 +605,15 @@ export class Workspace implements FactSource, RenameSource {
       return this.rootCompletions(relPath, hit.expr.scopeChain);
     }
 
-    // Chen xong van khong parse duoc (`{{ a | }}`): lay chuoi scope cua bieu thuc goc.
+    // Still unparseable after inserting the dummy (`{{ a | }}`): use the scope chain of
+    // the original expression.
     for (const expr of facts.expressions) {
       if (offset >= expr.span.start && offset <= expr.span.end + 1) {
         return this.rootCompletions(relPath, expr.scopeChain);
       }
     }
 
-    // Chua co bieu thuc nao (vua go '{{', chua dong): dung controller gan nhat.
+    // No expression yet (just typed '{{', not closed): use the nearest controller.
     const enclosing = facts.controllers
       .filter((c) => inSpan(c.elementSpan, offset))
       .sort((a, b) => b.elementSpan.start - a.elementSpan.start)[0];
@@ -628,18 +629,18 @@ export class Workspace implements FactSource, RenameSource {
     ]);
   }
 
-  /** Goi y o vi tri dinh danh goc: bien cuc bo cua template + property tren scope. */
+  /** Suggestions at a root-identifier position: local variables of the template + properties on scope. */
   private rootCompletions(from: string, chain: ScopeFrame[]): CompletionEntry[] {
     const out: CompletionEntry[] = [];
     for (const frame of chain) {
       for (const local of frame.locals) {
-        out.push({ name: local.name, kind: 'variable', detail: `bien ${frame.kind} cua template` });
+        out.push({ name: local.name, kind: 'variable', detail: `${frame.kind} variable of the template` });
       }
     }
     const container = controllerOf(chain);
     if (container) {
       for (const row of this.membersOf(container, from)) {
-        out.push({ name: row.name, kind: 'property', detail: `tren $scope cua ${container}` });
+        out.push({ name: row.name, kind: 'property', detail: `on the $scope of ${container}` });
       }
     }
     const seen = new Set<string>();
@@ -647,9 +648,9 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
-   * Goi y sau dau cham, di theo shape suy tu object literal:
-   *   `busy.`    -> khoa cua $scope.busy
-   *   `section.` -> khoa cua PHAN TU trong $scope.sections (bien ng-repeat)
+   * Suggestions after a dot, following the shape inferred from an object literal:
+   *   `busy.`    -> keys of $scope.busy
+   *   `section.` -> keys of an ELEMENT in $scope.sections (an ng-repeat variable)
    */
   private memberCompletions(
     from: string,
@@ -675,13 +676,13 @@ export class Workspace implements FactSource, RenameSource {
       shape = shapeAtPath(shape, path);
       if (shape?.kind !== 'object' || !shape.props) continue;
       for (const [name, prop] of Object.entries(shape.props)) {
-        out.set(name, { name, kind: 'property', detail: `khoa cua ${owner} (${prop.kind})` });
+        out.set(name, { name, kind: 'property', detail: `key of ${owner} (${prop.kind})` });
       }
     }
     return [...out.values()];
   }
 
-  /** Property tren $scope cua mot controller. `from`: chi lay ban gan file do nhat (phu luc K). */
+  /** Properties on the $scope of a controller. `from`: keep only the copy nearest that file (Appendix K). */
   membersOf(controllerName: string, from?: string): SymbolRow[] {
     const rows = this.store
       .findSymbolsByKind('scope-member')
@@ -690,10 +691,10 @@ export class Workspace implements FactSource, RenameSource {
   }
 }
 
-/** Dinh danh gia chen vao con tro de bieu thuc dang go do parse duoc (xem completionAt). */
+/** Placeholder identifier inserted at the cursor so an in-progress expression can be parsed (see completionAt). */
 const COMPLETION_DUMMY = '__ejsngCursor__';
 
-/** Tim bieu thuc chua offset, va node nho nhat trong bieu thuc do. */
+/** Find the expression containing an offset, and the smallest node within it. */
 export function expressionAt(
   facts: TemplateFacts,
   offset: number,
@@ -708,7 +709,7 @@ export function expressionAt(
   return null;
 }
 
-/** Cac `kind` la khai bao Angular that su (khong ke js-global, bridge, event…). */
+/** `kind`s that are REAL Angular declarations (excludes js-global, bridge, event…). */
 export const ANGULAR_DECL_KINDS = new Set([
   'controller', 'service', 'factory', 'provider',
   'directive', 'filter', 'component', 'value', 'constant',

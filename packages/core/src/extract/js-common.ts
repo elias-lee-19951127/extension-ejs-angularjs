@@ -3,16 +3,18 @@ import * as acornLoose from 'acorn-loose';
 import type { Node, Program } from 'acorn';
 
 /**
- * Parse JavaScript, uu tien parser nghiem ngat roi moi rot ve parser khoan dung.
+ * Parse JavaScript, preferring the strict parser first and only falling back to
+ * the tolerant one.
  *
- * `ecmaVersion` de 2020 chu khong phai 5: codebase ES5 van hay lan vai file da
- * hien dai hoa, va parse duoc ca hai thi tot hon la vo mot nua.
- * Parser khoan dung (`acorn-loose`) can thiet cho file dang go do trong editor.
+ * `ecmaVersion` is set to 2020 rather than 5: an ES5 codebase still often mixes in
+ * a few modernized files, and being able to parse both is better than breaking on
+ * one of them. The tolerant parser (`acorn-loose`) is needed for files still being
+ * typed in the editor.
  */
 export function parseJsTolerant(code: string): Program | null {
-  // Codebase cu lan ca file ES module: `dha.const.js` dung `export const`.
-  // Parse bang sourceType 'script' se hong ngay o tu khoa `export`, roi roi
-  // xuong parser khoan dung va cho ra binding rat kem.
+  // The legacy codebase mixes in ES module files: `dha.const.js` uses `export const`.
+  // Parsing with sourceType 'script' would fail immediately on the `export` keyword,
+  // falling through to the tolerant parser and yielding very poor bindings.
   const looksLikeModule = /^\s*(?:import|export)\s/m.test(code);
 
   try {
@@ -33,7 +35,7 @@ export function parseJsTolerant(code: string): Program | null {
         locations: false,
       });
     } catch {
-      /* thu tiep bang parser khoan dung */
+      /* fall through to the tolerant parser */
     }
     try {
       return acornLoose.parse(code, { ecmaVersion: 2020, allowHashBang: true });
@@ -43,7 +45,7 @@ export function parseJsTolerant(code: string): Program | null {
   }
 }
 
-/** Bien co san trong ngu canh EJS/browser, khong phai locals do server bom vao. */
+/** Variables available in the EJS/browser context, not locals injected by the server. */
 export const EJS_GLOBALS = new Set([
   'locals', 'escapeFn', 'include', 'rethrow', '__out', '__append',
   'JSON', 'Math', 'Date', 'Object', 'Array', 'String', 'Number', 'Boolean',
@@ -51,7 +53,7 @@ export const EJS_GLOBALS = new Set([
   'parseInt', 'parseFloat', 'isNaN', 'encodeURIComponent', 'decodeURIComponent',
 ]);
 
-/** Lay ten chuoi tu mot node Literal, null neu khong phai chuoi. */
+/** Get the string value from a Literal node, or null if it's not a string. */
 export function stringOf(node: Node | null | undefined): string | null {
   if (!node) return null;
   if (node.type === 'Literal') {
@@ -61,7 +63,7 @@ export function stringOf(node: Node | null | undefined): string | null {
   return null;
 }
 
-/** Ten property cua mot node Property (khong computed). */
+/** The property name of a Property node (non-computed). */
 export function propName(prop: acorn.Property): string | null {
   if (prop.key.type === 'Identifier') return prop.key.name;
   if (prop.key.type === 'Literal' && typeof prop.key.value === 'string') return prop.key.value;

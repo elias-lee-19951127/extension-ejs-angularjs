@@ -4,9 +4,9 @@
     <vendor>local</vendor>
 
     <description><![CDATA[
-      Track bien va ham giua template EJS va controller AngularJS 1.x.
-      Go-to-definition tu {{ bieu thuc }} sang $scope, find-usages nguoc lai tu
-      controller ra template, va phat hien controller/directive/filter khong ai dung.
+      Tracks variables and functions between EJS templates and AngularJS 1.x controllers.
+      Go-to-definition from {{ expressions }} to $scope, find-usages back from a
+      controller out to its templates, and detection of unused controllers/directives/filters.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -20,15 +20,15 @@
         <server id="ejsng"
                 name="EJS + AngularJS"
                 factoryClass="com.ejsng.intellij.EjsNgLanguageServerFactory">
-            <description><![CDATA[Language server cho EJS + AngularJS 1.x]]></description>
+            <description><![CDATA[Language server for EJS + AngularJS 1.x]]></description>
         </server>
         <!--
-          CHU Y: KHONG dung <languageMapping language="JavaScript"/>.
+          NOTE: do NOT use <languageMapping language="JavaScript"/>.
 
-          Language ID "JavaScript" chi ton tai khi plugin JavaScript co mat, ma
-          plugin do khong co o moi ban IDE (IDEA Community truoc 2026.1,
-          Android Studio). Khi thieu, mapping im lang khong lam gi va plugin
-          trong nhu bi hong. Khop theo TEN FILE thi chay o moi ban.
+          The "JavaScript" language ID only exists when the JavaScript plugin is present,
+          and that plugin isn't bundled with every IDE variant (IDEA Community before
+          2026.1, Android Studio). When it's missing, the mapping silently does nothing
+          and the plugin looks broken. Matching by FILE NAME instead works on every variant.
         -->
         <fileNamePatternMapping patterns="*.js"  serverId="ejsng" languageId="javascript"/>
         <fileNamePatternMapping patterns="*.ejs" serverId="ejsng" languageId="html"/>

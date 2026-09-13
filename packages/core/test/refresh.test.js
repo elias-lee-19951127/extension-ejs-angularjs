@@ -1,10 +1,10 @@
 /**
- * Workspace.refreshFiles — cap nhat index khi file doi ngoai editor (workspace/didChangeWatchedFiles).
+ * Workspace.refreshFiles — updates the index when a file changes outside the editor (workspace/didChangeWatchedFiles).
  *
- * Duong di qua LSP da co test o packages/server/test/lsp.test.js. O day kiem nhung quyet dinh
- * khong nhin thay duoc tu LSP: so theo hash chu khong theo mtime, file moi bi exclude khong keo
- * theo mot lan quet lai toan workspace, va loi he thong tap tin (EACCES) khong duoc hieu nham
- * thanh "file da bi xoa".
+ * The LSP path already has tests in packages/server/test/lsp.test.js. Here we check
+ * decisions invisible from the LSP layer: comparing by hash rather than mtime, a new
+ * excluded file not triggering a full workspace rescan, and a filesystem error (EACCES)
+ * not being mistaken for "the file was deleted".
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -33,26 +33,26 @@ function tempWorkspace(t) {
 
 const members = (ws) => ws.membersOf('demo-view-controller').map((m) => m.name);
 
-test('refreshFiles: so noi dung, khong so mtime — mtime giu nguyen van thay thay doi', (t) => {
+test('refreshFiles: compares by content, not mtime — mtime stays the same but content changes', (t) => {
   const { root, ws } = tempWorkspace(t);
   const appJs = join(root, 'js', 'app.js');
-  // Giay nguyen de dat lai CHINH XAC mtime cu, nhu rsync -t / tar / cp -p.
+  // Restore the EXACT old mtime afterward, as rsync -t / tar / cp -p would.
   const mtime = 1_700_000_000;
   utimesSync(appJs, mtime, mtime);
   ws.index();
-  assert.ok(!members(ws).includes('moi'));
+  assert.ok(!members(ws).includes('added'));
 
-  writeFileSync(appJs, readFileSync(appJs, 'utf8').replace('  s.total = 0;\n', () => '  s.total = 0;\n  s.moi = 1;\n'));
+  writeFileSync(appJs, readFileSync(appJs, 'utf8').replace('  s.total = 0;\n', () => '  s.total = 0;\n  s.added = 1;\n'));
   utimesSync(appJs, mtime, mtime);
 
   const r = ws.refreshFiles(['js/app.js']);
   assert.deepStrictEqual([r.indexed, r.removed, r.rescanned], [1, 0, false]);
-  assert.ok(members(ws).includes('moi'));
-  // Bao lai (su kien lap): noi dung khong doi -> khong lam gi.
+  assert.ok(members(ws).includes('added'));
+  // Reported again (a duplicate event): content unchanged -> does nothing.
   assert.strictEqual(ws.refreshFiles(['js/app.js']).indexed, 0);
 });
 
-test('refreshFiles: file moi bi exclude khong keo theo quet lai; trong include thi vao index', (t) => {
+test('refreshFiles: a new excluded file does not trigger a rescan; one inside include gets indexed', (t) => {
   const { root, ws } = tempWorkspace(t);
   ws.index();
   const n = ws.stats().files;
@@ -61,7 +61,7 @@ test('refreshFiles: file moi bi exclude khong keo theo quet lai; trong include t
   writeFileSync(join(root, 'dist', 'extra.js'), src);
   writeFileSync(join(root, 'js', 'extra.js'), src);
 
-  const skipped = ws.refreshFiles(['dist/extra.js', 'dist', '../ngoai-workspace.js', 'khong-co.js']);
+  const skipped = ws.refreshFiles(['dist/extra.js', 'dist', '../outside-workspace.js', 'does-not-exist.js']);
   assert.deepStrictEqual([skipped.indexed, skipped.removed, skipped.rescanned], [0, 0, false]);
   assert.strictEqual(ws.stats().files, n);
 
@@ -70,16 +70,17 @@ test('refreshFiles: file moi bi exclude khong keo theo quet lai; trong include t
   assert.strictEqual(ws.stats().files, n + 1);
 });
 
-// chmod 000 khong chan duoc root, nen bo qua khi chay bang root.
+// chmod 000 doesn't block root, so skip when running as root.
 const ROOT_USER = typeof process.getuid === 'function' && process.getuid() === 0;
-const SKIP_ROOT = ROOT_USER && 'chay bang root: chmod 000 khong chan duoc';
+const SKIP_ROOT = ROOT_USER && 'running as root: chmod 000 does not block access';
 
-test('refreshFiles: loi doc (EACCES) KHONG duoc hieu la file da xoa', { skip: SKIP_ROOT }, (t) => {
+test('refreshFiles: a read error (EACCES) must NOT be treated as the file having been deleted', { skip: SKIP_ROOT }, (t) => {
   const { root, ws } = tempWorkspace(t);
   ws.index();
   const n = ws.stats().files;
 
-  // Bo quyen thu muc cha -> statSync file ben trong nem EACCES, du file van con nguyen.
+  // Strip permission from the parent directory -> statSync on the file inside throws
+  // EACCES, even though the file itself is untouched.
   const dir = join(root, 'js');
   chmodSync(dir, 0o000);
   let r;
@@ -89,42 +90,42 @@ test('refreshFiles: loi doc (EACCES) KHONG duoc hieu la file da xoa', { skip: SK
     chmodSync(dir, 0o755);
   }
 
-  assert.deepStrictEqual([r.indexed, r.removed], [0, 0], 'khong biet thi khong duoc go khoi index');
+  assert.deepStrictEqual([r.indexed, r.removed], [0, 0], 'when in doubt, never remove from the index');
   assert.strictEqual(ws.stats().files, n);
-  assert.ok(members(ws).length, 'symbol cua file do phai con nguyen');
+  assert.ok(members(ws).length, 'the file\'s symbols must remain intact');
 });
 
-test('refreshFiles: mot duong dan khong doc duoc khong lam mat ca lo', { skip: SKIP_ROOT }, (t) => {
+test('refreshFiles: one unreadable path does not lose the whole batch', { skip: SKIP_ROOT }, (t) => {
   const { root, ws } = tempWorkspace(t);
   ws.index();
   const appJs = join(root, 'js', 'app.js');
   writeFileSync(
     appJs,
-    readFileSync(appJs, 'utf8').replace('  s.total = 0;\n', () => '  s.total = 0;\n  s.moi = 1;\n'),
+    readFileSync(appJs, 'utf8').replace('  s.total = 0;\n', () => '  s.total = 0;\n  s.added = 1;\n'),
   );
 
-  // Thu muc moi, khong doc duoc: fast-glob se nem EACCES khi do "co ung vien nao khong".
-  const cam = join(root, 'cam');
-  mkdirSync(cam);
-  writeFileSync(join(cam, 'x.js'), "myApp.controller('y-ctrl', function ($scope) { $scope.b = 1; });\n");
-  chmodSync(cam, 0o000);
+  // A new, unreadable directory: fast-glob will throw EACCES when checking "does it have any candidates".
+  const locked = join(root, 'locked');
+  mkdirSync(locked);
+  writeFileSync(join(locked, 'x.js'), "myApp.controller('y-ctrl', function ($scope) { $scope.b = 1; });\n");
+  chmodSync(locked, 0o000);
 
   let r;
   try {
-    r = ws.refreshFiles(['js/app.js', 'cam']);
+    r = ws.refreshFiles(['js/app.js', 'locked']);
   } finally {
-    chmodSync(cam, 0o755);
+    chmodSync(locked, 0o755);
   }
 
-  assert.strictEqual(r.indexed, 1, 'thay doi hop le trong cung lo phai duoc ap');
-  assert.ok(members(ws).includes('moi'));
+  assert.strictEqual(r.indexed, 1, 'a valid change in the same batch must still be applied');
+  assert.ok(members(ws).includes('added'));
 });
 
-test('refreshFiles: bao ve thu muc DANG TON TAI thi khong go file nao', (t) => {
+test('refreshFiles: reporting a directory that STILL EXISTS removes nothing', (t) => {
   const { ws } = tempWorkspace(t);
   ws.index();
   const n = ws.stats().files;
   const r = ws.refreshFiles(['js']);
-  assert.deepStrictEqual([r.removed, r.rescanned], [0, true], 'thu muc con day thi file cua no con');
+  assert.deepStrictEqual([r.removed, r.rescanned], [0, true], 'the directory still exists, so its files still exist too');
   assert.strictEqual(ws.stats().files, n);
 });
