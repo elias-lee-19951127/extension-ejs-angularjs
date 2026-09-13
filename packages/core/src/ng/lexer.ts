@@ -5,7 +5,7 @@ export type TokenType = 'ident' | 'number' | 'string' | 'punct' | 'eof';
 export interface Token {
   type: TokenType;
   text: string;
-  /** Voi string/number: gia tri da giai ma. */
+  /** For string/number: the decoded value. */
   value?: string | number;
   span: Span;
 }
@@ -30,14 +30,14 @@ export class LexError extends Error {
 }
 
 /**
- * Lexer cho bieu thuc AngularJS.
+ * Lexer for AngularJS expressions.
  *
- * Bieu thuc Angular KHONG phai JavaScript (docs/kien-truc.md muc 2.3):
- *  - co toan tu filter '|' voi cu phap dac biet 'expr | name : arg'
- *  - co tien to one-time binding '::'
- *  - khong co 'new', 'function', regex literal, template literal
+ * Angular expressions are NOT JavaScript (docs/kien-truc.md section 2.3):
+ *  - they have a filter operator '|' with special syntax 'expr | name : arg'
+ *  - they have a one-time binding prefix '::'
+ *  - they have no 'new', 'function', regex literal, or template literal
  *
- * `baseOffset` duoc cong vao moi span de tra ve offset trong FILE GOC.
+ * `baseOffset` is added to every span to return offsets in the ORIGINAL FILE.
  */
 export function tokenize(input: string, baseOffset = 0): Token[] {
   const tokens: Token[] = [];
@@ -107,7 +107,7 @@ export function tokenize(input: string, baseOffset = 0): Token[] {
         value += ch;
         i++;
       }
-      if (!closed) throw new LexError('Chuoi khong dong', span(start, i));
+      if (!closed) throw new LexError('Unterminated string', span(start, i));
       tokens.push({ type: 'string', text: input.slice(start, i), value, span: span(start, i) });
       continue;
     }
@@ -130,7 +130,7 @@ export function tokenize(input: string, baseOffset = 0): Token[] {
       continue;
     }
 
-    throw new LexError(`Ky tu khong hop le: ${JSON.stringify(c)}`, span(i, i + 1));
+    throw new LexError(`Invalid character: ${JSON.stringify(c)}`, span(i, i + 1));
   }
 
   tokens.push({ type: 'eof', text: '', span: span(input.length, input.length) });

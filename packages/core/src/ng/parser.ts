@@ -12,7 +12,7 @@ export class ParseError extends Error {
 }
 
 /**
- * Parser bieu thuc AngularJS (recursive descent, theo dung do uu tien cua $parse).
+ * Parser for AngularJS expressions (recursive descent, following $parse's exact precedence).
  *
  * Grammar:
  *   program        := filterChain (';' filterChain)* ';'?
@@ -34,7 +34,7 @@ export function parseExpression(input: string, baseOffset = 0): Program {
   return p.parseProgram();
 }
 
-/** Parse nhung khong nem loi — tra ve null khi hong. Dung khi nguoi dung dang go. */
+/** Parse without throwing — returns null on failure. Used while the user is typing. */
 export function tryParseExpression(input: string, baseOffset = 0): Program | null {
   try {
     return parseExpression(input, baseOffset);
@@ -79,7 +79,7 @@ class Parser {
   }
   private expect(text: string): Token {
     if (!this.at(text)) {
-      throw new ParseError(`Mong doi '${text}' nhung gap '${this.peek().text || 'ket thuc'}'`, this.peek().span);
+      throw new ParseError(`Expected '${text}' but found '${this.peek().text || 'end of input'}'`, this.peek().span);
     }
     return this.next();
   }
@@ -89,7 +89,7 @@ class Parser {
 
   parseProgram(): Program {
     const start = this.peek().span;
-    // Tien to one-time binding '::'
+    // One-time binding prefix '::'
     if (this.eat('::')) this.oneTime = true;
 
     const body: Expr[] = [];
@@ -101,7 +101,7 @@ class Parser {
       }
     }
     if (this.peek().type !== 'eof') {
-      throw new ParseError(`Thua ky tu '${this.peek().text}'`, this.peek().span);
+      throw new ParseError(`Unexpected trailing character '${this.peek().text}'`, this.peek().span);
     }
     const end = this.tokens[this.tokens.length - 1]!.span;
     return { type: 'Program', body, oneTime: this.oneTime, span: this.span(start, end) };
@@ -114,7 +114,7 @@ class Parser {
       this.next();
       const nameTok = this.next();
       if (nameTok.type !== 'ident') {
-        throw new ParseError('Ten filter phai la mot dinh danh', nameTok.span);
+        throw new ParseError('Filter name must be an identifier', nameTok.span);
       }
       const name: Identifier = { type: 'Identifier', name: nameTok.text, span: nameTok.span };
       const args: Expr[] = [];
@@ -228,7 +228,7 @@ class Parser {
       if (t.text === 'this') return { type: 'ThisExpression', span: t.span };
       return { type: 'Identifier', name: t.text, span: t.span };
     }
-    throw new ParseError(`Khong mong doi '${t.text || 'ket thuc bieu thuc'}'`, t.span);
+    throw new ParseError(`Unexpected '${t.text || 'end of expression'}'`, t.span);
   }
 
   private postfix(base: Expr): Expr {
@@ -238,7 +238,7 @@ class Parser {
         this.next();
         const nameTok = this.next();
         if (nameTok.type !== 'ident') {
-          throw new ParseError('Mong doi ten property sau dau .', nameTok.span);
+          throw new ParseError("Expected a property name after '.'", nameTok.span);
         }
         const property: Identifier = {
           type: 'Identifier',
@@ -320,7 +320,7 @@ class Parser {
           if (t.type === 'ident') key = { type: 'Identifier', name: t.text, span: t.span };
           else if (t.type === 'string' || t.type === 'number')
             key = { type: 'Literal', value: t.value!, span: t.span };
-          else throw new ParseError('Khoa object khong hop le', t.span);
+          else throw new ParseError('Invalid object key', t.span);
         }
         this.expect(':');
         const value = this.filterChain();

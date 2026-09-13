@@ -5,12 +5,12 @@ import com.redhat.devtools.lsp4ij.server.ProcessStreamConnectionProvider
 import java.io.File
 
 /**
- * Tim Node va file server, roi chay `node <server>/dist/index.js --stdio`.
+ * Locate Node and the server file, then run `node <server>/dist/index.js --stdio`.
  *
- * Thu tu tim server:
- *   1. bien moi truong EJSNG_SERVER_PATH  (dung khi phat trien)
- *   2. server dong goi kem plugin         (ban phat hanh)
- *   3. node_modules cua chinh du an       (khi lam viec trong monorepo)
+ * Server lookup order:
+ *   1. the EJSNG_SERVER_PATH environment variable  (used during development)
+ *   2. the server bundled with the plugin           (released build)
+ *   3. the project's own node_modules               (when working inside the monorepo)
  */
 class EjsNgServerConnection(private val project: Project) : ProcessStreamConnectionProvider() {
 
@@ -35,8 +35,8 @@ class EjsNgServerConnection(private val project: Project) : ProcessStreamConnect
         if (local.isFile) return local
 
         throw IllegalStateException(
-            "Khong tim thay ejs-ng-language-server. Dat bien moi truong EJSNG_SERVER_PATH " +
-                "tro toi packages/server/dist/index.js, hoac cai @ejsng/server vao du an."
+            "ejs-ng-language-server not found. Set the EJSNG_SERVER_PATH environment variable " +
+                "to point to packages/server/dist/index.js, or install @ejsng/server in the project."
         )
     }
 

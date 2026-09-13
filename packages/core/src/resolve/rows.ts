@@ -16,11 +16,12 @@ export interface RefInput {
 }
 
 /**
- * Doi fact cua MOT file thanh cac hang symbols/refs.
+ * Turn the facts of ONE file into symbol/ref rows.
  *
- * Van la ham thuan cua fact file do: `container` cua mot ref template chi duoc dien
- * khi controller duoc khai bao NGAY TRONG file ay (ng-controller). Truong hop
- * controller den tu route/DDO o file khac thi de null, va Linker se noi luc truy van.
+ * Still a pure function of that file's facts: a template ref's `container` is only filled
+ * in when the controller is declared RIGHT IN that file (ng-controller). When the
+ * controller comes from a route/DDO in another file, it's left null, and the Linker joins
+ * it at query time.
  */
 export function factsToRows(facts: FileFacts): { symbols: SymbolInput[]; refs: RefInput[] } {
   return facts.kind === 'js' ? jsRows(facts) : templateRows(facts);
@@ -38,9 +39,9 @@ function jsRows(facts: Extract<FileFacts, { kind: 'js' }>) {
       confidence: d.confidence,
       span: d.nameSpan,
     });
-    // Dependency inject vao la mot tham chieu toi service/factory khac.
+    // An injected dependency is a reference to another service/factory.
     for (const dep of d.deps) {
-      if (dep.name.startsWith('$')) continue; // service dung san cua Angular
+      if (dep.name.startsWith('$')) continue; // built-in Angular service
       refs.push({ name: dep.name, container: null, axis: 'ng-di', span: dep.span });
     }
     if (d.ddo?.controllerName) {
@@ -63,9 +64,9 @@ function jsRows(facts: Extract<FileFacts, { kind: 'js' }>) {
     });
   }
 
-  // Khai bao o pham vi toan file la GLOBAL trong the gioi <script> tag:
-  // `DHA_STATUS` khai bao trong dha.const.js duoc dung o dha.controller.js.
-  // Day la mau pho bien nhat trong codebase Angular 1 khong dung module.
+  // A file-scope declaration is GLOBAL in the <script>-tag world: `DHA_STATUS` declared
+  // in dha.const.js is used from dha.controller.js. This is the most common pattern in
+  // Angular 1 codebases that don't use modules.
   for (const b of facts.bindings) {
     const isFileScope = b.scope.start === 0 || b.scope.end - b.scope.start > 100000;
     if (!isFileScope) continue;
@@ -120,11 +121,11 @@ function templateRows(facts: TemplateFacts) {
   for (const expr of facts.expressions) {
     const ctx = controllerOf(expr.scopeChain);
     for (const root of expr.roots) {
-      // Bien do ng-repeat / ng-init dua vao la bien CUC BO cua template,
-      // khong phai property tren controller — khong tinh la ref lien file.
+      // A variable introduced by ng-repeat / ng-init is a LOCAL variable of the template,
+      // not a property on the controller — it doesn't count as a cross-file ref.
       if (isLocal(root.name, expr.scopeChain)) continue;
       if (SCOPE_BUILTINS.includes(root.name)) continue;
-      // Voi `vm.orders` (controllerAs), thu can resolve la 'orders' chu khong phai 'vm'.
+      // For `vm.orders` (controllerAs), what needs resolving is 'orders', not 'vm'.
       const alias = aliasOf(expr.scopeChain);
       if (alias && root.name === alias && root.path.length > 0) {
         refs.push({ name: root.path[0]!, container: ctx, axis: 'ng-scope', span: root.span });
@@ -178,7 +179,7 @@ export function aliasOf(chain: ScopeFrame[]): string | undefined {
 export function isLocal(name: string, chain: ScopeFrame[]): boolean {
   for (const f of chain) {
     if (f.kind === 'controller') {
-      // controllerAs alias khong phai bien cuc bo cua template
+      // A controllerAs alias is not a local variable of the template
       if (f.alias === name) return false;
       continue;
     }
@@ -187,7 +188,7 @@ export function isLocal(name: string, chain: ScopeFrame[]): boolean {
   return false;
 }
 
-/** Tim tang scope khai bao mot bien cuc bo, kem span khai bao va collection. */
+/** Find the scope frame that declares a local variable, with its declaration span and collection. */
 export function findLocal(
   name: string,
   chain: ScopeFrame[],

@@ -9,25 +9,25 @@ export type EjsRegionKind =
 
 export interface EjsRegion {
   kind: EjsRegionKind;
-  /** Span cua CA the, ke ca delimiter. */
+  /** Span of the WHOLE tag, including the delimiter. */
   span: Span;
-  /** Span cua phan noi dung ben trong delimiter. */
+  /** Span of the content inside the delimiters. */
   innerSpan: Span;
   inner: string;
 }
 
 /**
- * Quet mot file EJS thanh cac region.
+ * Scan an EJS file into regions.
  *
- * Ho tro day du bo delimiter cua EJS:
- *   <%  scriptlet        %>  ket thuc thuong
- *   <%= output escaped   -%> ket thuc + nuot newline
- *   <%- output raw       _%> ket thuc + nuot whitespace
+ * Supports the full EJS delimiter set:
+ *   <%  scriptlet        %>  normal close
+ *   <%= output escaped   -%> close + swallow newline
+ *   <%- output raw       _%> close + swallow whitespace
  *   <%# comment
- *   <%_ scriptlet + nuot whitespace dau
- *   <%% literal '<%'  (khong mo region)
+ *   <%_ scriptlet + swallow leading whitespace
+ *   <%% literal '<%'  (does not open a region)
  *
- * `delimiter` mac dinh '%' cho ra '<%' / '%>'. Doi thanh '?' cho ra '<?' / '?>'.
+ * `delimiter` defaults to '%', producing '<%' / '%>'. Change it to '?' to get '<?' / '?>'.
  */
 export function scanEjs(source: string, delimiter = '%'): EjsRegion[] {
   const open = '<' + delimiter;
@@ -51,7 +51,7 @@ export function scanEjs(source: string, delimiter = '%'): EjsRegion[] {
     const idx = source.indexOf(open, pos);
     if (idx === -1) break;
 
-    // '<%%' la escape cho ky tu '<%' theo nghia den, khong mo region.
+    // '<%%' is an escape for the literal '<%' character, does not open a region.
     if (source.startsWith(open + delimiter, idx)) {
       pos = idx + open.length + 1;
       continue;
@@ -76,10 +76,10 @@ export function scanEjs(source: string, delimiter = '%'): EjsRegion[] {
       innerStart = afterOpen + 1;
     }
 
-    // Tim close gan nhat. Phai kiem tra ca bien the '-%>' va '_%>'.
+    // Find the nearest close. Must check both the '-%>' and '_%>' variants.
     const closeIdx = findClose(source, innerStart, close);
     if (closeIdx === -1) {
-      // Tag khong dong: coi phan con lai la region, bao loi o tang tren.
+      // Unclosed tag: treat the rest as a region, report the error at a higher layer.
       pushHtml(idx);
       regions.push({
         kind,
@@ -90,7 +90,7 @@ export function scanEjs(source: string, delimiter = '%'): EjsRegion[] {
       return regions;
     }
 
-    // innerEnd tru di ky tu trim ('-' hoac '_') neu co.
+    // innerEnd subtracts the trim character ('-' or '_') if present.
     let innerEnd = closeIdx;
     const prev = source[closeIdx - 1];
     if (prev === '-' || prev === '_') innerEnd = closeIdx - 1;
@@ -112,8 +112,8 @@ export function scanEjs(source: string, delimiter = '%'): EjsRegion[] {
 }
 
 /**
- * Tim delimiter dong, bo qua cac lan xuat hien ben trong chuoi JS.
- * Can thiet vi `<% if (x === "100%>") { %>` la hop le trong EJS.
+ * Find the closing delimiter, skipping occurrences inside JS strings.
+ * Necessary because `<% if (x === "100%>") { %>` is valid EJS.
  */
 function findClose(source: string, from: number, close: string): number {
   let i = from;
@@ -141,13 +141,13 @@ function findClose(source: string, from: number, close: string): number {
 }
 
 /**
- * Tao "virtual HTML document": moi region EJS bi thay bang khoang trang CUNG DO DAI.
+ * Create a "virtual HTML document": every EJS region is replaced with whitespace of the SAME LENGTH.
  *
- * Day la mau chot cua toan bo thiet ke tang template (docs/kien-truc.md muc 2.1):
- * vi do dai khong doi, moi offset trong virtual doc TRUNG KHIT offset file goc,
- * nen khong can source map va khong the co bug off-by-one.
+ * This is the linchpin of the whole template-layer design (docs/kien-truc.md section 2.1):
+ * since the length never changes, every offset in the virtual doc EXACTLY MATCHES the
+ * original file's offset, so no source map is needed and off-by-one bugs are impossible.
  *
- * Newline duoc GIU LAI de so dong khong lech (quan trong cho thong bao loi).
+ * Newlines are KEPT so line numbers don't shift (important for error messages).
  */
 export function toVirtualHtml(source: string, regions: EjsRegion[]): string {
   const out = source.split('');
@@ -161,12 +161,12 @@ export function toVirtualHtml(source: string, regions: EjsRegion[]): string {
 }
 
 /**
- * Tao virtual JS cho truc A (server-side locals), kem source map offset.
- * Cac region scriptlet/output duoc noi lai; `map` cho phep doi offset virtual -> goc.
+ * Create virtual JS for track A (server-side locals), with an offset source map.
+ * The scriptlet/output regions are concatenated; `map` allows converting virtual -> original offsets.
  */
 export interface VirtualJs {
   code: string;
-  /** Sap xep tang dan theo virtualStart. */
+  /** Sorted ascending by virtualStart. */
   map: Array<{ virtualStart: number; virtualEnd: number; sourceStart: number }>;
 }
 
@@ -177,7 +177,7 @@ export function toVirtualJs(regions: EjsRegion[]): VirtualJs {
 
   for (const r of regions) {
     if (r.kind === 'html' || r.kind === 'comment') continue;
-    // Region output la bieu thuc; boc trong `(...)` de thanh cau lenh hop le.
+    // Output regions are expressions; wrap them in `__out(...)` to form a valid statement.
     const isOutput = r.kind === 'output-escaped' || r.kind === 'output-raw';
     const prefix = isOutput ? '__out(' : '';
     const suffix = isOutput ? ');\n' : '\n';
@@ -200,7 +200,7 @@ export function toVirtualJs(regions: EjsRegion[]): VirtualJs {
   return { code: parts.join(''), map };
 }
 
-/** Doi offset trong virtual JS ve offset file goc. -1 neu khong map duoc. */
+/** Convert an offset in the virtual JS back to an offset in the original file. -1 if it can't be mapped. */
 export function mapVirtualJsOffset(vjs: VirtualJs, offset: number): number {
   for (const m of vjs.map) {
     if (offset >= m.virtualStart && offset <= m.virtualEnd) {

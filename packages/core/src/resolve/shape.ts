@@ -2,8 +2,8 @@ import type { FileFacts, Span, ValueShape } from '../types';
 import type { SymbolRow } from '../index/store';
 
 /**
- * Nhung gi definition resolution va shape walking can doc tu Workspace, khong hon.
- * Workspace implement interface nay va tu truyen `this` vao cac ham thuan o day.
+ * What definition resolution and shape walking need to read from Workspace, nothing more.
+ * Workspace implements this interface and passes `this` into the pure functions below.
  */
 export interface FactSource {
   facts(relPath: string): FileFacts | null;
@@ -13,12 +13,12 @@ export interface FactSource {
 }
 
 /**
- * Di theo duong dan property tren shape da suy luan.
+ * Walk a property path over an inferred shape.
  *
- * Tra ve span cua khoa sau cung tim duoc. Khi khong di het duong dan (vi du
- * `$scope.stats = res.data` — shape unknown), tra ve `partial: true` va nguoi dung
- * van duoc nhay toi khai bao goc thay vi nhan mot thong bao "khong tim thay".
- * Nhay gan dung van huu ich hon la khong nhay.
+ * Returns the span of the last key found. When the full path can't be walked (e.g.
+ * `$scope.stats = res.data` — shape unknown), returns `partial: true` and the user still
+ * jumps to the original declaration instead of getting a "not found" message. Jumping to
+ * an approximate location is more useful than not jumping at all.
  */
 export function walkShape(
   deps: FactSource,
@@ -44,7 +44,7 @@ export function walkShape(
   return { span: lastSpan, depth, partial: false };
 }
 
-/** Shape suy duoc cho mot scope-member, tu gia tri o lan gan dau tien. */
+/** The shape inferred for a scope-member, from the value at its first assignment. */
 export function shapeOf(deps: FactSource, member: SymbolRow): ValueShape | null {
   const facts = deps.facts(member.path);
   if (!facts || facts.kind !== 'js') return null;
@@ -54,7 +54,7 @@ export function shapeOf(deps: FactSource, member: SymbolRow): ValueShape | null 
   return sm?.shape ?? null;
 }
 
-/** Di theo duong dan property tren shape; gap mang thi di vao shape phan tu, nhu walkShape. */
+/** Walk a property path over a shape; steps into the element shape on arrays, like walkShape. */
 export function shapeAtPath(shape: ValueShape | undefined, path: string[]): ValueShape | undefined {
   for (const seg of path) {
     if (shape?.kind === 'array' && shape.element) shape = shape.element;

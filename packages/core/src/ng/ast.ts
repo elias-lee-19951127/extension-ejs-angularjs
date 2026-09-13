@@ -55,7 +55,7 @@ export interface ObjectExpr extends NodeBase {
   type: 'ObjectExpression';
   properties: Array<{ key: Expr; value: Expr; computed: boolean }>;
 }
-/** Dac trung cua Angular: `expr | filterName : arg1 : arg2` */
+/** Angular-specific: `expr | filterName : arg1 : arg2` */
 export interface FilterExpr extends NodeBase {
   type: 'FilterExpression';
   input: Expr;
@@ -80,11 +80,11 @@ export type Expr =
 export interface Program extends NodeBase {
   type: 'Program';
   body: Expr[];
-  /** true neu bieu thuc mo dau bang '::' (one-time binding). */
+  /** true if the expression starts with '::' (one-time binding). */
   oneTime: boolean;
 }
 
-/** Duyet moi node con. */
+/** Visit every child node. */
 export function walk(node: Expr | Program, visit: (n: Expr | Program) => void): void {
   visit(node);
   const w = (n: Expr | undefined) => n && walk(n, visit);
@@ -136,24 +136,24 @@ export function walk(node: Expr | Program, visit: (n: Expr | Program) => void): 
 }
 
 export interface RootRef {
-  /** Ten identifier goc: voi `a.b.c` la 'a'. */
+  /** Root identifier name: for `a.b.c` this is 'a'. */
   name: string;
-  /** Span cua RIENG identifier goc — dung cho go-to-definition. */
+  /** Span of ONLY the root identifier — used for go-to-definition. */
   span: Span;
-  /** Duong dan property phia sau: voi `a.b.c` la ['b','c']. */
+  /** Property path after the root: for `a.b.c` this is ['b','c']. */
   path: string[];
-  /** true neu identifier goc duoc goi nhu ham: `doThing()`. */
+  /** true if the root identifier is called as a function: `doThing()`. */
   isCall: boolean;
-  /** true neu la ve trai cua phep gan (ng-model). */
+  /** true if this is the left-hand side of an assignment (ng-model). */
   isWrite: boolean;
 }
 
 /**
- * Trich cac identifier GOC cua bieu thuc.
+ * Extract the ROOT identifiers of an expression.
  *
- * Chi lay goc, khong lay property: trong `vm.orders.length`, chi 'vm' la thu can
- * resolve ve scope; 'orders' va 'length' la buoc di tiep tren shape.
- * Bo qua identifier nam o vi tri property khong computed (`a.b` -> khong lay 'b').
+ * Only roots are collected, not properties: in `vm.orders.length`, only 'vm' needs
+ * to be resolved against the scope; 'orders' and 'length' are further steps on the shape.
+ * Skips identifiers in a non-computed property position (`a.b` -> does not collect 'b').
  */
 export function collectRoots(program: Program): RootRef[] {
   const out: RootRef[] = [];
@@ -180,7 +180,7 @@ export function collectRoots(program: Program): RootRef[] {
     out.push({ name: n.name, span: n.span, path: [], isCall: false, isWrite: false });
   });
 
-  // Bo sung path + co isCall bang mot luot rieng tren cac chuoi member.
+  // Fill in path + isCall with a separate pass over member chains.
   const byStart = new Map<number, RootRef>();
   out.forEach((r) => byStart.set(r.span.start, r));
 
@@ -206,7 +206,7 @@ export function collectRoots(program: Program): RootRef[] {
   return out;
 }
 
-/** Tach `a.b.c()` thanh root='a', path=['b','c'], isCall=true. */
+/** Split `a.b.c()` into root='a', path=['b','c'], isCall=true. */
 export function unwind(expr: Expr): { root: Identifier | null; path: string[]; isCall: boolean } {
   const path: string[] = [];
   let isCall = false;
@@ -231,7 +231,7 @@ export function unwind(expr: Expr): { root: Identifier | null; path: string[]; i
   return { root: cur.type === 'Identifier' ? cur : null, path, isCall };
 }
 
-/** Node nho nhat bao phu offset. */
+/** Smallest node covering the offset. */
 export function nodeAt(program: Program, offset: number): Expr | null {
   let best: Expr | null = null;
   walk(program, (n) => {
@@ -243,7 +243,7 @@ export function nodeAt(program: Program, offset: number): Expr | null {
   return best;
 }
 
-/** Trich cac filter dung trong bieu thuc: `x | currency | myFilter:a`. */
+/** Extract the filters used in an expression: `x | currency | myFilter:a`. */
 export function collectFilters(program: Program): Array<{ name: string; span: Span }> {
   const out: Array<{ name: string; span: Span }> = [];
   walk(program, (n) => {

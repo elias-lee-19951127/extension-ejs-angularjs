@@ -3,33 +3,33 @@ import type { ExprKind } from '../types';
 const PREFIX_RE = /^(x[-_:]|data[-_:])/i;
 
 /**
- * Chuan hoa ten thuoc tinh theo dung luat cua AngularJS.
+ * Normalize an attribute name per AngularJS's own rules.
  *
- * Angular coi 4 dang sau la MOT directive:
+ * Angular treats these forms as ONE directive:
  *   ng-repeat  ng:repeat  ng_repeat  data-ng-repeat  x-ng-repeat
  *
- * Bat buoc phai co: repo smart-city dung `data-ng-*` cho 155/159 thuoc tinh.
- * Neu chi khop 'ng-repeat' thi miss 11/12 lan dung ng-repeat.
- * Xem docs/kien-truc.md phu luc A.2 muc 3.
+ * This is mandatory: the smart-city repo uses `data-ng-*` for 155/159 attributes.
+ * Matching only 'ng-repeat' would miss 11 out of 12 ng-repeat usages.
+ * See docs/kien-truc.md appendix A.2 section 3.
  */
 export function normalizeDirectiveName(attrName: string): string {
   let name = attrName.replace(PREFIX_RE, '');
-  // ':' '-' '_' deu la dau phan cach -> camelCase
+  // ':' '-' '_' are all separators -> camelCase
   name = name.replace(/[-_:]+([a-zA-Z0-9])/g, (_m, c: string) => c.toUpperCase());
   return name;
 }
 
-/** Nguoc lai: 'ngRepeat' -> 'ng-repeat', de hien thi. */
+/** The reverse: 'ngRepeat' -> 'ng-repeat', for display. */
 export function denormalize(name: string): string {
   return name.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
 }
 
 /**
- * Bang cu phap cho tung directive dung san cua Angular 1.
- * Quyet dinh gia tri thuoc tinh duoc parse nhu the nao.
+ * Syntax table for each of Angular 1's built-in directives.
+ * Determines how the attribute value is parsed.
  */
 export const BUILTIN_DIRECTIVES: Record<string, ExprKind> = {
-  // bieu thuc thuan
+  // plain expressions
   ngIf: 'expression',
   ngShow: 'expression',
   ngHide: 'expression',
@@ -56,7 +56,7 @@ export const BUILTIN_DIRECTIVES: Record<string, ExprKind> = {
   ngSrc: 'none',
   ngHref: 'none',
 
-  // cau lenh (cho phep nhieu cau ngan boi ';')
+  // statements (allow multiple short statements separated by ';')
   ngClick: 'statement',
   ngDblclick: 'statement',
   ngMousedown: 'statement',
@@ -77,15 +77,15 @@ export const BUILTIN_DIRECTIVES: Record<string, ExprKind> = {
   ngPaste: 'statement',
   ngInit: 'statement',
 
-  // phai la LHS gan duoc
+  // must be an assignable LHS
   ngModel: 'assignable',
 
-  // microsyntax rieng
+  // dedicated microsyntax
   ngRepeat: 'repeat-microsyntax',
   ngRepeatStart: 'repeat-microsyntax',
   ngOptions: 'options-microsyntax',
 
-  // dac biet: khong parse nhu bieu thuc, la ten controller
+  // special: not parsed as an expression, it's a controller name
   ngController: 'none',
   ngInclude: 'expression',
   ngView: 'none',
@@ -93,8 +93,8 @@ export const BUILTIN_DIRECTIVES: Record<string, ExprKind> = {
 };
 
 /**
- * Tra ve cach parse gia tri cua mot thuoc tinh.
- * `custom` cho phep khai bao directive tu viet cua cong ty qua config.
+ * Return how to parse an attribute's value.
+ * `custom` allows declaring the company's own directives via config.
  */
 export function directiveExprKind(
   normalizedName: string,
@@ -102,32 +102,32 @@ export function directiveExprKind(
 ): ExprKind | undefined {
   if (normalizedName in custom) return custom[normalizedName];
   if (normalizedName in BUILTIN_DIRECTIVES) return BUILTIN_DIRECTIVES[normalizedName];
-  // ng-attr-* / ng-prop-* mang bieu thuc noi suy, xu ly nhu HTML thuong
+  // ng-attr-* / ng-prop-* carry interpolated expressions, treat like regular HTML
   if (/^ng(Attr|Prop|On)[A-Z]/.test(normalizedName)) return 'none';
   return undefined;
 }
 
-/** Cac bien Angular tu dua vao scope cua ng-repeat. */
+/** Variables Angular automatically adds to the ng-repeat scope. */
 export const NG_REPEAT_LOCALS = ['$index', '$first', '$middle', '$last', '$even', '$odd', '$id'];
 
 /**
- * Bien do CHINH ANGULAR bom vao bieu thuc, khong phai property tren scope.
+ * Variables that ANGULAR ITSELF injects into the expression, not properties on the scope.
  *
- * `$event` co trong moi directive dang cau lenh (ng-click, ng-keydown…).
- * Bo sot no thi 8/405 vi tri trong repo smart-city bi bao nham la "khong tim
- * thay tren scope" — va neu bat diagnostics thi moi handler co $event deu bi
- * gach chan do.
+ * `$event` is present in every statement-type directive (ng-click, ng-keydown…).
+ * Missing it would cause 8/405 locations in the smart-city repo to be falsely
+ * flagged as "not found on scope" — and with diagnostics enabled, every handler
+ * with $event would get underlined as an error.
  */
 export const NG_INJECTED_VARS = ['$event', ...NG_REPEAT_LOCALS];
 
-/** Cac bien luon co tren mot scope Angular. */
+/** Variables always present on an Angular scope. */
 export const SCOPE_BUILTINS = [
   '$id', '$parent', '$root', '$$childHead', '$$childTail', '$$nextSibling', '$$prevSibling',
   '$apply', '$applyAsync', '$broadcast', '$destroy', '$digest', '$emit', '$eval', '$evalAsync',
   '$new', '$on', '$watch', '$watchCollection', '$watchGroup',
 ];
 
-/** Filter dung san cua Angular — khong bao loi "khong tim thay". */
+/** Angular's built-in filters — never report "not found" for these. */
 export const BUILTIN_FILTERS = [
   'currency', 'date', 'filter', 'json', 'limitTo', 'lowercase',
   'number', 'orderBy', 'uppercase',

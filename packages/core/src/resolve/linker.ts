@@ -13,17 +13,18 @@ export interface DirectiveInfo {
 /**
  * Layer 4 — Linker.
  *
- * Chay SAU khi moi file da co fact. Nhiem vu duy nhat: phan giai nhung thu ma
- * Layer 2 khong the biet vi phai nhin sang file khac.
+ * Runs AFTER every file has facts. Its only job: resolve things Layer 2 can't know
+ * because they require looking at another file.
  *
- * Vi sao tach ra (docs/kien-truc.md muc 3): fact per-file phai thuan de cache dung.
- * Doi lai, moi ket luan lien file phai dung o day. Nho vay sua mot controller
- * KHONG can parse lai template nao — chi can chay lai buoc noi nay.
+ * Why this is a separate layer (docs/kien-truc.md section 3): per-file facts must stay
+ * pure so caching works correctly. In exchange, every cross-file conclusion has to live
+ * here. That's why fixing one controller does NOT require re-parsing any template — only
+ * re-running this linking step.
  */
 export class Linker {
   private directives = new Map<string, DirectiveInfo>();
 
-  /** Nap bang directive/component tu fact cua cac file .js. */
+  /** Load the directive/component table from the facts of the .js files. */
   loadDirectives(all: Array<{ path: string; facts: FileFacts }>): void {
     this.directives.clear();
     for (const { facts } of all) {
@@ -40,16 +41,16 @@ export class Linker {
   }
 
   /**
-   * Phan giai cac thuoc tinh chua biet cua mot template thanh tham chieu that.
+   * Resolve a template's unknown attributes into real references.
    *
-   * Ba truong hop duoc nhan:
-   *  1. Ten thuoc tinh trung ten mot directive  -> `kbm-file="onFilePicked($file)"`
-   *  2. The la mot directive/component, va ten thuoc tinh trung mot binding
-   *     trong isolate scope cua no -> `<cityos-dha data="CTX">`
-   *  3. The la directive/component da biet -> ghi nhan tham chieu toi chinh no
+   * Three cases are accepted:
+   *  1. The attribute name matches a directive's name  -> `kbm-file="onFilePicked($file)"`
+   *  2. The element is a directive/component, and the attribute name matches a binding
+   *     in its isolate scope -> `<cityos-dha data="CTX">`
+   *  3. The element is a known directive/component -> record a reference to it directly
    *
-   * Ngoai ba truong hop tren thi KHONG doan bua: mot `foo-bar="baz"` la khong
-   * ro rang, va bao nham con te hon la bo sot.
+   * Outside these three cases, we do NOT guess: a bare `foo-bar="baz"` is ambiguous, and a
+   * false positive is worse than a missed one.
    */
   resolveCandidates(candidates: AttrCandidate[]): RefInput[] {
     const refs: RefInput[] = [];
@@ -71,14 +72,14 @@ export class Linker {
 
       if (!asDirective && !isBinding) continue;
 
-      // Gia tri thuoc tinh la mot bieu thuc Angular — parse va ghi nhan cac goc.
+      // The attribute value is an Angular expression — parse it and record its roots.
       const program = tryParseExpression(cand.value, cand.valueSpan.start);
       if (!program) continue;
 
       for (const root of collectRoots(program)) {
         if (cand.locals.includes(root.name)) continue;
         if (SCOPE_BUILTINS.includes(root.name)) continue;
-        // `$file`, `$event` la bien do directive tu dua vao, khong phai scope.
+        // `$file`, `$event` are variables injected by the directive itself, not scope.
         if (root.name.startsWith('$')) continue;
         refs.push({
           name: root.name,
@@ -92,7 +93,7 @@ export class Linker {
     return refs;
   }
 
-  /** Tham chieu toi directive qua the custom: `<cityos-dha>`. */
+  /** Reference to a directive via a custom element: `<cityos-dha>`. */
   resolveElement(tag: string): boolean {
     return this.directives.has(tag);
   }

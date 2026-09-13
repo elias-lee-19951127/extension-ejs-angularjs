@@ -3,14 +3,14 @@ import { parseExpression, type ParseError } from './parser';
 import type { Program } from './ast';
 
 export interface RepeatSyntax {
-  /** Bien phan tu: 'item' trong `item in items`. */
+  /** Item variable: 'item' in `item in items`. */
   itemVar: { name: string; span: Span } | null;
-  /** Voi dang `(key, value) in obj`: bien key. */
+  /** For the `(key, value) in obj` form: the key variable. */
   keyVar: { name: string; span: Span } | null;
-  /** Bieu thuc collection, da parse. */
+  /** The collection expression, already parsed. */
   collection: Program | null;
   collectionSpan: Span;
-  /** `... as filtered` — bien phu chua ket qua sau filter. */
+  /** `... as filtered` — auxiliary variable holding the result after filtering. */
   aliasVar: { name: string; span: Span } | null;
   /** `track by expr` */
   trackBy: Program | null;
@@ -19,14 +19,14 @@ export interface RepeatSyntax {
 }
 
 /**
- * Parse microsyntax cua ng-repeat.
+ * Parse the ng-repeat microsyntax.
  *
  *   item in items
  *   (key, value) in obj
  *   item in items | filter:q as results track by item.id
  *
- * Bam theo regex cua chinh Angular (src/ng/directive/ngRepeat.js) de cung hanh vi,
- * ke ca cac truong hop la nhu khoang trang thua hay xuong dong giua cac phan.
+ * Follows Angular's own regex (src/ng/directive/ngRepeat.js) to match its behavior,
+ * including edge cases like extra whitespace or newlines between parts.
  */
 export function parseRepeat(value: string, baseOffset: number): RepeatSyntax {
   const empty: RepeatSyntax = {
@@ -42,7 +42,7 @@ export function parseRepeat(value: string, baseOffset: number): RepeatSyntax {
   const m = value.match(
     /^\s*([\s\S]+?)\s+in\s+([\s\S]+?)(?:\s+as\s+([\s\S]+?))?(?:\s+track\s+by\s+([\s\S]+?))?\s*$/,
   );
-  if (!m) return { ...empty, error: "Cu phap ng-repeat khong hop le, can dang 'item in collection'" };
+  if (!m) return { ...empty, error: "Invalid ng-repeat syntax, expected the form 'item in collection'" };
 
   const [, lhs, rhs, aliasRaw, trackRaw] = m;
   const lhsOffset = baseOffset + value.indexOf(lhs!);
@@ -53,10 +53,10 @@ export function parseRepeat(value: string, baseOffset: number): RepeatSyntax {
     collectionSpan: { start: rhsOffset, end: rhsOffset + rhs!.length },
   };
 
-  // ve trai: 'item' hoac '(key, value)'
+  // left-hand side: 'item' or '(key, value)'
   const lm = lhs!.match(/^(?:\s*([$\w]+)|\(\s*([$\w]+)\s*,\s*([$\w]+)\s*\))$/);
   if (!lm) {
-    result.error = `Ve trai '${lhs}' khong hop le, can 'item' hoac '(key, value)'`;
+    result.error = `Left-hand side '${lhs}' is invalid, expected 'item' or '(key, value)'`;
   } else if (lm[1]) {
     const off = lhsOffset + lhs!.indexOf(lm[1]);
     result.itemVar = { name: lm[1], span: { start: off, end: off + lm[1].length } };
@@ -83,7 +83,7 @@ export function parseRepeat(value: string, baseOffset: number): RepeatSyntax {
     try {
       result.trackBy = parseExpression(trackRaw, off);
     } catch {
-      /* track by hong khong lam hong ca directive */
+      /* a broken track-by should not break the whole directive */
     }
   }
 
@@ -91,25 +91,25 @@ export function parseRepeat(value: string, baseOffset: number): RepeatSyntax {
 }
 
 export interface OptionsSyntax {
-  /** Bien phan tu trong `x in xs`. */
+  /** Item variable in `x in xs`. */
   itemVar: { name: string; span: Span } | null;
   keyVar: { name: string; span: Span } | null;
   collection: Program | null;
   collectionSpan: Span | null;
-  /** Cac bieu thuc phu: select / label / group by / track by / disable when. */
+  /** Auxiliary expressions: select / label / group by / track by / disable when. */
   extras: Array<{ program: Program; span: Span }>;
   error?: string;
 }
 
 /**
- * Parse ng-options (rut gon).
+ * Parse ng-options (simplified).
  *
  *   label for item in items
  *   item.name for item in items track by item.id
  *   item as item.label group by item.g for item in items
  *
- * Chi can dung cho muc dich cua extension: biet bien nao duoc dua vao scope
- * va bieu thuc nao can resolve. Khong can tai lap toan bo ngu nghia.
+ * Only needs to serve the extension's purpose: know which variables are added
+ * to the scope and which expressions need resolving. No need to reimplement the full semantics.
  */
 export function parseOptions(value: string, baseOffset: number): OptionsSyntax {
   const result: OptionsSyntax = {
@@ -122,7 +122,7 @@ export function parseOptions(value: string, baseOffset: number): OptionsSyntax {
 
   const forIdx = value.search(/\sfor\s/);
   if (forIdx === -1) {
-    result.error = "Cu phap ng-options khong hop le, thieu tu khoa 'for'";
+    result.error = "Invalid ng-options syntax, missing the 'for' keyword";
     return result;
   }
 
@@ -130,7 +130,7 @@ export function parseOptions(value: string, baseOffset: number): OptionsSyntax {
   const tail = value.slice(forIdx + 5);
   const tailOffset = baseOffset + forIdx + 5;
 
-  // Phan sau 'for' co cung cau truc voi ng-repeat.
+  // The part after 'for' has the same structure as ng-repeat.
   const repeat = parseRepeat(tail, tailOffset);
   result.itemVar = repeat.itemVar;
   result.keyVar = repeat.keyVar;
@@ -138,7 +138,7 @@ export function parseOptions(value: string, baseOffset: number): OptionsSyntax {
   result.collectionSpan = repeat.collectionSpan;
   if (repeat.error) result.error = repeat.error;
 
-  // Phan truoc 'for': tach theo 'group by' / 'disable when' / ' as '.
+  // The part before 'for': split on 'group by' / 'disable when' / ' as '.
   for (const part of splitKeywords(head)) {
     const off = baseOffset + head.indexOf(part.text);
     try {
@@ -147,7 +147,7 @@ export function parseOptions(value: string, baseOffset: number): OptionsSyntax {
         span: { start: off, end: off + part.text.length },
       });
     } catch {
-      /* bo qua phan hong */
+      /* skip the broken part */
     }
   }
 

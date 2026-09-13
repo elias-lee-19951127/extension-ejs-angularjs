@@ -3,12 +3,12 @@ package com.ejsng.intellij
 import java.io.File
 
 /**
- * Tim runtime Node de chay language server.
+ * Find a Node runtime to run the language server.
  *
- * Vi sao can ca mot file cho viec nay: IDE khoi dong tu Dock/Finder KHONG ke thua
- * PATH cua shell dang nhap, nen `node` cai qua nvm/fnm/volta/asdf — cach cai pho
- * bien nhat trong doi ngu JavaScript — se khong nhin thay duoc. Chi quet vai
- * duong dan he thong la hong voi da so nguoi dung.
+ * Why this needs its own file: the IDE launched from the Dock/Finder does NOT inherit the login
+ * shell's PATH, so a `node` installed via nvm/fnm/volta/asdf — the most common installation
+ * method among JavaScript teams — will not be visible. Scanning only a few system paths fails for
+ * most users.
  */
 object NodeLocator {
 
@@ -18,24 +18,24 @@ object NodeLocator {
             ?: fromSystemPaths()
             ?: fromLoginShell()
             ?: throw IllegalStateException(
-                "Khong tim thay Node. Cai Node >= 18, hoac dat bien moi truong " +
-                    "EJSNG_NODE tro toi file thuc thi node.",
+                "Node not found. Install Node >= 18, or set the EJSNG_NODE environment " +
+                    "variable to point to the node executable.",
             )
 
     private fun fromEnv(): String? =
         System.getenv("EJSNG_NODE")?.takeIf { File(it).canExecute() }
 
-    /** nvm, fnm, volta, asdf, nodenv — chon ban cao nhat khi co nhieu ban. */
+    /** nvm, fnm, volta, asdf, nodenv — pick the highest version when several are installed. */
     private fun fromVersionManagers(): String? {
         val home = System.getProperty("user.home")
 
-        // volta va asdf dung shim co dinh, khong can chon phien ban.
+        // volta and asdf use a fixed shim, no version selection needed.
         listOf(
             "$home/.volta/bin/node",
             "$home/.asdf/shims/node",
         ).firstOrNull { File(it).canExecute() }?.let { return it }
 
-        // nvm / fnm / nodenv: mot thu muc cho moi phien ban.
+        // nvm / fnm / nodenv: one directory per version.
         val versionRoots = listOf(
             File("$home/.nvm/versions/node"),
             File("$home/.fnm/node-versions"),
@@ -67,8 +67,8 @@ object NodeLocator {
         ).firstOrNull { File(it).canExecute() }
 
     /**
-     * Cuoi cung: hoi chinh shell dang nhap cua nguoi dung.
-     * Bat duoc cac cach cai la, doi lai ton mot lan sinh tien trinh.
+     * Last resort: ask the user's own login shell.
+     * Catches unusual installation methods, at the cost of spawning one process.
      */
     private fun fromLoginShell(): String? = runCatching {
         val shell = System.getenv("SHELL") ?: "/bin/sh"
@@ -80,7 +80,7 @@ object NodeLocator {
         output.lines().firstOrNull { File(it).canExecute() }
     }.getOrNull()
 
-    /** So sanh "v20.20.0" / "20.20.0" theo tung so, khong theo thu tu chuoi. */
+    /** Compare "v20.20.0" / "20.20.0" numerically component by component, not as strings. */
     private object VersionComparator : Comparator<String> {
         override fun compare(a: String, b: String): Int {
             val pa = parse(a)

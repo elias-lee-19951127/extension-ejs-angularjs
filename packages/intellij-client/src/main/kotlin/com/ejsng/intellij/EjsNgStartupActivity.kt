@@ -6,23 +6,24 @@ import com.intellij.openapi.startup.ProjectActivity
 import com.redhat.devtools.lsp4ij.LanguageServerManager
 
 /**
- * Khoi dong language server ngay khi mo project, khong doi mo file dau tien.
+ * Start the language server as soon as the project opens, without waiting for the first file to
+ * be opened.
  *
- * Mac dinh cua LSP4IJ la khoi dong luoi: server chi chay khi co file khop duoc
- * mo trong editor. Voi mot language server thong thuong thi hop ly, nhung server
- * nay phai DANH INDEX ca workspace truoc khi tra loi duoc cau hoi dau tien
- * (147 file mat khoang 200ms, repo lon hon thi lau hon).
+ * LSP4IJ's default is lazy startup: the server only runs once a matching file is opened in the
+ * editor. That is reasonable for a typical language server, but this server must INDEX the whole
+ * workspace before it can answer the first question (147 files takes about 200ms; a larger repo
+ * takes longer).
  *
- * Khoi dong luoi nghia la lan Ctrl+Click dau tien cua nguoi dung phai cho ca
- * vong index. Khoi dong som thi viec do xay ra trong luc IDE con dang danh
- * index cua chinh no, luc nguoi dung chua thao tac gi.
+ * Lazy startup means the user's first Ctrl+Click has to wait for the whole indexing round. Early
+ * startup lets that happen while the IDE is still doing its own indexing, before the user has done
+ * anything yet.
  *
- * `forceStart = true` de server chay ngay ca khi chua co file nao mo.
+ * `forceStart = true` so the server runs even when no file has been opened yet.
  */
 class EjsNgStartupActivity : ProjectActivity {
 
     override suspend fun execute(project: Project) {
-        LOG.info("EJSNG: startup activity chay cho project '${project.name}'")
+        LOG.info("EJSNG: startup activity running for project '${project.name}'")
         runCatching {
             val manager = LanguageServerManager.getInstance(project)
             manager.start(
@@ -31,15 +32,15 @@ class EjsNgStartupActivity : ProjectActivity {
                     .setForceStart(true)
                     .setWillEnable(true),
             )
-            LOG.info("EJSNG: da yeu cau start '$SERVER_ID', trang thai=${manager.getServerStatus(SERVER_ID)}")
+            LOG.info("EJSNG: requested start of '$SERVER_ID', status=${manager.getServerStatus(SERVER_ID)}")
         }.onFailure {
-            // Khong lam hong viec mo project chi vi server khong len duoc.
-            LOG.warn("EJSNG: khong khoi dong duoc language server '$SERVER_ID'", it)
+            // Don't break project opening just because the server failed to start.
+            LOG.warn("EJSNG: failed to start language server '$SERVER_ID'", it)
         }
     }
 
     companion object {
-        /** Phai trung voi thuoc tinh id cua the <server> trong plugin.xml. */
+        /** Must match the id attribute of the <server> tag in plugin.xml. */
         const val SERVER_ID = "ejsng"
 
         private val LOG = logger<EjsNgStartupActivity>()

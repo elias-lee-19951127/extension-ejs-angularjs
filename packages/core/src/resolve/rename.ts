@@ -5,24 +5,26 @@ import { extractJs, findFunctionFor, scopeParamName } from '../extract/js';
 import { resolveBinding } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 
-/** Mot lan truy cap `$scope.<ten>` — span la cua RIENG ten property. */
+/** One access to `$scope.<name>` — the span covers ONLY the property name. */
 export interface ScopeAccess {
   name: string;
   span: Span;
 }
 
 /**
- * Moi lan truy cap `$scope.<ten>` trong than mot khai bao, CA DOC LAN GHI.
+ * Every access to `$scope.<name>` inside a declaration's body, BOTH reads and writes.
  *
- * Khac `JsFacts.scopeMembers` — chi giu lan GAN dau tien lam noi khai bao. Rename
- * can moi cho: doi ten `s.init = …` ma bo sot `s.init()` thi code hong.
+ * Unlike `JsFacts.scopeMembers` — which keeps only the FIRST assignment as the
+ * declaration site. Rename needs every site: renaming `s.init = …` while missing
+ * `s.init()` breaks the code.
  *
- * Doi tuong phai la DUNG tham so $scope cua khai bao nay, hoac mot bien bi danh khai
- * bao thang tu no (`var vm = $scope;`). Mot ham long co tham so trung ten
- * (`function (s) {…}`) la bien khac — che bong — khong dong toi.
+ * The object must be EXACTLY the $scope parameter of this declaration, or a variable
+ * assigned straight from it (`var vm = $scope;`). A nested function whose parameter
+ * happens to share the name (`function (s) {…}`) is a different variable — shadowing —
+ * and is not touched.
  *
- * Nhan ca truy cap bang chuoi viet thang (`s['busy']`): bo sot thi JS van ghi ten cu
- * trong khi template da doc ten moi.
+ * Also catches bracket-string access (`s['busy']`): missing it would leave JS still
+ * writing the old name while the template already reads the new one.
  */
 export function scopeAccesses(
   ast: acorn.Program,
@@ -37,7 +39,8 @@ export function scopeAccesses(
   );
   if (!param || !paramNode) return [];
 
-  // Binding tro toi $scope: chinh tham so, va moi `var x = <tham so>` (theo span khai bao).
+  // Bindings that point at $scope: the parameter itself, and every `var x = <parameter>`
+  // (identified by its declaration span).
   const scopeBindings = new Set([paramNode.start]);
   walkLib.simple(fn.body as acorn.Node, {
     VariableDeclarator(node) {
@@ -61,7 +64,8 @@ export function scopeAccesses(
       if (!node.computed && prop.type === 'Identifier') {
         out.push({ name: prop.name, span: { start: prop.start, end: prop.end } });
       } else if (node.computed && prop.type === 'Literal' && typeof prop.value === 'string') {
-        // Chi nhan chuoi viet thang: co escape (`'bu\\x73y'`) thi span khong trung ten.
+        // Only accept a plain string literal: with an escape (`'bu\\x73y'`) the span
+        // wouldn't line up with the name.
         if (prop.raw?.slice(1, -1) !== prop.value) return;
         out.push({ name: prop.value, span: { start: prop.start + 1, end: prop.end - 1 } });
       }
@@ -71,9 +75,10 @@ export function scopeAccesses(
 }
 
 /**
- * Moi khai bao Angular trong file, kem cac lan truy cap $scope cua no va ten cac
- * property duoc GAN trong chinh khai bao do.
- * Trich tu noi dung duoc truyen vao, KHONG tu index — index co the cu hon file.
+ * Every Angular declaration in a file, with its $scope accesses and the names of the
+ * properties ASSIGNED within that declaration.
+ * Extracted from the source passed in, NOT from the index — the index can be stale
+ * relative to the file.
  */
 export function scopeAccessesByDecl(
   source: string,
@@ -89,7 +94,7 @@ export function scopeAccessesByDecl(
   }));
 }
 
-/** Tu khoa JavaScript va literal cua Angular — khong dung lam ten property duoc. */
+/** JavaScript keywords and Angular literals — not usable as a property name. */
 const RESERVED = new Set([
   'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default',
   'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'function',
@@ -98,16 +103,16 @@ const RESERVED = new Set([
   'with', 'yield',
 ]);
 
-/** Ly do ten moi khong dung duoc, hoac null neu hop le. */
+/** Why the new name isn't usable, or null if it's valid. */
 export function newNameProblem(oldName: string, newName: string): string | null {
-  if (newName === oldName) return 'Ten moi trung ten cu';
-  if (newName.startsWith('$')) return "Ten bat dau bang '$' la danh rieng cho AngularJS";
-  if (!/^[A-Za-z_][\w$]*$/.test(newName)) return `'${newName}' khong phai dinh danh hop le`;
-  if (RESERVED.has(newName)) return `'${newName}' la tu khoa`;
+  if (newName === oldName) return 'New name is the same as the old one';
+  if (newName.startsWith('$')) return "A name starting with '$' is reserved for AngularJS";
+  if (!/^[A-Za-z_][\w$]*$/.test(newName)) return `'${newName}' is not a valid identifier`;
+  if (RESERVED.has(newName)) return `'${newName}' is a reserved keyword`;
   return null;
 }
 
-/** So dong (1-based) cua mot offset — cho thong bao xung dot. */
+/** Line number (1-based) of an offset — for conflict messages. */
 export function lineOf(source: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < source.length; i++) if (source.charCodeAt(i) === 10) line++;
@@ -116,7 +121,7 @@ export function lineOf(source: string, offset: number): number {
 
 const JS_FILE = /\.js$/i;
 
-/** So thu muc cha chung (tinh tu goc repo) cua hai duong dan tuong doi. */
+/** Depth of the common parent directory (from repo root) of two relative paths. */
 export function commonDirDepth(a: string, b: string): number {
   const da = a.split('/').slice(0, -1);
   const db = b.split('/').slice(0, -1);
@@ -125,7 +130,7 @@ export function commonDirDepth(a: string, b: string): number {
   return n;
 }
 
-/** Cac file trong `candidates` gan `from` nhat theo thu muc — nhieu file neu hoa. */
+/** Files in `candidates` closest to `from` by directory — several files on a tie. */
 export function nearestFiles(from: string, candidates: string[]): string[] {
   const depth = candidates.map((c) => commonDirDepth(from, c));
   const best = Math.max(...depth);
@@ -133,11 +138,12 @@ export function nearestFiles(from: string, candidates: string[]): string[] {
 }
 
 /**
- * Symbol cung ten nam o nhieu file (controller bi khai bao trung ten o hai nhanh): chi giu ban
- * o thu muc gan `from` nhat. Hoa thi giu nguyen tat ca.
+ * A symbol declared under the same name in multiple files (a controller declared twice,
+ * on two branches): keep only the copy in the directory nearest to `from`. On a tie,
+ * keep all of them.
  *
- * Dung chung boi definition (packages/core/src/resolve/definition.ts) va completion
- * (Workspace.memberCompletions) — hai noi doc cung mot luat "ban gan nhat" nhu rename.
+ * Shared by definition (packages/core/src/resolve/definition.ts) and completion
+ * (Workspace.memberCompletions) — both apply the same "nearest copy" rule as rename.
  */
 export function nearestRows<T extends { path: string }>(from: string, rows: T[]): T[] {
   const paths = [...new Set(rows.map((r) => r.path))];
@@ -147,17 +153,19 @@ export function nearestRows<T extends { path: string }>(from: string, rows: T[])
 }
 
 /**
- * Nhieu dich CUNG LOAI nam o nhieu file: chi giu ban o thu muc gan file dang xem nhat, phan
- * con lai tra ve trong `otherFiles`. Dung cach ghep ma rename da dung (phu luc I.1), nen hai
- * tinh nang tra loi giong nhau.
+ * Multiple targets of the SAME kind live in multiple files: keep only the copy nearest
+ * the file being viewed, and return the rest in `otherFiles`. Uses the same matching
+ * rule rename already uses (Appendix I.1), so the two features answer consistently.
  *
- * Do tren smart-city: 168/244 vi tri trong template tra ve 2 dich — deu la controller trung
- * ten o `product/…` va `new-version/fe-be/…` — va luat nay dua ca 168 ve dung 1 dich, tuc la
- * IDE nhay thang thay vi bat danh sach chon.
+ * Measured on smart-city: 168/244 positions in templates returned 2 targets — always a
+ * controller declared under the same name in `product/…` and `new-version/fe-be/…` — and
+ * this rule brings all 168 down to exactly 1 target, i.e. the IDE jumps straight there
+ * instead of popping up a picker.
  *
- * Chi gop khi moi dich CUNG `kind`: jsDefinition co chu y tra ve ca khai bao Angular lan tham
- * so ham cung ten (phu luc H.3) — hai thu khac loai, khong duoc bo ban nao. Hoa nhau (template
- * nam cach deu ca hai ban) thi giu nguyen ca hai: khong phan dinh duoc thi khong duoc doan.
+ * Only merges when every target is of the SAME `kind`: jsDefinition deliberately returns
+ * both an Angular declaration and a same-named function parameter (Appendix H.3) — two
+ * different kinds, and neither should be dropped. On a tie (the template sits equidistant
+ * from both copies), keep both: when it can't be told apart, don't guess.
  */
 export function preferNearest<
   R extends { targets: Array<{ path: string; kind: string }>; otherFiles?: string[] },
@@ -177,20 +185,22 @@ export function preferNearest<
 export interface RenameScope {
   js: string[];
   templates: string[];
-  /** File khai bao controller cung ten nhung co tinh KHONG sua. */
+  /** Files that declare the same-named controller but are intentionally NOT touched. */
   untouched: string[];
-  /** Thong bao cho nguoi dung khi controller bi khai bao o nhieu file. */
+  /** Note to the user when the controller is declared in multiple files. */
   note?: string;
 }
 
 /**
- * Pham vi doi ten khi mot controller bi khai bao o NHIEU file .js (ban sao, phien
- * ban cu/moi…). Lua chon cua nguoi dung (docs/kien-truc.md phu luc I): ghep moi
- * template voi file .js gan no nhat theo thu muc, roi chi doi NHOM chua noi bat dau.
+ * Rename scope when a controller is declared in MULTIPLE .js files (a duplicate, an
+ * old/new version…). Chosen behavior (docs/kien-truc.md Appendix I): pair each template
+ * with its directory-nearest .js file, then rename only the GROUP containing the
+ * starting point.
  *
- * Template nam giua hai ban (hoa khoang cach) keo ca hai ban vao nhom — chi doi mot
- * ben thi template do hong voi ben kia. Lan dan toi khi on dinh; keo het thi doi het
- * va bao cho nguoi dung.
+ * A template sitting between two copies (tied distance) pulls both copies into the
+ * group — renaming only one would break that template against the other. This grows
+ * iteratively until stable; if it pulls in everything, everything gets renamed and the
+ * user is told.
  */
 export function renameScope(
   from: string,
@@ -222,25 +232,28 @@ export function renameScope(
     templates: templates.filter((t) => nearest.get(t)!.some((f) => selected.has(f))),
     untouched,
     note: untouched.length
-      ? `'${controller}' duoc khai bao o ${declFiles.length} file — chi doi ban gan nhat, giu nguyen ${untouched.join(', ')}`
-      : `'${controller}' duoc khai bao o ${declFiles.length} file va khong phan dinh duoc ban nao gan hon — da doi ca ${declFiles.length}`,
+      ? `'${controller}' is declared in ${declFiles.length} files — renaming only the nearest copy, leaving ${untouched.join(', ')} unchanged`
+      : `'${controller}' is declared in ${declFiles.length} files and none could be told apart as nearer — renamed all ${declFiles.length}`,
   };
 }
 
 /**
- * Vi tri chua `name` nam trong ngu canh TRONG GIONG Angular — gia tri cua thuoc tinh
- * co `ng-` trong ten, hoac ben trong {{ }} — nhung KHONG nam trong vung `parsed`
- * (vung extractor da hieu: bieu thuc, cho khai bao bien cuc bo…). Cho da parse duoc ma
- * khong duoc doi (controller khac, bien ng-repeat, khoa object) khong phai cho sot.
+ * A position containing `name` sitting in Angular-LOOKING context — the value of an
+ * attribute with `ng-` in its name, or inside {{ }} — but NOT inside a `parsed` region
+ * (a region the extractor understood: an expression, a local-variable declaration site…).
+ * A position the extractor parsed but intentionally didn't rename (a different
+ * controller, an ng-repeat variable, an object key) doesn't count as a miss.
  *
- * Day la cho extractor KHONG trich duoc. Rename khong sua chung (khong doan bua) ma
- * chi bao de nguoi dung kiem tay. Nguyen nhan da gap that (smart-city/new-version):
- * thut le bang U+2003 — trinh duyet khong coi la khoang trang trong the, nen
- * `␣␣data-ng-disabled` khong phai directive, va lexer Angular tu choi `{{` chua no.
+ * This is where the extractor could NOT extract anything. Rename doesn't touch these
+ * (no guessing) — it only flags them for the user to check by hand. A real cause seen in
+ * practice (smart-city/new-version): indentation using U+2003 — the browser doesn't treat
+ * it as whitespace inside a tag, so `␣␣data-ng-disabled` isn't recognized as a directive,
+ * and the Angular lexer rejects the `{{` that contains it.
  */
 export function unparsedOccurrences(source: string, name: string, parsed: Span[]): number[] {
   const regions: Span[] = [];
-  // `\s` cua JS khop ca U+2003, nen van tach dung ten thuoc tinh du thut le bang ky tu la.
+  // JS's `\s` also matches U+2003, so the attribute name still splits correctly even
+  // with the odd indentation character.
   for (const m of source.matchAll(/([^\s=<>"'/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
     if (!/(?:^|[-:_])ng[-:_]/i.test(m[1]!)) continue;
     const value = m[2] ?? m[3] ?? '';
@@ -258,7 +271,7 @@ export function unparsedOccurrences(source: string, name: string, parsed: Span[]
     if (parsed.some((p) => at >= p.start && at < p.end)) continue;
     const region = regions.find((r) => at >= r.start && at < r.end);
     if (!region) continue;
-    // `'busy'` trong bieu thuc la CHUOI, khong phai tham chieu.
+    // `'busy'` inside an expression is a STRING, not a reference.
     const before = source[at - 1];
     if (at !== region.start && (before === "'" || before === '"')) continue;
     out.push(at);

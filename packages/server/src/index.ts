@@ -29,8 +29,9 @@ const documents = new TextDocuments(TextDocument);
 let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
 /**
- * Client cho dang ky watcher dong (workspace.didChangeWatchedFiles.dynamicRegistration)?
- * `relative`: client hieu RelativePattern. null = khong dang ky (LSP 3.17).
+ * Does the client support dynamic watcher registration
+ * (workspace.didChangeWatchedFiles.dynamicRegistration)?
+ * `relative`: does the client understand RelativePattern. null = not registered (LSP 3.17).
  */
 let fileWatch: { relative: boolean } | null = null;
 
@@ -42,7 +43,7 @@ connection.onInitialize((params): InitializeResult => {
     diagnostics?: { enabled?: boolean };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
-  // LSP 3.17: RenameOptions chi duoc gui khi client khai bao prepareSupport.
+  // LSP 3.17: RenameOptions is only sent when the client declares prepareSupport.
   const prepareSupport = params.capabilities.textDocument?.rename?.prepareSupport === true;
   const watched = params.capabilities.workspace?.didChangeWatchedFiles;
   fileWatch =
@@ -67,17 +68,17 @@ connection.onInitialize((params): InitializeResult => {
 connection.onInitialized(() => {
   void connection.client.register(DidChangeConfigurationNotification.type, undefined);
   if (!workspace) return;
-  // Dang ky TRUOC khi index: file doi trong luc dang index van duoc bao, xu ly ngay sau.
+  // Register BEFORE indexing: a file changed while indexing is still reported and handled right after.
   if (fileWatch) {
     void connection.client.register(DidChangeWatchedFilesNotification.type, {
       watchers: fileWatchers(workspace, fileWatch.relative),
     });
   }
-  // Index nen: server tra loi duoc ngay o che do suy giam trong luc dang chay.
-  connection.console.log('EJS/NG: bat dau danh index...');
+  // Background indexing: the server can already answer in degraded mode while it runs.
+  connection.console.log('EJS/NG: starting to index...');
   const r = workspace.index();
   connection.console.log(
-    `EJS/NG: xong — ${r.indexed} file moi, ${r.skipped} khong doi, ${r.linkedRefs} ref noi them, ${r.ms}ms`,
+    `EJS/NG: done — ${r.indexed} new file(s), ${r.skipped} unchanged, ${r.linkedRefs} additional ref(s) linked, ${r.ms}ms`,
   );
 });
 
@@ -89,17 +90,18 @@ function rel(uri: string): string | null {
 }
 
 /**
- * Watcher dang ky voi client.
+ * Watchers registered with the client.
  *
- * LSP4IJ (IntelliJ) chi gui workspace/didChangeWatchedFiles cho duong dan khop watcher do server
- * dang ky — khong dang ky thi khong co su kien nao. VSCode van gui them theo
- * `synchronize.fileEvents` cua client; su kien lap thi refreshFiles bo qua.
+ * LSP4IJ (IntelliJ) only sends workspace/didChangeWatchedFiles for paths matching a watcher the
+ * server registered — without registration, no events at all. VSCode also sends extra events per
+ * the client's `synchronize.fileEvents`; duplicate events are ignored by refreshFiles.
  *
- * - Change: theo `ws.changeWatchPatterns()` — chi file duoc index moi can. Server khong tu doc
- *   `config.include` roi doan ngu nghia '!…' cua no; Workspace tra sang di.
- * - Create/Delete: MOI duong dan. Ca thu muc duoc tao/xoa/doi ten (git checkout them hay bot ca
- *   thu muc) thi client chi bao MOT su kien cho chinh thu muc, ma ten thu muc khong khop glob
- *   theo duoi file.
+ * - Change: follows `ws.changeWatchPatterns()` — only files that are actually indexed matter.
+ *   The server does not read `config.include` itself and try to guess the semantics of its '!…'
+ *   patterns; Workspace hands that back already resolved.
+ * - Create/Delete: EVERY path. A directory created/removed/renamed (e.g. `git checkout` adding or
+ *   removing a whole directory) is reported by the client as a single event for the directory
+ *   itself, whose name does not match a file-extension glob.
  */
 function fileWatchers(ws: Workspace, relativePatterns: boolean): FileSystemWatcher[] {
   const baseUri = URI.file(ws.config.root).toString();
@@ -114,7 +116,7 @@ function offsetOf(doc: TextDocument, position: { line: number; character: number
   return doc.offsetAt(position);
 }
 
-/** Doi span (offset) sang Range cua LSP, dua tren noi dung file dich. */
+/** Convert a span (offset) to an LSP Range, based on the target file's content. */
 function toRange(source: string, span: Span): Range {
   const posOf = (off: number) => {
     const before = source.slice(0, off);
@@ -136,11 +138,11 @@ function toLocation(relPath: string, span: Span): Location | null {
 }
 
 /**
- * Duong dan trong hover viet thanh link mo duoc: `[path:dong](file://…#L<dong>)`.
+ * Paths in the hover are written as openable links: `[path:line](file://…#L<line>)`.
  *
- * Hover la cho DUY NHAT con chi ra ban o thu muc xa hon (`otherFiles`) sau khi go-to-definition da
- * loc bot, nen no phai bam toi duoc. VSCode mo dung dong; LSP4IJ dung markdown sang HTML nen con
- * phai kiem trong IDE that.
+ * Hover is the ONLY place that points to matches in a farther directory (`otherFiles`) after
+ * go-to-definition has filtered them out, so it must be reachable by click. VSCode opens the
+ * exact line; LSP4IJ converts markdown to HTML, so it still needs verifying in a real IDE.
  */
 function fileLink(relPath: string, span?: Span): string {
   if (!workspace) return `\`${relPath}\``;
@@ -164,7 +166,7 @@ documents.onDidSave((e) => {
   const r = rel(e.document.uri);
   if (!workspace || !r) return;
   workspace.flushOverlay(r);
-  // Sua mot controller khong can parse lai template nao — chi noi lai (Layer 4).
+  // Editing one controller doesn't require reparsing any template — just relink (Layer 4).
   workspace.link();
 });
 
@@ -175,8 +177,8 @@ documents.onDidClose((e) => {
 });
 
 /**
- * File doi ngoai editor: git pull, checkout, tool khac. Chi cap nhat lop "dia" cua index — buffer
- * dang mo khong bi dung toi (xem Workspace.refreshFiles).
+ * File changed outside the editor: git pull, checkout, another tool. Only the "on disk" layer of
+ * the index is refreshed here — open buffers are left untouched (see Workspace.refreshFiles).
  */
 connection.onDidChangeWatchedFiles(({ changes }) => {
   if (!workspace) return;
@@ -184,8 +186,8 @@ connection.onDidChangeWatchedFiles(({ changes }) => {
   const r = workspace.refreshFiles(paths);
   if (r.indexed || r.removed) {
     connection.console.log(
-      `EJS/NG: file doi ngoai editor — ${r.indexed} file doc lai, ${r.removed} file go` +
-        `${r.rescanned ? ' (co file moi: quet lai)' : ''}, ${r.ms}ms`,
+      `EJS/NG: file(s) changed outside the editor — ${r.indexed} file(s) reread, ${r.removed} file(s) removed` +
+        `${r.rescanned ? ' (new file(s) found: rescanning)' : ''}, ${r.ms}ms`,
     );
   }
 });
@@ -227,13 +229,14 @@ connection.onHover((params) => {
   if (def.targets.length) {
     lines.push(`**${def.query}**`);
     for (const t of def.targets) {
-      const conf = t.confidence === 'high' ? '' : ` _(do tin cay: ${t.confidence})_`;
+      const conf = t.confidence === 'high' ? '' : ` _(confidence: ${t.confidence})_`;
       lines.push(`- ${t.detail} — ${fileLink(t.path, t.span)}${conf}`);
     }
-    // Ban o thu muc xa hon da bi loai khoi ket qua nhay — o day van phai toi duoc.
+    // Matches in a farther directory were already excluded from the jump result — they must
+    // still be reachable here.
     if (def.otherFiles?.length) {
       const links = def.otherFiles.map((p) => fileLink(p)).join(', ');
-      lines.push(`- _con ${def.otherFiles.length} ban o thu muc xa hon:_ ${links}`);
+      lines.push(`- _${def.otherFiles.length} more match(es) in a farther directory:_ ${links}`);
     }
   } else if (def.reason) {
     lines.push(`_${def.reason}_`);
@@ -248,7 +251,7 @@ connection.onHover((params) => {
         if (f.kind === 'controller') return `controller \`${f.controllerName}\``;
         return `${f.kind} {${locals.join(', ')}}`;
       });
-    if (desc.length) lines.push('', `Chuoi scope: ${desc.join(' ← ')}`);
+    if (desc.length) lines.push('', `Scope chain: ${desc.join(' ← ')}`);
   }
 
   return lines.length ? { contents: { kind: 'markdown' as const, value: lines.join('\n') } } : null;
@@ -267,9 +270,9 @@ connection.onCompletion((params): CompletionItem[] => {
 });
 
 /**
- * Rename bi tu choi thi tra ResponseError kem ly do, KHONG tra null: voi null, IDE chi
- * bao chung chung "khong doi ten duoc" va nguoi dung khong biet vi sao (bien cuc bo,
- * trung ten, bi che bong…).
+ * A refused rename returns a ResponseError with a reason, NOT null: with null, the IDE only shows
+ * a generic "cannot rename" message and the user has no idea why (local variable, name collision,
+ * shadowing…).
  */
 connection.onPrepareRename((params) => {
   const doc = documents.get(params.textDocument.uri);
@@ -292,8 +295,9 @@ connection.onRenameRequest((params) => {
   const changes: Record<string, TextEdit[]> = {};
   for (const e of result.edits) {
     const loc = toLocation(e.path, e.span);
-    // Thieu mot file la doi ten do dang — tu choi ca lan thay vi tra edit thieu.
-    if (!loc) return new ResponseError(LSPErrorCodes.RequestFailed, `Khong doc duoc ${e.path}`);
+    // Missing a file makes the whole rename incomplete — refuse the whole batch rather than
+    // return partial edits.
+    if (!loc) return new ResponseError(LSPErrorCodes.RequestFailed, `Could not read ${e.path}`);
     (changes[loc.uri] ??= []).push({ range: loc.range, newText: e.newText });
   }
   if (result.note) void connection.window.showInformationMessage(`EJS/NG: ${result.note}`);
@@ -326,11 +330,11 @@ connection.onDocumentSymbol((params) => {
 });
 
 /**
- * Chan doan.
+ * Diagnostics.
  *
- * MAC DINH TAT (docs/kien-truc.md muc 10): tren codebase cu, moi bieu thuc khong
- * resolve duoc se thanh mot canh bao, va vai nghin canh bao vo nghia se khien
- * nguoi dung tat extension trong ngay dau. Chi bat khi nguoi dung chu dong chon.
+ * OFF BY DEFAULT (docs/kien-truc.md section 10): on an older codebase, every expression that
+ * fails to resolve becomes a warning, and a few thousand meaningless warnings will get the user
+ * to disable the extension on day one. Only enable when the user opts in explicitly.
  */
 async function publishDiagnostics(doc: TextDocument): Promise<void> {
   const r = rel(doc.uri);
@@ -352,7 +356,7 @@ async function publishDiagnostics(doc: TextDocument): Promise<void> {
     for (const expr of facts.expressions) {
       for (const root of expr.roots) {
         const def = workspace.definitionAt(r, root.span.start);
-        // `builtin` = bien Angular tu bom vao: khong co dinh nghia nhung khong phai loi.
+        // `builtin` = an Angular variable injected automatically: no definition but not an error.
         if (def.targets.length || def.builtin || !def.reason) continue;
         diagnostics.push({
           severity: DiagnosticSeverity.Information,

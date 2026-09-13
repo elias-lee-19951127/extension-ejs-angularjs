@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 /**
- * Harness kiem thu: dinh vi bang CHUOI thay vi bang so dong/cot.
+ * Test harness: locate by STRING instead of by line/column numbers.
  *
- * Ly do ton tai: khi kiem thu bang tay, dem cot rat de sai — trong qua trinh
- * phat trien da vai lan bao "khong tim thay" chi vi tro nham vao `id="kbm-file-input"`
- * thay vi thuoc tinh `kbm-file`, hoac tro vao giua `data-ng-class=` thay vi vao
- * bieu thuc. Sai o cho kiem thu nguy hiem hon sai o code: no lam ta ket luan nham
- * ve san pham.
+ * Reason for existing: when testing by hand, counting columns is very easy
+ * to get wrong — during development there were several "not found" false
+ * alarms just because the cursor landed on `id="kbm-file-input"` instead of
+ * the `kbm-file` attribute, or in the middle of `data-ng-class=` instead of
+ * inside the expression. A mistake in the test is more dangerous than a
+ * mistake in the code: it leads to a wrong conclusion about the product.
  *
- * Cach dung:
+ * Usage:
  *   ejsng-probe <file> <needle> [--nth N] [--offset K] [--refs] --root <path>
  *
- *   <needle>   chuoi can tim trong file, vi du "section.enabled"
- *   --nth N    lay lan xuat hien thu N (mac dinh 1)
- *   --offset K dich K ky tu tu dau chuoi tim duoc — de tro vao giua chuoi,
- *              vi du "section.id" voi --offset 8 se tro vao chu 'id'
- *   --refs     chay find-references thay vi go-to-definition
- *   --rename T xem truoc rename thanh T (KHONG ghi file)
+ *   <needle>   the string to find in the file, e.g. "section.enabled"
+ *   --nth N    use the Nth occurrence found (default 1)
+ *   --offset K shift K characters from the start of the match — to land in
+ *              the middle of a string, e.g. "section.id" with --offset 8
+ *              lands on the letter 'id'
+ *   --refs     run find-references instead of go-to-definition
+ *   --rename T preview a rename to T (does NOT write files)
  */
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -60,7 +62,7 @@ function parseArgs(argv: string[]): Args {
   args.file = positional[0] ?? '';
   args.needle = positional[1] ?? '';
   if (!args.file || !args.needle) {
-    console.error('Dung: ejsng-probe <file> <needle> [--nth N] [--offset K] [--refs] --root <path>');
+    console.error('Usage: ejsng-probe <file> <needle> [--nth N] [--offset K] [--refs] --root <path>');
     process.exit(2);
   }
   return args;
@@ -76,12 +78,12 @@ function main(): void {
   const abs = resolvePath(args.file);
   const source = readFileSync(abs, 'utf8');
 
-  // Tim lan xuat hien thu nth
+  // Find the nth occurrence
   let idx = -1;
   for (let n = 0; n < args.nth; n++) {
     idx = source.indexOf(args.needle, idx + 1);
     if (idx === -1) {
-      console.error(`Khong tim thay lan thu ${args.nth} cua ${JSON.stringify(args.needle)}`);
+      console.error(`Could not find occurrence #${args.nth} of ${JSON.stringify(args.needle)}`);
       process.exit(1);
     }
   }
@@ -95,21 +97,21 @@ function main(): void {
   const ws = new Workspace(cfg);
   const rel = ws.toRelative(abs);
 
-  // In ra chinh xac dang tro vao ky tu nao — de doc ket qua khong phai doan.
+  // Print exactly which character the cursor lands on — so the result can be read, not guessed.
   const around = source.slice(Math.max(0, offset - 22), offset);
   const at = source.slice(offset, offset + 18).split('\n')[0];
   console.log(`${rel}:${line}:${col}  …${around}[${at}`);
 
   if (args.rename) {
-    ws.index(); // rename can fact moi nhat
+    ws.index(); // rename needs the latest facts
     const r = ws.renameAt(rel, offset, args.rename);
     if (r.reason) {
-      console.log(`  ✗ KHONG DOI TEN: ${r.reason}`);
+      console.log(`  ✗ RENAME REFUSED: ${r.reason}`);
       process.exitCode = 1;
     } else {
       const perFile = new Map<string, number>();
       for (const e of r.edits) perFile.set(e.path, (perFile.get(e.path) ?? 0) + 1);
-      console.log(`  rename '${r.query}' -> '${args.rename}': ${r.edits.length} cho (xem truoc, KHONG ghi file)`);
+      console.log(`  rename '${r.query}' -> '${args.rename}': ${r.edits.length} location(s) (preview, does NOT write files)`);
       for (const [path, n] of perFile) console.log(`    ${String(n).padStart(4)}  ${path}`);
       if (r.note) console.log(`  ⓘ  ${r.note.split('\n').join('\n  ⓘ  ')}`);
     }
@@ -121,14 +123,14 @@ function main(): void {
       const lc = lineColOf(src, l.span.start);
       console.log(`    ${l.path}:${lc.line}:${lc.col} [${l.axis}]`);
     }
-    if (r.locations.length > 12) console.log(`    … con ${r.locations.length - 12} cho nua`);
+    if (r.locations.length > 12) console.log(`    … ${r.locations.length - 12} more`);
   } else {
     const d = ws.definitionAt(rel, offset);
     if (!d.targets.length && d.builtin) {
-      // Dung san (window, $event…): khong co dinh nghia nhung KHONG phai loi.
+      // Builtin (window, $event…): no definition but NOT an error.
       console.log(`  ⓘ  ${d.reason}`);
     } else if (!d.targets.length) {
-      console.log(`  ✗ KHONG RESOLVE: ${d.reason ?? ''} (query='${d.query}')`);
+      console.log(`  ✗ NOT RESOLVED: ${d.reason ?? ''} (query='${d.query}')`);
       process.exitCode = 1;
     } else {
       for (const t of d.targets) {

@@ -10,12 +10,13 @@ import { unwind } from '../ng/ast';
 import { NG_INJECTED_VARS, SCOPE_BUILTINS } from '../ng/normalize';
 
 /**
- * Nhung gi rename orchestration can doc/goi tren Workspace, khong hon.
+ * What rename orchestration needs to read from / call on Workspace, nothing more.
  *
- * Rong hon `FactSource` (packages/core/src/resolve/shape.ts) vi rename dung ca directive
- * resolution (`resolveScopeRefs`, boc `Linker.resolveCandidates`) va can biet template nao
- * dang mo trong editor nhung CHUA duoc index (`openTemplatePaths`) — hai thu Workspace giu
- * kin (`linker`, `overlays`), khong the doc thang tu ben ngoai.
+ * Wider than `FactSource` (packages/core/src/resolve/shape.ts) because rename also needs
+ * directive resolution (`resolveScopeRefs`, wrapping `Linker.resolveCandidates`) and needs
+ * to know which templates are open in the editor but NOT YET indexed (`openTemplatePaths`)
+ * — two things Workspace keeps private (`linker`, `overlays`) and can't be read directly
+ * from outside.
  */
 export interface RenameSource {
   facts(relPath: string): FileFacts | null;
@@ -23,21 +24,21 @@ export interface RenameSource {
   config: Config;
   findSymbols(name: string, container: string | null): SymbolRow[];
   templatePaths(): string[];
-  /** Template dang mo trong editor (overlay) nhung chua co trong index tren dia. */
+  /** Templates open in the editor (overlay) but not yet in the on-disk index. */
   openTemplatePaths(): string[];
-  /** Phan giai directive cho gia tri thuoc tinh Layer 2 chua ro (vd `kbm-file="onPick($file)"`). */
+  /** Resolve a directive for a Layer-2-unresolved attribute value (e.g. `kbm-file="onPick($file)"`). */
   resolveScopeRefs(candidates: AttrCandidate[]): RefInput[];
 }
 
 interface RenameEdits {
   edits: RenameEdit[];
-  /** Ly do phai tu choi ca lan doi ten, kem vi tri. */
+  /** Reason the whole rename must be refused, with its location. */
   conflicts: string[];
-  /** Khong chan doi ten, nhung nguoi dung can biet (cho con sot phai kiem tay). */
+  /** Doesn't block the rename, but the user should know (a gap to check by hand). */
   warnings: string[];
 }
 
-/** Doi ten mot property tren $scope, dong bo qua ca JS lan template. */
+/** Rename a property on $scope, synchronized across both JS and templates. */
 export function renameAt(deps: RenameSource, relPath: string, offset: number, newName: string): RenameResult {
   const target = renameTargetAt(deps, relPath, offset);
   if ('reason' in target) return { query: '', edits: [], untouched: [], reason: target.reason };
@@ -53,11 +54,11 @@ export function renameAt(deps: RenameSource, relPath: string, offset: number, ne
   const scope = renameScope(relPath, declFiles, templatesUsing(deps, controller), controller);
 
   const js = jsRenameEdits(deps, scope.js, controller, name, newName);
-  // Kiem tren DUNG cac file se sua: ban sao khac gan property khong cuu duoc ban nay
-  // neu o day no chi duoc doc (ke thua tu scope cha).
+  // Check against the EXACT files being changed: another copy assigning the property
+  // doesn't save this one if here it's only ever read (inherited from a parent scope).
   if (!js.assigned) {
     return refuse(
-      `Khong tim thay lan gan '${name}' tren scope cua '${controller}' trong ${scope.js.join(', ')} — co the ke thua tu scope cha`,
+      `Could not find an assignment to '${name}' on the scope of '${controller}' in ${scope.js.join(', ')} — it may be inherited from a parent scope`,
     );
   }
   const tpl = templateRenameEdits(deps, scope.templates, controller, name, newName);
@@ -74,8 +75,8 @@ export function renameAt(deps: RenameSource, relPath: string, offset: number, ne
 }
 
 /**
- * Buoc hoi truoc cua rename (LSP textDocument/prepareRename): con tro co nam tren
- * thu doi ten duoc khong, va ten hien tai de IDE dien san vao o nhap.
+ * The pre-check step of rename (LSP textDocument/prepareRename): is the cursor on
+ * something renameable, and what's its current name so the IDE can pre-fill the input.
  */
 export function prepareRenameAt(deps: RenameSource, relPath: string, offset: number): PrepareRenameResult {
   const target = renameTargetAt(deps, relPath, offset);
@@ -83,27 +84,28 @@ export function prepareRenameAt(deps: RenameSource, relPath: string, offset: num
   return { span: target.span, placeholder: target.name };
 }
 
-/** Property tren $scope nam duoi con tro, kem controller chua no. */
+/** The property on $scope under the cursor, with the controller it belongs to. */
 function renameTargetAt(
   deps: RenameSource,
   relPath: string,
   offset: number,
 ): { name: string; controller: string; span: Span } | { reason: string } {
   const source = deps.source(relPath);
-  if (source === null) return { reason: 'Khong doc duoc file' };
+  if (source === null) return { reason: 'Could not read the file' };
 
   if (JS_EXT.test(relPath)) {
     for (const { decl, accesses, assigned } of scopeAccessesByDecl(source, deps.config)) {
       const hit = accesses.find((a) => inSpan(a.span, offset));
       if (!hit) continue;
       if (hit.name.startsWith('$')) {
-        return { reason: `'${hit.name}' la thanh phan dung san cua $scope` };
+        return { reason: `'${hit.name}' is a built-in member of $scope` };
       }
-      // Chi doc ma khong gan o dau: co the la property cua scope CHA. Doi ten o day
-      // ma khong doi o noi gan that thi code hong — tu choi.
+      // Read but never assigned anywhere: might be a property of a PARENT scope.
+      // Renaming here without renaming where it's actually assigned would break the code
+      // — refuse.
       if (!assigned.has(hit.name) && !deps.findSymbols(hit.name, decl.name).length) {
         return {
-          reason: `Khong tim thay lan gan '${hit.name}' tren scope cua '${decl.name}' — co the ke thua tu scope cha`,
+          reason: `Could not find an assignment to '${hit.name}' on the scope of '${decl.name}' — it may be inherited from a parent scope`,
         };
       }
       return { name: hit.name, controller: decl.name, span: hit.span };
@@ -111,13 +113,14 @@ function renameTargetAt(
   } else if (TEMPLATE_EXT.test(relPath)) {
     return templateRenameTarget(deps, extractTemplate(source, deps.config), offset);
   }
-  return { reason: 'Chi doi ten duoc property tren $scope (vi du $scope.busy)' };
+  return { reason: 'Only a property on $scope can be renamed (e.g. $scope.busy)' };
 }
 
 /**
- * Trong template chi doi ten duoc DINH DANH GOC tro toi $scope cua controller bao
- * quanh. Bien cuc bo (ng-repeat), bien dung san ($event), controllerAs va property
- * long nhau (`busy.search`) deu bi tu choi kem ly do, khong doan.
+ * In a template, only the ROOT identifier pointing at the $scope of the enclosing
+ * controller can be renamed. A local variable (ng-repeat), a built-in variable ($event),
+ * controllerAs, and a nested property (`busy.search`) are all refused with a reason,
+ * never guessed.
  */
 function templateRenameTarget(
   deps: RenameSource,
@@ -127,28 +130,28 @@ function templateRenameTarget(
   const hit = expressionAt(facts, offset);
   if (hit) {
     const { root } = unwind(hit.node);
-    if (!root) return { reason: 'Khong xac dinh duoc dinh danh' };
+    if (!root) return { reason: 'Could not determine the identifier' };
     if (!inSpan(root.span, offset)) {
-      return { reason: 'Chua ho tro doi ten property long nhau — dat con tro vao ten goc' };
+      return { reason: 'Renaming a nested property is not supported yet — place the cursor on the root name' };
     }
     const chain = hit.expr.scopeChain;
     if (findLocal(root.name, chain)) {
-      return { reason: `'${root.name}' la bien cuc bo cua template, khong phai property tren $scope` };
+      return { reason: `'${root.name}' is a local variable of the template, not a property on $scope` };
     }
     if (NG_INJECTED_VARS.includes(root.name) || SCOPE_BUILTINS.includes(root.name)) {
-      return { reason: `'${root.name}' la bien dung san cua AngularJS` };
+      return { reason: `'${root.name}' is a built-in variable of AngularJS` };
     }
-    if (aliasOf(chain) === root.name) return { reason: 'Chua ho tro doi ten qua controllerAs' };
+    if (aliasOf(chain) === root.name) return { reason: 'Renaming through controllerAs is not supported yet' };
     return scopeTarget(deps, root.name, controllerOf(chain), root.span);
   }
 
-  // Gia tri thuoc tinh do Linker phan giai: `pick-file="onPick($file)"`.
+  // An attribute value resolved by the Linker: `pick-file="onPick($file)"`.
   for (const cand of facts.attrCandidates) {
     if (!inSpan(cand.valueSpan, offset)) continue;
     const ref = deps.resolveScopeRefs([cand]).find((r) => r.axis === 'ng-scope' && inSpan(r.span, offset));
     if (ref) return scopeTarget(deps, ref.name, ref.container, ref.span);
   }
-  return { reason: 'Vi tri khong nam tren property nao cua $scope' };
+  return { reason: 'This position is not on any property of $scope' };
 }
 
 function scopeTarget(
@@ -157,14 +160,14 @@ function scopeTarget(
   controller: string | null,
   span: Span,
 ): { name: string; controller: string; span: Span } | { reason: string } {
-  if (!controller) return { reason: 'Khong tim thay ng-controller bao quanh' };
+  if (!controller) return { reason: 'No enclosing ng-controller found' };
   if (!deps.findSymbols(name, controller).length) {
-    return { reason: `Khong tim thay '${name}' tren scope cua '${controller}'` };
+    return { reason: `'${name}' not found on the scope of '${controller}'` };
   }
   return { name, controller, span };
 }
 
-/** File .js khai bao mot controller — co the nhieu file neu bi khai bao trung ten. */
+/** The .js file(s) that declare a controller — can be several if declared under the same name more than once. */
 function declarationFiles(deps: RenameSource, controller: string): string[] {
   const rows = deps.findSymbols(controller, null).filter((r) => ANGULAR_DECL_KINDS.has(r.kind));
   return [...new Set(rows.map((r) => r.path))];
@@ -187,7 +190,7 @@ function jsRenameEdits(
       for (const a of accesses) {
         if (a.name === newName) {
           out.conflicts.push(
-            `'${newName}' da co tren scope cua '${controller}' (${path}:${lineOf(source, a.span.start)})`,
+            `'${newName}' already exists on the scope of '${controller}' (${path}:${lineOf(source, a.span.start)})`,
           );
         }
         if (a.name === oldName) out.edits.push({ path, span: a.span, newText: newName });
@@ -197,7 +200,7 @@ function jsRenameEdits(
   return out;
 }
 
-/** Template tu khai bao ng-controller X — chi o do moi co ref toi $scope cua X. */
+/** Templates declaring ng-controller X — only there can a ref to X's $scope exist. */
 function templatesUsing(deps: RenameSource, controller: string): string[] {
   const paths = new Set([...deps.templatePaths(), ...deps.openTemplatePaths()]);
   return [...paths].filter((p) => {
@@ -220,8 +223,9 @@ function templateRenameEdits(
     const fresh = extractTemplate(source, deps.config);
     const where = (span: Span) => `${path}:${lineOf(source, span.start)}`;
 
-    // Moi cho dung $scope cua controller nay: goc trong bieu thuc, va goc trong gia tri
-    // thuoc tinh do Linker phan giai. `shadowed`: ten MOI co bi bien cuc bo che tai do.
+    // Every place referencing this controller's $scope: a root inside an expression, and
+    // a root inside an attribute value resolved by the Linker. `shadowed`: the NEW name
+    // would be shadowed by a local variable at that site.
     const sites: Array<{ name: string; span: Span; shadowed: boolean }> = [];
     for (const expr of fresh.expressions) {
       if (controllerOf(expr.scopeChain) !== controller) continue;
@@ -241,23 +245,25 @@ function templateRenameEdits(
     for (const site of sites) {
       if (site.name === newName) {
         out.conflicts.push(
-          `'${newName}' da co tren scope cua '${controller}' — dang duoc dung tai ${where(site.span)}`,
+          `'${newName}' already exists on the scope of '${controller}' — already in use at ${where(site.span)}`,
         );
       }
       if (site.name !== oldName) continue;
       if (site.shadowed) {
-        out.conflicts.push(`'${newName}' se bi bien cuc bo cua template che tai ${where(site.span)}`);
+        out.conflicts.push(`'${newName}' would be shadowed by a local variable of the template at ${where(site.span)}`);
       }
-      // Bat bien: span phai tro dung vao ten cu. Lech la bug Layer 2 — tu choi, khong sua hong.
+      // Invariant: the span must point exactly at the old name. A mismatch is a Layer-2
+      // bug — refuse rather than making a broken edit.
       if (source.slice(site.span.start, site.span.end) !== oldName) {
-        out.conflicts.push(`Span lech tai ${where(site.span)} — khong dam sua, xin bao loi`);
+        out.conflicts.push(`Span mismatch at ${where(site.span)} — refusing to edit, please report this`);
         continue;
       }
       out.edits.push({ path, span: site.span, newText: newName });
     }
 
-    // Vung extractor da hieu. Cho nam trong do ma khong duoc doi (controller khac, bien
-    // cuc bo, khoa object) la co chu y — chi bao nhung cho NGOAI cac vung nay.
+    // The regions the extractor understood. A place inside them that was intentionally
+    // not renamed (a different controller, a local variable, an object key) is not
+    // reported — only places OUTSIDE these regions are.
     const parsed: Span[] = [
       ...fresh.expressions.map((e) => e.span),
       ...fresh.expressions.flatMap((e) => e.scopeChain.flatMap((f) => f.locals.map((l) => l.span))),
@@ -268,9 +274,9 @@ function templateRenameEdits(
       const lines = [...new Set(leftovers.map((o) => lineOf(source, o)))];
       const emSpace = lines.some((l) => source.split('\n')[l - 1]?.includes(' '));
       out.warnings.push(
-        `${leftovers.length} cho chua '${oldName}' khong duoc hieu la bieu thuc Angular nen KHONG doi: ` +
+        `${leftovers.length} occurrence(s) of '${oldName}' were not recognized as an Angular expression and were NOT renamed: ` +
           lines.map((l) => `${path}:${l}`).join(', ') +
-          (emSpace ? ' — dong co ky tu U+2003, trinh duyet khong coi la khoang trang trong the' : ' — kiem tra tay'),
+          (emSpace ? ' — the line contains a U+2003 character, which browsers do not treat as whitespace inside a tag' : ' — please check by hand'),
       );
     }
   }

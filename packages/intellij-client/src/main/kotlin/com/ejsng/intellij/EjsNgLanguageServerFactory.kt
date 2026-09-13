@@ -5,11 +5,11 @@ import com.redhat.devtools.lsp4ij.LanguageServerFactory
 import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
 
 /**
- * Cau noi IntelliJ <-> ejs-ng-language-server.
+ * Bridge between IntelliJ and ejs-ng-language-server.
  *
- * Client o day co MOT nhiem vu: khoi dong server Node va noi stdio.
- * Toan bo logic phan giai nam trong @ejsng/core, dung chung voi VSCode —
- * ly do chinh chon kien truc LSP (docs/kien-truc.md muc 1).
+ * The client here has ONE job: start the Node server and connect over stdio.
+ * All the resolution logic lives in @ejsng/core, shared with VSCode — the main
+ * reason the LSP architecture was chosen (docs/kien-truc.md section 1).
  */
 class EjsNgLanguageServerFactory : LanguageServerFactory {
     override fun createConnectionProvider(project: Project): StreamConnectionProvider =

@@ -10,8 +10,8 @@ import {
 let client: LanguageClient | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  // Server da duoc bundle vao trong extension (xem build.js). Khong duoc tro
-  // ra ngoai thu muc extension: duong dan do khong nam trong goi .vsix.
+  // The server is already bundled into the extension (see build.js). Do not
+  // point outside the extension directory: such a path is not part of the .vsix package.
   const serverModule = context.asAbsolutePath(path.join('dist', 'server.js'));
 
   const serverOptions: ServerOptions = {
