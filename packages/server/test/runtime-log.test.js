@@ -39,7 +39,80 @@ test('parseConsoleApiCalled: joins primitive args and reads location from the to
     line: 5,
     character: 2,
     value: 'total 42',
+    severity: 'log',
   });
+});
+
+test('parseConsoleApiCalled: maps the CDP event type to a simplified severity', () => {
+  const build = (type) => ({
+    type,
+    args: [{ type: 'string', value: 'x' }],
+    stackTrace: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }] },
+  });
+  assert.strictEqual(parseConsoleApiCalled(build('log')).severity, 'log');
+  assert.strictEqual(parseConsoleApiCalled(build('info')).severity, 'log');
+  assert.strictEqual(parseConsoleApiCalled(build('debug')).severity, 'log'); // unknown types fall back to 'log'
+  assert.strictEqual(parseConsoleApiCalled(build('warning')).severity, 'warning');
+  assert.strictEqual(parseConsoleApiCalled(build('error')).severity, 'error');
+  assert.strictEqual(parseConsoleApiCalled(build('assert')).severity, 'error');
+});
+
+test('parseConsoleApiCalled: an object/array arg is formatted from its CDP preview, not just "Object"', () => {
+  const event = {
+    type: 'log',
+    args: [
+      {
+        type: 'object',
+        subtype: 'array',
+        description: 'Array(2)',
+        preview: {
+          subtype: 'array',
+          overflow: false,
+          properties: [
+            { name: '0', type: 'string', value: 'a' },
+            { name: '1', type: 'string', value: 'b' },
+          ],
+        },
+      },
+      {
+        type: 'object',
+        description: 'Object',
+        preview: {
+          overflow: false,
+          properties: [
+            { name: 'name', type: 'string', value: 'phu' },
+            { name: 'role', type: 'string', value: 'guest' },
+          ],
+        },
+      },
+    ],
+    stackTrace: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }] },
+  };
+  assert.strictEqual(parseConsoleApiCalled(event).value, "[a, b] {name: phu, role: guest}");
+});
+
+test('parseConsoleApiCalled: a preview marked overflow gets a trailing ellipsis', () => {
+  const event = {
+    type: 'log',
+    args: [
+      {
+        type: 'object',
+        description: 'Object',
+        preview: { overflow: true, properties: [{ name: 'a', type: 'number', value: '1' }] },
+      },
+    ],
+    stackTrace: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }] },
+  };
+  assert.strictEqual(parseConsoleApiCalled(event).value, '{a: 1, …}');
+});
+
+test('parseConsoleApiCalled: an object arg with no preview falls back to its description', () => {
+  const event = {
+    type: 'log',
+    args: [{ type: 'object', className: 'HTTPServer', description: 'Server' }],
+    stackTrace: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }] },
+  };
+  assert.strictEqual(parseConsoleApiCalled(event).value, 'Server');
 });
 
 test('parseConsoleApiCalled: no stack trace means no usable location, so it returns null', () => {
@@ -59,6 +132,13 @@ test('parseConsoleApiCalled: malformed input is rejected instead of throwing', (
   assert.strictEqual(parseConsoleApiCalled({}), null); // no `args` at all
   assert.strictEqual(parseConsoleApiCalled({ args: 'not an array' }), null);
   assert.strictEqual(parseConsoleApiCalled({ args: [{ type: 'string', value: 'x' }], stackTrace: {} }), null); // stackTrace with no callFrames
+  assert.strictEqual(
+    parseConsoleApiCalled({
+      args: [{ type: 'string', value: 'x' }],
+      stackTrace: { callFrames: [{ url: '/a.js', lineNumber: 0, columnNumber: 0 }] },
+    }),
+    null,
+  ); // no `type` on the event itself
 });
 
 test('parseRuntimeLogMessage: non-JSON frames are rejected instead of throwing', () => {
@@ -76,9 +156,16 @@ test('parseRuntimeLogMessage: a well-formed consoleAPICalled frame parses throug
   const raw = JSON.stringify({
     method: 'Runtime.consoleAPICalled',
     params: {
+      type: 'log',
       args: [{ type: 'string', value: 'hi' }],
       stackTrace: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }] },
     },
   });
-  assert.deepStrictEqual(parseRuntimeLogMessage(raw), { url: '/app.js', line: 0, character: 0, value: 'hi' });
+  assert.deepStrictEqual(parseRuntimeLogMessage(raw), {
+    url: '/app.js',
+    line: 0,
+    character: 0,
+    value: 'hi',
+    severity: 'log',
+  });
 });

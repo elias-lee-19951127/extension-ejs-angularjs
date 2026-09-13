@@ -34,11 +34,15 @@
     "commands": [
       {
         "command": "ejsng.reindex",
-        "title": "EJS/NG: Danh index lai workspace"
+        "title": "EJS/NG: Reindex Workspace"
       },
       {
         "command": "ejsng.showStats",
-        "title": "EJS/NG: Thong ke index"
+        "title": "EJS/NG: Show Index Stats"
+      },
+      {
+        "command": "ejsng.connectRuntime",
+        "title": "EJS/NG: Connect to Runtime"
       }
     ],
     "configuration": {
@@ -86,6 +90,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enables warnings for variables that don't exist on scope. Defaults to OFF to avoid false positives on legacy code."
+        },
+        "ejsng.runtimeLog.inspectorUrl": {
+          "type": "string",
+          "default": "",
+          "description": "WebSocket URL of a Node Inspector Protocol endpoint (e.g. ws://127.0.0.1:9229/<id> from a process started with `node --inspect`) to show console.log/warn/error output inline. Empty disables the feature. Run 'EJS/NG: Connect to Runtime' after setting this."
         }
       }
     }

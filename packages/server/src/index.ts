@@ -410,6 +410,7 @@ connection.onRequest('ejsng/connectRuntime', (params: { url: string }) => {
         uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
         range: toRange(source, { start: offset, end: offset }),
         value: log.value,
+        severity: log.severity,
       });
     },
     (err) => {

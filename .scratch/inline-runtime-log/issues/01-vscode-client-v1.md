@@ -7,15 +7,23 @@ Ticket này hoàn thiện đúng phần đó — không đổi logic server.
 
 **Blocked by:** None — bắt đầu ngay.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Setting `ejsng.runtimeLog.inspectorUrl` khai trong `packages/vscode-client/package.json`
+- [x] Setting `ejsng.runtimeLog.inspectorUrl` khai trong `packages/vscode-client/package.json`
       (mặc định rỗng = tắt tính năng, đúng quyết định #4 trong spec)
-- [ ] Command `EJS/NG: Connect to Runtime` gọi request `ejsng/connectRuntime` với giá trị setting
+- [x] Command `EJS/NG: Connect to Runtime` gọi request `ejsng/connectRuntime` với giá trị setting
       hiện tại — kích hoạt thủ công, không tự động connect/retry (quyết định #7)
-- [ ] Client lắng nghe notification `ejsng/runtimeLog`, vẽ decoration
+- [x] Client lắng nghe notification `ejsng/runtimeLog`, vẽ decoration
       (`TextEditorDecorationType`) ở cuối dòng tương ứng — chỉ giữ giá trị **mới nhất** mỗi dòng,
       đè khi có log mới tới (quyết định #6, không lịch sử)
-- [ ] Status bar item phản ánh trạng thái kết nối (connected / disconnected / error)
-- [ ] Xác minh bằng tay qua Extension Development Host hoặc skill `run` — phần UI client không
-      nằm trong bộ test tự động qua stdio (đúng phạm vi đã chốt lúc TDD seam 1-3)
+- [x] Status bar item phản ánh trạng thái kết nối (connected / disconnected / error)
+- [x] Xác minh bằng tay qua Extension Development Host — người dùng xác nhận connected, thấy log
+      inline đúng dòng, màu theo severity (log/warn/error), object/array hiện chi tiết qua preview
+
+## Comments
+
+Sau khi xác minh thủ công vòng đầu, phát sinh 2 chỉnh sửa nhỏ (không đổi acceptance criteria):
+decoration ban đầu neo theo cột CDP báo về (bị tách giữa `console.log(...)`) — sửa lại neo ở cuối
+dòng; và bổ sung phân loại `severity` (log/warning/error) + màu tương ứng + hiện chi tiết
+object/array qua CDP `preview` (không có trong acceptance criteria gốc nhưng người dùng yêu cầu
+thêm trong lúc xác minh, đã TDD ở seam 2 server-side).

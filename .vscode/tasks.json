@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build vscode-client",
+      "type": "shell",
+      "command": "npm run compile",
+      "options": { "cwd": "${workspaceFolder}/packages/vscode-client" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}

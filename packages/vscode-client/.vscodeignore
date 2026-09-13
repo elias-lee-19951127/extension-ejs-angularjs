@@ -1,5 +1,6 @@
 src/**
 out/**
+test/**
 build.js
 tsconfig.json
 **/*.map

@@ -119,6 +119,7 @@ test('LSP: ejsng/connectRuntime turns a CDP consoleAPICalled event into an ejsng
   assert.strictEqual(runtimeLogs.length, 1);
   const log = runtimeLogs[0];
   assert.strictEqual(log.value, 'hello');
+  assert.strictEqual(log.severity, 'log');
   // Line 1, character 8 in fileContent is the 'l' of 'log' in 'console.log(a);' — offset 21.
   assert.deepStrictEqual(log.range, { start: { line: 1, character: 8 }, end: { line: 1, character: 8 } });
 });
