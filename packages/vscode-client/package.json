@@ -2,13 +2,10 @@
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "phule",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/elias-lee-19951127/extension-ejs-angularjs.git"
-  },
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
