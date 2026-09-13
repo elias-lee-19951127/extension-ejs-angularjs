@@ -95,7 +95,8 @@ function rel(uri: string): string | null {
  * dang ky — khong dang ky thi khong co su kien nao. VSCode van gui them theo
  * `synchronize.fileEvents` cua client; su kien lap thi refreshFiles bo qua.
  *
- * - Change: theo glob `include` (bo mau phu dinh '!…' cua fast-glob), chi file duoc index moi can.
+ * - Change: theo `ws.changeWatchPatterns()` — chi file duoc index moi can. Server khong tu doc
+ *   `config.include` roi doan ngu nghia '!…' cua no; Workspace tra sang di.
  * - Create/Delete: MOI duong dan. Ca thu muc duoc tao/xoa/doi ten (git checkout them hay bot ca
  *   thu muc) thi client chi bao MOT su kien cho chinh thu muc, ma ten thu muc khong khop glob
  *   theo duoi file.
@@ -104,9 +105,7 @@ function fileWatchers(ws: Workspace, relativePatterns: boolean): FileSystemWatch
   const baseUri = URI.file(ws.config.root).toString();
   const glob = (pattern: string) => (relativePatterns ? { baseUri, pattern } : pattern);
   return [
-    ...ws.config.include
-      .filter((p) => !p.startsWith('!'))
-      .map((p) => ({ globPattern: glob(p), kind: WatchKind.Change })),
+    ...ws.changeWatchPatterns().map((p) => ({ globPattern: glob(p), kind: WatchKind.Change })),
     { globPattern: glob('**/*'), kind: WatchKind.Create | WatchKind.Delete },
   ];
 }

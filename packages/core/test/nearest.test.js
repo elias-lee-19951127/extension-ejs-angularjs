@@ -137,3 +137,33 @@ test('detail goi ten doan duong THUC SU toi duoc, khong phai duong dan da hoi', 
   assert.match(d.targets[0].detail, /^row\.a —/, d.targets[0].detail);
   assert.strictEqual(d.targets[0].confidence, 'medium');
 });
+
+// `nearestRows`/`preferNearest` (packages/core/src/resolve/rename.ts) la ham thuan — khong can
+// dung Workspace/index() de kiem luat "ban gan nhat", chi can mang/object gia (phu luc M candidate C).
+
+test('nearestRows: giu ban gan nhat, hoa thi giu ca hai', () => {
+  const rows = [{ path: 'a/x.js' }, { path: 'a/b/y.js' }];
+  assert.deepStrictEqual(C.nearestRows('a/b/from.js', rows), [{ path: 'a/b/y.js' }]);
+  assert.deepStrictEqual(C.nearestRows('c/from.js', rows), rows); // hoa khoang cach -> giu ca hai
+  assert.deepStrictEqual(C.nearestRows('a/b/from.js', [rows[0]]), [rows[0]]); // 1 duong dan -> bo qua luat
+});
+
+test('preferNearest: chi loc khi moi target CUNG kind, otherFiles giu ban bi loai', () => {
+  const cungKind = {
+    targets: [
+      { path: 'a/x.js', kind: 'controller' },
+      { path: 'a/b/y.js', kind: 'controller' },
+    ],
+  };
+  const loc = C.preferNearest('a/b/from.js', cungKind);
+  assert.deepStrictEqual(loc.targets, [{ path: 'a/b/y.js', kind: 'controller' }]);
+  assert.deepStrictEqual(loc.otherFiles, ['a/x.js']);
+
+  const khacKind = {
+    targets: [
+      { path: 'a/x.js', kind: 'param' },
+      { path: 'a/b/y.js', kind: 'declaration' },
+    ],
+  };
+  assert.strictEqual(C.preferNearest('a/b/from.js', khacKind), khacKind); // khac kind -> khong gop
+});

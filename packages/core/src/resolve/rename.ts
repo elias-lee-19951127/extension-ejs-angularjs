@@ -132,6 +132,48 @@ export function nearestFiles(from: string, candidates: string[]): string[] {
   return candidates.filter((_, i) => depth[i] === best);
 }
 
+/**
+ * Symbol cung ten nam o nhieu file (controller bi khai bao trung ten o hai nhanh): chi giu ban
+ * o thu muc gan `from` nhat. Hoa thi giu nguyen tat ca.
+ *
+ * Dung chung boi definition (packages/core/src/resolve/definition.ts) va completion
+ * (Workspace.memberCompletions) — hai noi doc cung mot luat "ban gan nhat" nhu rename.
+ */
+export function nearestRows<T extends { path: string }>(from: string, rows: T[]): T[] {
+  const paths = [...new Set(rows.map((r) => r.path))];
+  if (paths.length < 2) return rows;
+  const nearest = new Set(nearestFiles(from, paths));
+  return rows.filter((r) => nearest.has(r.path));
+}
+
+/**
+ * Nhieu dich CUNG LOAI nam o nhieu file: chi giu ban o thu muc gan file dang xem nhat, phan
+ * con lai tra ve trong `otherFiles`. Dung cach ghep ma rename da dung (phu luc I.1), nen hai
+ * tinh nang tra loi giong nhau.
+ *
+ * Do tren smart-city: 168/244 vi tri trong template tra ve 2 dich — deu la controller trung
+ * ten o `product/…` va `new-version/fe-be/…` — va luat nay dua ca 168 ve dung 1 dich, tuc la
+ * IDE nhay thang thay vi bat danh sach chon.
+ *
+ * Chi gop khi moi dich CUNG `kind`: jsDefinition co chu y tra ve ca khai bao Angular lan tham
+ * so ham cung ten (phu luc H.3) — hai thu khac loai, khong duoc bo ban nao. Hoa nhau (template
+ * nam cach deu ca hai ban) thi giu nguyen ca hai: khong phan dinh duoc thi khong duoc doan.
+ */
+export function preferNearest<
+  R extends { targets: Array<{ path: string; kind: string }>; otherFiles?: string[] },
+>(from: string, result: R): R {
+  const paths = [...new Set(result.targets.map((t) => t.path))];
+  if (paths.length < 2 || new Set(result.targets.map((t) => t.kind)).size > 1) return result;
+
+  const nearest = new Set(nearestFiles(from, paths));
+  if (nearest.size === paths.length) return result;
+  return {
+    ...result,
+    targets: result.targets.filter((t) => nearest.has(t.path)),
+    otherFiles: paths.filter((p) => !nearest.has(p)),
+  };
+}
+
 export interface RenameScope {
   js: string[];
   templates: string[];

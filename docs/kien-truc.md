@@ -1572,3 +1572,127 @@ Và một cáo buộc **bị bác bỏ lúc sửa**: bản soát nói cả hai c
 kỹ thì nhánh property trên `$scope` vốn đã dùng `fullPath.slice(0, walked.depth + 1)` — nó gọi đúng
 tên đoạn đường đi tới từ đầu. Chỉ nhánh biến `ng-repeat` mới in cả đường dẫn đã hỏi, nên chỉ sửa một
 chỗ. Soát kỹ thì cũng phải soát lại chính bản soát.
+
+---
+
+# PHỤ LỤC M — Tách definition resolution khỏi Workspace (2026-09-13)
+
+## M.1 Vì sao
+
+`/mattpocock-skills:improve-codebase-architecture` quét kiến trúc, thấy `workspace.ts` phình tới
+1465 dòng — gấp 3 file lớn thứ nhì (`template.ts`/`js.ts`, ~490 dòng mỗi cái). Subagent Explore áp
+**deletion test** cho từng khối trong file: xoá `walkShape`/`shapeOf`/`candidateDefinition` (khi đó
+670-883) khỏi `workspace.ts` thì độ phức tạp **biến mất hẳn** — không dồn sang đâu, vì khối này chỉ
+đọc qua `this.facts()`/`this.store`, không đụng overlay/watcher. Ngược lại, rename orchestration
+(962-1204) xoá đi thì độ phức tạp **kẹt lại**, không tự dồn về `rename.ts` — báo hiệu nó cần state
+riêng của `Workspace`, chưa sẵn sàng tách (để dành cho một vòng sau).
+
+## M.2 Thiết kế (chốt qua `/grilling`)
+
+- **`packages/core/src/resolve/definition.ts`** (449 dòng) — `resolveDefinition(deps, relPath,
+  offset)`: dispatch `templateDefinition`/`jsDefinition`, cùng `candidateDefinition`,
+  `declarationAround`, `symbolTargets`. KHÔNG gồm `preferNearest`/`nearestRows` (lọc "bản gần
+  nhất") — đó vẫn là việc của `Workspace.definitionAt`, gọi sau khi có kết quả thô.
+- **`packages/core/src/resolve/shape.ts`** (65 dòng) — `walkShape`, `shapeOf`, `shapeAtPath`. Tách
+  riêng khỏi definition vì **completion cũng dùng chung** (`Workspace.memberCompletions` gọi
+  `shapeOf`) — nhét vào definition sẽ bắt completion phụ thuộc ngược.
+- **`FactSource`** (định nghĩa trong `shape.ts`) — interface hẹp: `facts()`, `source()`,
+  `findSymbols()`, `moduleAliases`. `Workspace implements FactSource`, tự truyền `this` vào hai
+  module trên thay vì chúng cầm cả class.
+- `inSpan`, `wordAt`, `ANGULAR_DECL_KINDS`, `expressionAt` **ở lại** `workspace.ts` (export) vì
+  dùng chung với `referencesAt`/rename/`completionAt` — `definition.ts` import ngược lại. Đây là
+  một circular import (CommonJS) nhưng an toàn: cả hai bên chỉ gọi nhau bên trong thân hàm, không
+  ở top-level module, nên thứ tự khởi tạo không va nhau. `depthAt`, `isMemberOfScopeObject`,
+  `quotedStringAt` chỉ `jsDefinition`/`templateDefinition` dùng — chuyển hẳn, không import ngược.
+
+Ghi hai thuật ngữ **Definition Resolution** và **Shape Walking** vào `CONTEXT.md` (tạo mới, repo
+trước đó chưa có glossary).
+
+## M.3 Kết quả (candidate A)
+
+`workspace.ts`: 1465 → 1003 dòng. Không đổi hành vi — mọi test cũ chỉ gọi qua `definitionAt`/
+`membersOf` public, không đụng thẳng private method, nên không sửa test nào:
+
+```
+npm test                                                              # 99/99, khong doi
+node packages/cli/dist/index.js sweep --root .../smart-city           # 99.2%, 136 sot, khong doi
+```
+
+Dọn thêm sau khi soát lại: `symbolTargets` bản cũ trong `workspace.ts` là code chết sót lại
+(quên xoá khi tách sang `definition.ts` — không ai gọi nữa, `tsc` không báo vì nó là private
+method trùng tên với hàm export ở file khác, không phải trùng identifier cùng scope).
+
+## M.4 Candidate C — interface riêng cho "ưu tiên bản gần nhất"
+
+`nearestRows`/`preferNearest` hoá ra **đã thuần từ đầu** (không đụng `this` dù khai báo là
+private method) — chỉ cần chuyển hẳn sang `rename.ts`, cạnh `nearestFiles` mà chúng dùng
+chung, không cần interface `FactSource`/`RenameSource` nào cả. Ký hiệu generic
+(`<T extends { path: string }>`, `<R extends { targets: …; otherFiles?: string[] }>`) để không
+kéo thêm phụ thuộc kiểu `SymbolRow`/`DefinitionResult` ngược vào `rename.ts`.
+
+Thêm 2 test thuần trong `nearest.test.js` gọi thẳng `nearestRows`/`preferNearest` với mảng/object
+giả — không `mkdtempSync`, không `Workspace.index()`. Đây là lợi ích "locality" mà candidate C
+hứa: quy tắc thuần giờ kiểm được mà không trả phí I/O.
+
+```
+npm test    # 101/101 (99 cu + 2 test moi)
+```
+
+## M.5 Candidate D — core tự cung cấp watch pattern
+
+`server/index.ts` từng tự đọc `ws.config.include` rồi lọc pattern `!` để suy luận glob cần
+watch — domain-knowledge của core rò rỉ sang lớp dịch giao thức LSP. Thêm
+`Workspace.changeWatchPatterns(): string[]` (một dòng, không cần module riêng), server chỉ gọi
+hàm này. Đổi ngữ nghĩa include/exclude sau này chỉ sửa một chỗ.
+
+## M.6 Candidate B — seam thật cho rename orchestration
+
+Khác hẳn candidate A: deletion test cho thấy phần này **cần thật** state riêng của `Workspace`
+(`Linker`, danh sách file đang mở trong editor) — không thể tách thành hàm hoàn toàn độc lập.
+Giải pháp: một interface **rộng hơn** `FactSource`, gọi là `RenameSource`
+(`packages/core/src/resolve/rename-orchestrator.ts`):
+
+```ts
+interface RenameSource {
+  facts(relPath): FileFacts | null;
+  source(relPath): string | null;
+  config: Config;
+  findSymbols(name, container): SymbolRow[];
+  templatePaths(): string[];
+  openTemplatePaths(): string[];        // thay vi doc thang Map `overlays` rieng cua Workspace
+  resolveScopeRefs(candidates): RefInput[]; // boc Linker, giau hoan toan Linker khoi orchestrator
+}
+```
+
+Hai method mới trên `Workspace` (`openTemplatePaths`, `resolveScopeRefs`) chỉ là lớp bọc một
+dòng quanh state đã có — bản thân state (`overlays`, `linker`) vẫn `private`, orchestrator không
+bao giờ chạm trực tiếp.
+
+`renameAt`/`prepareRenameAt`/`renameTargetAt`/`templateRenameTarget`/`scopeTarget`/
+`declarationFiles`/`jsRenameEdits`/`templatesUsing`/`templateRenameEdits` — cả cụm ~240 dòng —
+chuyển nguyên sang `rename-orchestrator.ts`. `Workspace.renameAt`/`prepareRenameAt` co lại còn
+2 dòng gọi thẳng hàm export, `Workspace implements FactSource, RenameSource`.
+
+Dọn thêm: interface `RenameEdits` (bản khai báo riêng trong `workspace.ts`, không export) thành
+dead code sau khi orchestration chuyển đi — xoá, bản dùng thật giờ ở `rename-orchestrator.ts`.
+
+## M.7 Kết quả tổng (A+C+D+B)
+
+`workspace.ts`: 1465 → 738 dòng (còn lại: index/watcher/overlay, `referencesAt`, `completionAt`/
+`rootCompletions`/`memberCompletions`, và các method public mỏng gọi sang 3 module mới).
+
+```
+npx tsc --build --force                                               # sach, khong loi
+npm test                                                              # 101/101
+node packages/cli/dist/index.js sweep --root .../smart-city           # 99.2%, 136 sot, khong doi
+```
+
+Không sửa test nào có sẵn ở cả 4 candidate — toàn bộ đi qua public API
+(`definitionAt`/`renameAt`/`prepareRenameAt`/`membersOf`/`completionAt`), đúng bất biến đã đặt ra
+từ đầu vòng `/grilling`.
+
+Ghi chú kỹ thuật lặp lại ở cả 2 lần tách (definition, rename): vài hàm/hằng dùng chung giữa module
+mới và phần ở lại `workspace.ts` (`inSpan`, `wordAt`, `ANGULAR_DECL_KINDS`, `expressionAt`,
+`TEMPLATE_EXT`, `JS_EXT`) — export từ `workspace.ts`, import ngược lại. Circular import kiểu
+CommonJS nhưng an toàn vì hai bên chỉ gọi nhau trong thân hàm, không ở top-level; đã build + chạy
+test thật (kể cả test LSP qua stdio) để xác nhận không vỡ ở runtime, không chỉ ở compile-time.
