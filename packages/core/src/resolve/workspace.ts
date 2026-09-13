@@ -13,6 +13,11 @@ import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
 import { tryParseExpression } from '../ng/parser';
+
+/** Is `relPath` a normal in-workspace relative path — not `..`-escaping the root, not absolute? */
+export function isWithinRoot(relPath: string): boolean {
+  return Boolean(relPath) && !/^\.\.(?:[\\/]|$)/.test(relPath) && !isAbsolute(relPath);
+}
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { resolveDefinition } from './definition';
 import { type FactSource, shapeAtPath, shapeOf } from './shape';
@@ -263,7 +268,7 @@ export class Workspace implements FactSource, RenameSource {
     let rescan = false;
 
     for (const rel of new Set(relPaths)) {
-      if (!rel || /^\.\.(?:[\\/]|$)/.test(rel) || isAbsolute(rel)) continue; // outside the workspace
+      if (!isWithinRoot(rel)) continue; // outside the workspace
       const abs = join(this.config.root, rel);
       let st: Stats | null = null;
       try {

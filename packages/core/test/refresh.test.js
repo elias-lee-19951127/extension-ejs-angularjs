@@ -24,6 +24,14 @@ const C = require('../dist');
 
 const FIXTURE = join(__dirname, '..', '..', '..', 'fixtures', 'mini');
 
+test('isWithinRoot: rejects `..`-escaping and absolute paths, accepts ordinary relative ones', () => {
+  assert.strictEqual(C.isWithinRoot('js/app.js'), true);
+  assert.strictEqual(C.isWithinRoot('../outside.js'), false);
+  assert.strictEqual(C.isWithinRoot('../../etc/passwd'), false);
+  assert.strictEqual(C.isWithinRoot('/etc/passwd'), false);
+  assert.strictEqual(C.isWithinRoot(''), false);
+});
+
 function tempWorkspace(t) {
   const root = mkdtempSync(join(tmpdir(), 'ejsng-refresh-'));
   cpSync(FIXTURE, root, { recursive: true });

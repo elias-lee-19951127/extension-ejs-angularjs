@@ -21,13 +21,18 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import { Workspace, type Config, type Span } from '@ejsng/core';
+import { isWithinRoot, Workspace, type Config, type Span } from '@ejsng/core';
+import { connectRuntimeLog, offsetForLocation } from './runtime-log';
+import type WebSocket from 'ws';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
 let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
+let runtimeLogSocket: WebSocket | null = null;
+/** Bumped on every `ejsng/connectRuntime` call, so a superseded connection's callbacks no-op. */
+let runtimeLogEpoch = 0;
 /**
  * Does the client support dynamic watcher registration
  * (workspace.didChangeWatchedFiles.dynamicRegistration)?
@@ -377,6 +382,43 @@ connection.onRequest('ejsng/reindex', () => {
 });
 
 connection.onRequest('ejsng/stats', () => workspace?.stats() ?? null);
+
+/**
+ * Connect to a CDP/Inspector Protocol endpoint (per spec: the user already started their app
+ * with `node --inspect`, see .scratch/inline-runtime-log/spec.md) and push every console call it
+ * reports, mapped to its line, as an `ejsng/runtimeLog` notification.
+ */
+connection.onRequest('ejsng/connectRuntime', (params: { url: string }) => {
+  // `terminate()`, not `close()`: we're superseding this connection, not shutting it down
+  // gracefully, so don't wait on a close handshake before starting the replacement.
+  runtimeLogSocket?.terminate();
+  const epoch = ++runtimeLogEpoch;
+  runtimeLogSocket = connectRuntimeLog(
+    params.url,
+    (log) => {
+      // A message already in flight on a socket `ejsng/connectRuntime` has since superseded —
+      // ignore it, so a reconnect can't mix logs from the old and new target.
+      if (epoch !== runtimeLogEpoch) return;
+      if (!workspace) return;
+      const fsPath = log.url.startsWith('file://') ? URI.parse(log.url).fsPath : log.url;
+      const relPath = workspace.toRelative(fsPath);
+      if (!isWithinRoot(relPath)) return; // outside the workspace — not ours to read
+      const source = workspace.source(relPath);
+      if (source == null) return;
+      const offset = offsetForLocation(source, log.line, log.character);
+      void connection.sendNotification('ejsng/runtimeLog', {
+        uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
+        range: toRange(source, { start: offset, end: offset }),
+        value: log.value,
+      });
+    },
+    (err) => {
+      if (epoch !== runtimeLogEpoch) return;
+      connection.console.error(`ejsng/connectRuntime: ${err.message}`);
+    },
+  );
+  return { connected: true };
+});
 
 documents.listen(connection);
 connection.listen();
