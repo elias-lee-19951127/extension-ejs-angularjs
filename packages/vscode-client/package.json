@@ -4,6 +4,11 @@
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
   "version": "0.1.0",
   "publisher": "local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elias-lee-19951127/extension-ejs-angularjs.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
