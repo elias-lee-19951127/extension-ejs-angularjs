@@ -18,6 +18,7 @@ to every template that reads it, rename across both, and dead-code detection.
 | Shape-based completion | `busy.` → the keys actually assigned on that object |
 | Dead code | controller / directive / filter / property nobody uses |
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
+| Inline runtime log | `console.log`/`warn`/`error` from a running Node process, shown inline next to the line that logged it — color-coded by severity |
 
 ## Requirements
 
@@ -35,15 +36,30 @@ No separate install step — the language server ships bundled inside the extens
 
 ## Commands
 
-- **EJS/NG: Reindex workspace**
-- **EJS/NG: Index stats**
+- **EJS/NG: Reindex Workspace**
+- **EJS/NG: Show Index Stats**
+- **EJS/NG: Connect to Runtime** — prompts for `host:port` of a running Node process started with
+  `node --inspect` (or, once available, a browser's `--remote-debugging-port`) and shows its
+  `console.log` output inline. Multiple connections can be open at once.
+- **EJS/NG: Disconnect Runtime** — pick one of the currently open runtime connections to close.
 
 ## Known limitations
 
 This is an early release: dynamic `templateUrl` expressions, and JS built through a bundler step,
-are reported as "unresolved" rather than followed.
+are reported as "unresolved" rather than followed. The inline runtime log feature currently only
+supports Node processes (`node --inspect`); browser-side (AngularJS) log capture is planned.
 
 ## Release Notes
+
+### 0.2.1
+
+`EJS/NG: Connect to Runtime` now takes `host:port` directly and can open multiple simultaneous
+connections (e.g. several Node processes at once); `EJS/NG: Disconnect Runtime` closes one.
+
+### 0.2.0
+
+Inline runtime log: `EJS/NG: Connect to Runtime` shows `console.log`/`warn`/`error` output from a
+running Node process inline in the editor.
 
 ### 0.1.0
 

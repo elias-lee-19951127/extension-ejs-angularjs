@@ -1,3 +1,4 @@
+import { get as httpGet } from 'node:http';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import WebSocket, { type RawData } from 'ws';
 
@@ -175,4 +176,52 @@ export function connectRuntimeLog(
     if (log) onLog(log);
   });
   return socket;
+}
+
+/**
+ * One entry from a CDP discovery endpoint's `GET /json/list` — both `node --inspect` and Chrome
+ * `--remote-debugging-port` expose this, listing every attachable target.
+ */
+export interface DiscoveredTarget {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  webSocketDebuggerUrl: string;
+}
+
+/**
+ * Keep only targets worth offering a connection to. Chrome's list also includes
+ * `service_worker`/`background_page`/`shared_worker`/`browser`/… entries that never run user
+ * console.log calls the same way a page does. Node's own target reports `type: "node"`, not
+ * `"page"` — both need to pass.
+ */
+export function filterConnectableTargets(targets: DiscoveredTarget[]): DiscoveredTarget[] {
+  return targets.filter((t) => t.type === 'page' || t.type === 'node');
+}
+
+/**
+ * `GET http://host:port/json/list` — the discovery endpoint both `node --inspect` and Chrome
+ * `--remote-debugging-port` expose, listing every attachable target. Rejects (never throws
+ * uncaught) on a connection failure or a non-JSON-array response — the host:port is user input
+ * pointing at an external process, not a trusted collaborator.
+ */
+export function discoverTargets(host: string, port: number): Promise<DiscoveredTarget[]> {
+  return new Promise((resolve, reject) => {
+    const req = httpGet({ host, port, path: '/json/list', timeout: 3000 }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (!Array.isArray(body)) throw new Error('expected a JSON array');
+          resolve(filterConnectableTargets(body as DiscoveredTarget[]));
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error(`timed out reaching ${host}:${port}`)));
+    req.on('error', reject);
+  });
 }

@@ -22,7 +22,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
 import { isWithinRoot, Workspace, type Config, type Span } from '@ejsng/core';
-import { connectRuntimeLog, offsetForLocation } from './runtime-log';
+import { connectRuntimeLog, discoverTargets, offsetForLocation, type DiscoveredTarget } from './runtime-log';
 import type WebSocket from 'ws';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -30,9 +30,8 @@ const documents = new TextDocuments(TextDocument);
 
 let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
-let runtimeLogSocket: WebSocket | null = null;
-/** Bumped on every `ejsng/connectRuntime` call, so a superseded connection's callbacks no-op. */
-let runtimeLogEpoch = 0;
+/** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
+const runtimeLogConnections = new Map<string, WebSocket>();
 /**
  * Does the client support dynamic watcher registration
  * (workspace.didChangeWatchedFiles.dynamicRegistration)?
@@ -383,22 +382,25 @@ connection.onRequest('ejsng/reindex', () => {
 
 connection.onRequest('ejsng/stats', () => workspace?.stats() ?? null);
 
+function runtimeLogConnectionKey(host: string, port: number, targetId: string): string {
+  return `${host}:${port}:${targetId}`;
+}
+
 /**
- * Connect to a CDP/Inspector Protocol endpoint (per spec: the user already started their app
- * with `node --inspect`, see .scratch/inline-runtime-log/spec.md) and push every console call it
- * reports, mapped to its line, as an `ejsng/runtimeLog` notification.
+ * Open (or replace) the CDP connection for `key`, forwarding every console call it can anchor
+ * to a line as an `ejsng/runtimeLog` notification — shared by every target this server connects
+ * to, server-side (Node) or browser-side (a Chrome tab), regardless of how many are live at once.
  */
-connection.onRequest('ejsng/connectRuntime', (params: { url: string }) => {
-  // `terminate()`, not `close()`: we're superseding this connection, not shutting it down
-  // gracefully, so don't wait on a close handshake before starting the replacement.
-  runtimeLogSocket?.terminate();
-  const epoch = ++runtimeLogEpoch;
-  runtimeLogSocket = connectRuntimeLog(
-    params.url,
+function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): void {
+  // `terminate()`, not `close()`: a reconnect to the SAME key supersedes it, doesn't shut it
+  // down gracefully — don't wait on a close handshake before starting the replacement.
+  runtimeLogConnections.get(key)?.terminate();
+  const socket = connectRuntimeLog(
+    webSocketDebuggerUrl,
     (log) => {
-      // A message already in flight on a socket `ejsng/connectRuntime` has since superseded —
-      // ignore it, so a reconnect can't mix logs from the old and new target.
-      if (epoch !== runtimeLogEpoch) return;
+      // A message already in flight on a socket this key has since replaced or dropped — ignore
+      // it, so a reconnect (or disconnect) can't mix in logs from a connection no longer current.
+      if (runtimeLogConnections.get(key) !== socket) return;
       if (!workspace) return;
       const fsPath = log.url.startsWith('file://') ? URI.parse(log.url).fsPath : log.url;
       const relPath = workspace.toRelative(fsPath);
@@ -414,11 +416,62 @@ connection.onRequest('ejsng/connectRuntime', (params: { url: string }) => {
       });
     },
     (err) => {
-      if (epoch !== runtimeLogEpoch) return;
-      connection.console.error(`ejsng/connectRuntime: ${err.message}`);
+      if (runtimeLogConnections.get(key) !== socket) return;
+      connection.console.error(`ejsng/connectRuntime (${key}): ${err.message}`);
     },
   );
-  return { connected: true };
+  runtimeLogConnections.set(key, socket);
+}
+
+function discoverTargetsOrError(host: string, port: number): Promise<DiscoveredTarget[] | { status: 'error'; message: string }> {
+  return discoverTargets(host, port).catch((err: unknown) => ({
+    status: 'error' as const,
+    message: err instanceof Error ? err.message : String(err),
+  }));
+}
+
+/**
+ * Discover targets at `host:port` (per spec: the user already started their app with
+ * `node --inspect`, or Chrome with `--remote-debugging-port` — see
+ * .scratch/inline-runtime-log/spec.md and issues/02a-multi-connection-server.md) and either
+ * connect immediately (exactly one connectable target), ask the client to pick one
+ * (`ejsng/connectRuntimeTarget`, several), or report none found.
+ */
+connection.onRequest('ejsng/connectRuntime', async (params: { host: string; port: number }) => {
+  const targets = await discoverTargetsOrError(params.host, params.port);
+  if (!Array.isArray(targets)) return targets;
+  if (targets.length === 0) return { status: 'not-found' as const };
+  if (targets.length > 1) {
+    return {
+      status: 'choose' as const,
+      targets: targets.map((t) => ({ id: t.id, title: t.title, url: t.url, type: t.type })),
+    };
+  }
+  const [target] = targets;
+  if (!target) return { status: 'not-found' as const };
+  const key = runtimeLogConnectionKey(params.host, params.port, target.id);
+  startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
+  return { status: 'connected' as const, key };
+});
+
+/** Connect to one specific target at `host:port` — the follow-up after a `'choose'` response. */
+connection.onRequest('ejsng/connectRuntimeTarget', async (params: { host: string; port: number; targetId: string }) => {
+  const targets = await discoverTargetsOrError(params.host, params.port);
+  if (!Array.isArray(targets)) return targets;
+  const target = targets.find((t) => t.id === params.targetId);
+  if (!target) return { status: 'error' as const, message: `target ${params.targetId} not found` };
+  const key = runtimeLogConnectionKey(params.host, params.port, target.id);
+  startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
+  return { status: 'connected' as const, key };
+});
+
+/** Close and forget one runtime-log connection. Disconnecting an unknown key is a no-op. */
+connection.onRequest('ejsng/disconnectRuntime', (params: { key: string }) => {
+  const socket = runtimeLogConnections.get(params.key);
+  if (!socket) return { disconnected: false };
+  runtimeLogConnections.delete(params.key);
+  socket.terminate();
+  return { disconnected: true };
 });
 
 documents.listen(connection);

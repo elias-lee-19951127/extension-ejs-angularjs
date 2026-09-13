@@ -10,27 +10,36 @@ Chrome `--remote-debugging-port` sau này, vì cả hai expose cùng cơ chế.
 
 **Blocked by:** 01 — Hoàn thiện client VSCode v1 (đã xong)
 
-**Status:** ready-for-agent
+**Status:** verify tay còn lại
 
-- [ ] Server đổi từ `runtimeLogSocket: WebSocket | null` + epoch-guard sang quản lý **nhiều** kết
+- [x] Server đổi từ `runtimeLogSocket: WebSocket | null` + epoch-guard sang quản lý **nhiều** kết
       nối cùng lúc (map theo key ổn định, ví dụ `host:port:targetId`) — kết nối mới **không** tự
       thay thế kết nối khác, chỉ thay khi trùng key
-- [ ] Request kết nối nhận `{host, port}` (không phải URL đầy đủ) — server tự `GET
+- [x] Request kết nối nhận `{host, port}` (không phải URL đầy đủ) — server tự `GET
       http://<host>:<port>/json/list`, lọc target theo `type` thuộc `{page, node}` (Node Inspector
       tự khai `type: "node"`, không phải `"page"` — phải lọc cả hai, không chỉ `page`)
-- [ ] Đúng 1 target khớp → tự kết nối ngay, trả về key của kết nối vừa tạo
-- [ ] Nhiều hơn 1 target khớp → trả danh sách target (id, title, url, type) cho client, **không**
+- [x] Đúng 1 target khớp → tự kết nối ngay, trả về key của kết nối vừa tạo
+- [x] Nhiều hơn 1 target khớp → trả danh sách target (id, title, url, type) cho client, **không**
       tự kết nối
-- [ ] 0 target khớp → trả kết quả rõ ràng báo không tìm thấy target nào (không phải lỗi im lặng
+- [x] 0 target khớp → trả kết quả rõ ràng báo không tìm thấy target nào (không phải lỗi im lặng
       hay throw)
-- [ ] Request riêng để kết nối tới một target cụ thể theo id (dùng sau khi client đã chọn từ danh
+- [x] Request riêng để kết nối tới một target cụ thể theo id (dùng sau khi client đã chọn từ danh
       sách nhiều target)
-- [ ] Request riêng để ngắt một kết nối cụ thể theo key
-- [ ] Client: command `EJS/NG: Connect to Runtime` đổi sang hỏi host:port qua input box; **xoá
+- [x] Request riêng để ngắt một kết nối cụ thể theo key
+- [x] Client: command `EJS/NG: Connect to Runtime` đổi sang hỏi host:port qua input box; **xoá
       hẳn** setting `ejsng.runtimeLog.inspectorUrl` (đã publish ở v0.2.0, nhưng khả năng cao chỉ
       người dùng hiện tại đang dùng — chấp nhận breaking change, không giữ lại giá trị mặc định)
   — nếu server trả danh sách nhiều target thì hiện Quick Pick (tiêu đề + url mỗi target) để chọn
-- [ ] Client: status bar đổi sang hiện **số kết nối đang mở** (`EJS/NG Runtime: N connected`)
-- [ ] Client: thêm command `EJS/NG: Disconnect Runtime` — Quick Pick liệt kê các kết nối đang mở
+- [x] Client: status bar đổi sang hiện **số kết nối đang mở** (`EJS/NG Runtime: N connected`)
+- [x] Client: thêm command `EJS/NG: Disconnect Runtime` — Quick Pick liệt kê các kết nối đang mở
       (theo key) để chọn ngắt một cái
-- [ ] Test toàn bộ bằng Node testbed đã có — không cần Chrome thật cho ticket này
+- [x] Test toàn bộ bằng Node testbed đã có — không cần Chrome thật cho ticket này (14 test mới:
+      `runtime-log-discovery.test.js` 7 test seam 1+2, `runtime-log-connections-lsp.test.js` 9
+      test seam 3 — thay thế hẳn `runtime-log-lsp.test.js` cũ vì API đã đổi)
+
+## Comments
+
+Server + logic đã TDD xong, 134/134 test xanh. Còn thiếu duy nhất: **verify tay qua Extension
+Development Host** — chưa làm vì cần bạn tự chạy (giống ticket 01), giờ phức tạp hơn vì phải test
+cả luồng nhiều kết nối đồng thời + Quick Pick chọn target + Disconnect. Chưa publish lên
+Marketplace (đang ở `0.2.1` trong package.json, chưa `vsce publish`) — chờ verify xong.
