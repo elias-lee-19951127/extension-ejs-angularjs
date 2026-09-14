@@ -1,0 +1,28 @@
+# 09 — Nợ kỹ thuật: 02a đã publish nhưng chưa verify tay
+
+**What to build:** Không phải tính năng mới — đây là ghi nhận nợ kỹ thuật. Ticket 02a (đổi server
+sang multi-connection + kết nối qua host:port) đã publish lên Marketplace (`v0.2.2`) theo yêu cầu
+người dùng **trước khi** hoàn tất verify tay qua Extension Development Host — khác quy trình đã
+theo ở ticket 01 (verify xong mới publish). Phần server đã TDD đầy đủ (134/134 test xanh), nhưng
+phần UI client (input box, Quick Pick, status bar đếm số, Disconnect) **chưa được xác nhận chạy
+đúng trong VSCode thật**.
+
+**Blocked by:** None — không chặn gì, nhưng nên làm sớm trước khi build tiếp lên trên (02b/03 phụ
+thuộc đúng hành vi client của 02a).
+
+**Status:** debt — chờ người dùng tự check
+
+- [ ] Kết nối đơn: `EJS/NG: Connect to Runtime`, gõ `host:port` (không còn dán URL), status bar
+      hiện `1 connected`, log hiện inline đúng dòng
+- [ ] Nhiều kết nối đồng thời: kết nối 2 tiến trình Node khác cổng, status bar hiện `2 connected`
+      (không phải kết nối sau thay thế kết nối trước)
+- [ ] `EJS/NG: Disconnect Runtime` — Quick Pick liệt kê đúng các kết nối đang mở, ngắt đúng cái đã
+      chọn, status bar giảm đúng số
+- [ ] (Chưa thể tự test bằng Node) Nhánh discovery tìm thấy **nhiều target trên cùng port** → Quick
+      Pick chọn target — cần Chrome thật (ticket 02b) mới tạo được tình huống này; ghi chú lại ở
+      đây để không quên khi làm 02b
+
+## Comments
+
+Tạo theo yêu cầu người dùng ngày 2026-09-14: "Publish giúp tôi và tạo file nợ kỹ thuật. Tôi sẽ
+check sau." — publish đã xong, còn lại 3 mục đầu trong checklist là phần người dùng tự verify.

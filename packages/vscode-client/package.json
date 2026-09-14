@@ -2,7 +2,7 @@
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "phule",
   "license": "MIT",
   "icon": "icon.png",
