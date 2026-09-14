@@ -22,7 +22,14 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
 import { isWithinRoot, Workspace, type Config, type Span } from '@ejsng/core';
-import { connectRuntimeLog, discoverTargets, offsetForLocation, type DiscoveredTarget } from './runtime-log';
+import {
+  connectRuntimeLog,
+  discoverTargets,
+  findPidListeningOnPort,
+  offsetForLocation,
+  waitForTargets,
+  type DiscoveredTarget,
+} from './runtime-log';
 import type WebSocket from 'ws';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -430,31 +437,84 @@ function discoverTargetsOrError(host: string, port: number): Promise<DiscoveredT
   }));
 }
 
+const DEFAULT_INSPECTOR_PORT = 9229;
+
+interface DiscoverOutcome {
+  targets: DiscoveredTarget[];
+  /** The port targets were actually found on — may differ from the requested port (ticket 10). */
+  port: number;
+}
+
+/**
+ * Discover targets at `host:port` — and if nothing there speaks the debug protocol at all,
+ * ticket 10: treat it as an ordinary app port, find the local process listening on it, and ask
+ * Node to enable its own inspector via `SIGUSR1` (no restart) before trying again on Node's
+ * default inspector port (9229 — the only port reachable this way, since a custom
+ * `--inspect-port` can't be discovered from the outside). The caller needs the EFFECTIVE port
+ * back, not just the targets, since it may not be the one it asked about.
+ */
+async function discoverTargetsWithAutoEnable(
+  host: string,
+  port: number,
+): Promise<DiscoverOutcome | { status: 'error'; message: string }> {
+  try {
+    return { targets: await discoverTargets(host, port), port };
+  } catch {
+    // Fall through to the auto-enable attempt below.
+  }
+  const pid = await findPidListeningOnPort(port);
+  if (pid == null) {
+    return {
+      status: 'error' as const,
+      message: `no debug endpoint at ${host}:${port}, and no local process listening on that port to enable one for`,
+    };
+  }
+  try {
+    process.kill(pid, 'SIGUSR1');
+  } catch (err) {
+    return { status: 'error' as const, message: err instanceof Error ? err.message : String(err) };
+  }
+  try {
+    return { targets: await waitForTargets(host, DEFAULT_INSPECTOR_PORT), port: DEFAULT_INSPECTOR_PORT };
+  } catch (err) {
+    return { status: 'error' as const, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Discover targets at `host:port` (per spec: the user already started their app with
  * `node --inspect`, or Chrome with `--remote-debugging-port` — see
  * .scratch/inline-runtime-log/spec.md and issues/02a-multi-connection-server.md) and either
  * connect immediately (exactly one connectable target), ask the client to pick one
- * (`ejsng/connectRuntimeTarget`, several), or report none found.
+ * (`ejsng/connectRuntimeTarget`, several), or report none found. If `host:port` isn't a debug
+ * endpoint at all, ticket 10's auto-enable kicks in first (see discoverTargetsWithAutoEnable) —
+ * a `'choose'` response's `port` may then differ from what the client asked about, and must be
+ * echoed back verbatim in the `ejsng/connectRuntimeTarget` follow-up.
  */
 connection.onRequest('ejsng/connectRuntime', async (params: { host: string; port: number }) => {
-  const targets = await discoverTargetsOrError(params.host, params.port);
-  if (!Array.isArray(targets)) return targets;
+  const outcome = await discoverTargetsWithAutoEnable(params.host, params.port);
+  if (!('targets' in outcome)) return outcome;
+  const { targets, port } = outcome;
   if (targets.length === 0) return { status: 'not-found' as const };
   if (targets.length > 1) {
     return {
       status: 'choose' as const,
+      port,
       targets: targets.map((t) => ({ id: t.id, title: t.title, url: t.url, type: t.type })),
     };
   }
   const [target] = targets;
   if (!target) return { status: 'not-found' as const };
-  const key = runtimeLogConnectionKey(params.host, params.port, target.id);
+  const key = runtimeLogConnectionKey(params.host, port, target.id);
   startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
-  return { status: 'connected' as const, key };
+  return { status: 'connected' as const, key, port };
 });
 
-/** Connect to one specific target at `host:port` — the follow-up after a `'choose'` response. */
+/**
+ * Connect to one specific target — the follow-up after a `'choose'` response. `port` must be
+ * the one THAT response returned (see ejsng/connectRuntime), not necessarily what was originally
+ * typed — ticket 10's auto-enable can redirect discovery to a different port.
+ */
 connection.onRequest('ejsng/connectRuntimeTarget', async (params: { host: string; port: number; targetId: string }) => {
   const targets = await discoverTargetsOrError(params.host, params.port);
   if (!Array.isArray(targets)) return targets;

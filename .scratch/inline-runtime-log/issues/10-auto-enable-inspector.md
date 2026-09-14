@@ -11,16 +11,31 @@ không có `--inspect`, gửi `SIGUSR1` → inspector bật ngay tại port 9229
 
 **Blocked by:** 02a — Đổi server sang multi-connection + kết nối qua host:port (đã xong)
 
-**Status:** ready-for-agent
+**Status:** done — verify tay UI còn lại
 
-- [ ] `ejsng/connectRuntime` nhận `{host, port}` như cũ — thử `discoverTargets(host, port)` trước;
+- [x] `ejsng/connectRuntime` nhận `{host, port}` như cũ — thử `discoverTargets(host, port)` trước;
       có kết quả thì đi đúng luồng hiện có (connected/choose/not-found), không đổi gì
-- [ ] Nếu `discoverTargets` thất bại (không có gì nghe port đó theo giao thức debug): tìm PID đang
+- [x] Nếu `discoverTargets` thất bại (không có gì nghe port đó theo giao thức debug): tìm PID đang
       nghe port đó trên host bằng `lsof -ti :<port>` — không tìm thấy thì trả `not-found` như cũ
-- [ ] Tìm thấy PID: gửi `process.kill(pid, 'SIGUSR1')`, đợi một khoảng ngắn, thử lại
+- [x] Tìm thấy PID: gửi `process.kill(pid, 'SIGUSR1')`, đợi một khoảng ngắn, thử lại
       `discoverTargets('127.0.0.1', 9229)` (port debug mặc định — không biết được nếu tiến trình
       đã tự set `--inspect-port` khác, chấp nhận giới hạn này)
-- [ ] Chỉ làm trên POSIX (`process.platform !== 'win32'`) — Windows không có `SIGUSR1`, bỏ qua
+- [x] Chỉ làm trên POSIX (`process.platform !== 'win32'`) — Windows không có `SIGUSR1`, bỏ qua
       bước tự bật, rơi thẳng về `not-found` như hành vi cũ (không throw, không crash)
-- [ ] Test bằng tiến trình Node thật (spawn trong test, không `--inspect`) — xác nhận trước khi
+- [x] Test bằng tiến trình Node thật (spawn trong test, không `--inspect`) — xác nhận trước khi
       gửi tín hiệu không có inspector, sau khi gửi thì có, dùng port thật không phải fake server
+      (6 test mới ở `runtime-log-auto-enable.test.js`, gồm 1 test LSP end-to-end qua request thật)
+
+## Comments
+
+Bug thật bắt được lúc viết test: `lsof -ti :<port>` (không lọc state) đôi khi trả về PID của một
+kết nối đã đóng/không liên quan cùng nhắc tới port đó, không phải PID đang LISTEN — sửa bằng thêm
+`-sTCP:LISTEN`. Cũng phát hiện bug root-containment với symlink (macOS `tmpdir()`), tách ra ticket
+12 vì không liên quan trực tiếp tới auto-enable.
+
+Client: input box đổi placeholder/prompt phản ánh đúng khả năng mới (gõ port app thật); response
+`choose`/`connected` giờ có field `port` hiệu lực (có thể khác port đã gõ nếu auto-enable xảy ra),
+client dùng field đó cho bước tiếp theo thay vì port gốc.
+
+Còn thiếu: verify tay qua Extension Development Host (gõ port app đang chạy không có `--inspect`,
+xác nhận tự kết nối được) — gộp chung với các mục verify còn treo ở ticket 09.

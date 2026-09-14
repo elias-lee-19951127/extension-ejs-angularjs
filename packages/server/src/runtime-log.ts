@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { get as httpGet } from 'node:http';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import WebSocket, { type RawData } from 'ws';
@@ -224,4 +225,46 @@ export function discoverTargets(host: string, port: number): Promise<DiscoveredT
     req.on('timeout', () => req.destroy(new Error(`timed out reaching ${host}:${port}`)));
     req.on('error', reject);
   });
+}
+
+/**
+ * Find the PID of the process listening on `port` on this machine, via `lsof` — POSIX only
+ * (`null` on Windows, where there's no `lsof` and no `SIGUSR1` to act on it anyway). Ticket 10:
+ * lets a user type their app's ordinary port instead of first learning what an inspector port is.
+ */
+export function findPidListeningOnPort(port: number): Promise<number | null> {
+  if (process.platform === 'win32') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    // `-sTCP:LISTEN`: only sockets actually LISTENing — plain `-ti :<port>` can also surface an
+    // unrelated process with a stale/closing connection that merely mentions the same port
+    // number (observed in practice: a already-exited process's TIME_WAIT-ish entry).
+    execFile('lsof', ['-ti', `:${port}`, '-sTCP:LISTEN'], (err, stdout) => {
+      if (err || !stdout.trim()) return resolve(null);
+      const pid = Number(stdout.trim().split('\n')[0]);
+      resolve(Number.isFinite(pid) ? pid : null);
+    });
+  });
+}
+
+/**
+ * Retry `discoverTargets` until it succeeds or `timeoutMs` elapses — for the moment right after
+ * `SIGUSR1` asks a process to enable its inspector, which isn't instant.
+ */
+export async function waitForTargets(
+  host: string,
+  port: number,
+  timeoutMs = 3000,
+  intervalMs = 150,
+): Promise<DiscoveredTarget[]> {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await discoverTargets(host, port);
+    } catch (err) {
+      lastErr = err;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(`timed out reaching ${host}:${port}`);
 }

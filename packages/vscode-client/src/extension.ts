@@ -16,8 +16,8 @@ const runtimeLogState = new RuntimeLogState();
 const runtimeLogConnections = new Map<string, string>();
 
 type ConnectRuntimeResult =
-  | { status: 'connected'; key: string }
-  | { status: 'choose'; targets: Array<{ id: string; title: string; url: string; type: string }> }
+  | { status: 'connected'; key: string; port: number }
+  | { status: 'choose'; port: number; targets: Array<{ id: string; title: string; url: string; type: string }> }
   | { status: 'not-found' }
   | { status: 'error'; message: string };
 
@@ -118,14 +118,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('ejsng.connectRuntime', async () => {
       const input = await vscode.window.showInputBox({
         title: 'EJS/NG: Connect to Runtime',
-        prompt: 'host:port of a CDP/Inspector Protocol endpoint (node --inspect, or Chrome --remote-debugging-port)',
-        placeHolder: '127.0.0.1:9229',
+        prompt: "Your app's port (we'll enable its inspector automatically), or a debug port directly",
+        placeHolder: '127.0.0.1:5000',
       });
       if (!input) return;
       const [host, portText] = input.split(':');
       const port = Number(portText);
       if (!host || !Number.isFinite(port)) {
-        void vscode.window.showErrorMessage(`EJS/NG: "${input}" isn't host:port — try something like 127.0.0.1:9229.`);
+        void vscode.window.showErrorMessage(`EJS/NG: "${input}" isn't host:port — try something like 127.0.0.1:5000.`);
         return;
       }
 
@@ -133,7 +133,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const result = await client?.sendRequest<ConnectRuntimeResult>('ejsng/connectRuntime', { host, port });
         if (!result) return;
         if (result.status === 'connected') {
-          runtimeLogConnections.set(result.key, `${host}:${port}`);
+          runtimeLogConnections.set(result.key, `${host}:${result.port}`);
           updateRuntimeStatusBar();
         } else if (result.status === 'choose') {
           const picked = await vscode.window.showQuickPick(
@@ -143,11 +143,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           if (!picked) return;
           const chosen = await client?.sendRequest<ConnectRuntimeResult>('ejsng/connectRuntimeTarget', {
             host,
-            port,
+            port: result.port,
             targetId: picked.target.id,
           });
           if (chosen?.status === 'connected') {
-            runtimeLogConnections.set(chosen.key, `${host}:${port} — ${picked.label}`);
+            runtimeLogConnections.set(chosen.key, `${host}:${chosen.port} — ${picked.label}`);
             updateRuntimeStatusBar();
           } else {
             void vscode.window.showErrorMessage(`EJS/NG: ${chosen?.status === 'error' ? chosen.message : 'failed to connect.'}`);
