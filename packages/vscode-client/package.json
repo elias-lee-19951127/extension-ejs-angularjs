@@ -2,7 +2,7 @@
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "phule",
   "license": "MIT",
   "icon": "icon.png",
@@ -19,6 +19,25 @@
     "workspaceContains:**/*.ejs"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ejsngPanel",
+          "title": "EJS/NG Runtime",
+          "icon": "media/runtime-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ejsngPanel": [
+        {
+          "id": "ejsngRuntimeView",
+          "name": "Runtime Log",
+          "type": "webview",
+          "contextualTitle": "EJS/NG Runtime"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "ejs",
@@ -107,6 +126,16 @@
               "local": { "type": "string", "description": "The matching path on this machine, e.g. /Users/me/project" }
             }
           }
+        },
+        "ejsng.runtimeLog.chromeExecutablePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the Chrome/Edge executable used by the activity-bar panel's 'Launch Chrome debug' button. Empty = guess a default install location for this OS.\n\n- macOS: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`\n- Windows: `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`"
+        },
+        "ejsng.runtimeLog.chromeDebugPort": {
+          "type": "number",
+          "default": 9222,
+          "description": "Default --remote-debugging-port used by the activity-bar panel's 'Launch Chrome debug' button and pre-filled into its Connect field."
         }
       }
     }

@@ -32,6 +32,12 @@ thuộc đúng hành vi client của 02a).
 Tạo theo yêu cầu người dùng ngày 2026-09-14: "Publish giúp tôi và tạo file nợ kỹ thuật. Tôi sẽ
 check sau." — publish đã xong, còn lại 3 mục đầu trong checklist là phần người dùng tự verify.
 
+Cập nhật cùng ngày (sau): publish `v0.2.3` theo yêu cầu người dùng — gồm ticket 10, 11, 13 (panel
+Activity Bar + nút Launch Chrome debug). Ticket 13 đã được người dùng bấm thử trong Extension
+Development Host và xác nhận ổn trước khi publish; ticket 10/11 vẫn chưa qua UI thật, đặc biệt
+**chưa từng chạy trên Windows** (nhánh auto-enable của ticket 10 không hoạt động trên Windows theo
+thiết kế; so khớp URI decoration trên Windows chưa kiểm chứng).
+
 Cập nhật cùng ngày: thêm 2 mục cho ticket 10/11 (auto-enable inspector, Docker path mapping) — cả
 hai đã verify bằng tiến trình/container thật qua script trực tiếp (không qua VSCode UI), server-side
 TDD đầy đủ, nhưng chưa qua UI thật trong Extension Development Host.
