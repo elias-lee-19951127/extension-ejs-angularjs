@@ -92,6 +92,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ejsDelimiter: cfg.get('ejsDelimiter'),
       customDirectives: cfg.get('customDirectives'),
       diagnostics: { enabled: cfg.get('diagnostics.enabled') },
+      runtimeLog: { pathMappings: cfg.get('runtimeLog.pathMappings') },
     },
   };
 

@@ -94,6 +94,19 @@
           "type": "boolean",
           "default": false,
           "description": "Enables warnings for variables that don't exist on scope. Defaults to OFF to avoid false positives on legacy code."
+        },
+        "ejsng.runtimeLog.pathMappings": {
+          "type": "array",
+          "default": [],
+          "description": "Maps a container-internal path to its path on this machine, for inline runtime log from a Dockerized process (e.g. [{\"remote\": \"/app\", \"local\": \"/Users/me/project\"}]). Not needed for a process running directly on this machine.",
+          "items": {
+            "type": "object",
+            "required": ["remote", "local"],
+            "properties": {
+              "remote": { "type": "string", "description": "Path prefix as reported by the container, e.g. /app" },
+              "local": { "type": "string", "description": "The matching path on this machine, e.g. /Users/me/project" }
+            }
+          }
         }
       }
     }

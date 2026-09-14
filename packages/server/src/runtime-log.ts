@@ -268,3 +268,24 @@ export async function waitForTargets(
   }
   throw lastErr instanceof Error ? lastErr : new Error(`timed out reaching ${host}:${port}`);
 }
+
+/** A user-configured container-path -> host-path pair (ticket 11, `ejsng.runtimeLog.pathMappings`). */
+export interface PathMapping {
+  remote: string;
+  local: string;
+}
+
+/**
+ * Rewrite a container-internal path (what a Dockerized target's CDP events report, e.g.
+ * `/app/index.js`) to the matching path on the host, via user-configured mappings — checked in
+ * order, first match wins. A path with no configured mapping passes through unchanged (the
+ * existing, non-Docker behavior). `remote` only matches whole path segments: `/app2/x.js` does
+ * NOT match a `/app` mapping.
+ */
+export function mapContainerPath(fsPath: string, mappings: PathMapping[]): string {
+  for (const { remote, local } of mappings) {
+    if (fsPath === remote) return local;
+    if (fsPath.startsWith(`${remote}/`)) return local + fsPath.slice(remote.length);
+  }
+  return fsPath;
+}

@@ -26,9 +26,11 @@ import {
   connectRuntimeLog,
   discoverTargets,
   findPidListeningOnPort,
+  mapContainerPath,
   offsetForLocation,
   waitForTargets,
   type DiscoveredTarget,
+  type PathMapping,
 } from './runtime-log';
 import type WebSocket from 'ws';
 
@@ -39,6 +41,8 @@ let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
 const runtimeLogConnections = new Map<string, WebSocket>();
+/** `ejsng.runtimeLog.pathMappings` — container path -> host path, for Docker targets (ticket 11). */
+let runtimeLogPathMappings: PathMapping[] = [];
 /**
  * Does the client support dynamic watcher registration
  * (workspace.didChangeWatchedFiles.dynamicRegistration)?
@@ -52,8 +56,10 @@ connection.onInitialize((params): InitializeResult => {
 
   const settings = (params.initializationOptions ?? {}) as Partial<Config> & {
     diagnostics?: { enabled?: boolean };
+    runtimeLog?: { pathMappings?: PathMapping[] };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
+  runtimeLogPathMappings = settings.runtimeLog?.pathMappings ?? [];
   // LSP 3.17: RenameOptions is only sent when the client declares prepareSupport.
   const prepareSupport = params.capabilities.textDocument?.rename?.prepareSupport === true;
   const watched = params.capabilities.workspace?.didChangeWatchedFiles;
@@ -409,7 +415,8 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): v
       // it, so a reconnect (or disconnect) can't mix in logs from a connection no longer current.
       if (runtimeLogConnections.get(key) !== socket) return;
       if (!workspace) return;
-      const fsPath = log.url.startsWith('file://') ? URI.parse(log.url).fsPath : log.url;
+      const rawPath = log.url.startsWith('file://') ? URI.parse(log.url).fsPath : log.url;
+      const fsPath = mapContainerPath(rawPath, runtimeLogPathMappings);
       const relPath = workspace.toRelative(fsPath);
       if (!isWithinRoot(relPath)) return; // outside the workspace — not ours to read
       const source = workspace.source(relPath);
