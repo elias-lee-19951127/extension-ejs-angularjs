@@ -41,3 +41,7 @@ thiết kế; so khớp URI decoration trên Windows chưa kiểm chứng).
 Cập nhật cùng ngày: thêm 2 mục cho ticket 10/11 (auto-enable inspector, Docker path mapping) — cả
 hai đã verify bằng tiến trình/container thật qua script trực tiếp (không qua VSCode UI), server-side
 TDD đầy đủ, nhưng chưa qua UI thật trong Extension Development Host.
+
+2026-09-16: phần lớn checklist này sẽ được trả bằng test tự động ở ticket
+`.scratch/runtime-remote-env/issues/11-test-tu-dong-client.md` (`@vscode/test-electron`), thay vì
+bấm tay. Phần còn lại cần mắt người (mở trình duyệt, nhìn decoration) vẫn giữ nguyên ở đây.

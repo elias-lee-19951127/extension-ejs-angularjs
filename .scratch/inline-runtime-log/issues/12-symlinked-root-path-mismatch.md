@@ -28,3 +28,9 @@ nào biết vì sao.
 - [ ] Cân nhắc: sửa ở `isWithinRoot`/chỗ gọi nó trong `packages/server/src/index.ts`, hay sửa sâu
       hơn trong `Workspace.toRelative` (packages/core) — vì `refreshFiles` cũng dùng chung logic
       này và có thể gặp đúng lỗi tương tự với file thay đổi ngoài editor qua đường dẫn symlink
+
+## Comments
+
+2026-09-16: cuốn vào ticket `.scratch/runtime-remote-env/issues/02-probe-an-toan-va-trang-thai-that.md`
+(gộp với sửa header `Host`, viết lại ws URL, và báo trạng thái kết nối thật). Làm ở đó, không làm
+riêng ở đây.
