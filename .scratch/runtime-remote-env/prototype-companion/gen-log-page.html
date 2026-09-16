@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>gen-log-page.html — ticket 01 load generator</title>
+</head>
+<body>
+  <h1>Ticket 01 load generator</h1>
+  <p>
+    Fires <code>console.log('PROTO_LOG', seq, Date.now())</code> at ~100/s for 30s (3000 total).
+    Attach the UI companion extension FIRST (<code>Proto: Attach via ...</code> command,
+    so <code>Runtime.enable</code> reaches Chrome before any logs are sent), then click Start.
+    Keep this tab focused and in the foreground — background-tab timer throttling in Chrome will
+    skew the 100/s rate and inflate the "trễ" (latency) numbers with generator jitter that has
+    nothing to do with the two forwarding mechanisms being measured.
+  </p>
+  <button id="start">Start</button>
+  <pre id="status">idle</pre>
+  <script>
+    document.getElementById('start').addEventListener('click', () => {
+      const statusEl = document.getElementById('status');
+      const total = 3000; // 100/s * 30s
+      let i = 0;
+      const timer = setInterval(() => {
+        if (i >= total) {
+          clearInterval(timer);
+          console.log('PROTO_LOG_DONE', i);
+          statusEl.textContent = 'done: ' + i;
+          return;
+        }
+        console.log('PROTO_LOG', i, Date.now());
+        i++;
+        if (i % 100 === 0) statusEl.textContent = 'sent: ' + i;
+      }, 10);
+      statusEl.textContent = 'running...';
+    });
+  </script>
+</body>
+</html>

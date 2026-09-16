@@ -1,0 +1,17 @@
+{
+  "name": "proto-workspace-host",
+  "displayName": "Proto Workspace Host (throwaway)",
+  "description": "Ticket 01 prototype: workspace-side half of the companion-extension measurement. Delete after use.",
+  "version": "0.0.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "protoWorkspace.ingest", "title": "Proto: Ingest event (internal, called by proto-ui-companion)" },
+      { "command": "protoWorkspace.getForwardedUri", "title": "Proto: Get forwarded port URI (internal)" },
+      { "command": "protoWorkspace.reset", "title": "Proto: Clear recorded results" }
+    ]
+  }
+}

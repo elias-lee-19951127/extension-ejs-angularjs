@@ -1,0 +1,20 @@
+{
+  "name": "proto-ui-companion",
+  "displayName": "Proto UI Companion (throwaway)",
+  "description": "Ticket 01 prototype: UI-side companion extension for the CDP-forwarding measurement. Delete after use.",
+  "version": "0.0.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "extensionKind": ["ui"],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onCommand:protoUi.runCommandsMechanism",
+    "onCommand:protoUi.runPortMechanism"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "protoUi.runCommandsMechanism", "title": "Proto: Attach via vscode.commands" },
+      { "command": "protoUi.runPortMechanism", "title": "Proto: Attach via forwarded port" }
+    ]
+  }
+}
