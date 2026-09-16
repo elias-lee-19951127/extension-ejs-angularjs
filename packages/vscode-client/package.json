@@ -136,6 +136,12 @@
           "type": "number",
           "default": 9222,
           "description": "Default --remote-debugging-port used by the activity-bar panel's 'Launch Chrome debug' button and pre-filled into its Connect field."
+        },
+        "ejsng.runtimeLog.skipFrames": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "markdownDescription": "Extra glob patterns for stack frames to never anchor a runtime log to (e.g. a vendored logger not already covered by the defaults, or your team's own log wrapper). This ADDS to the built-in default list — it never replaces it. Defaults already skipped: `node:internal/**`, `**/node_modules/**`, and common logger directories (`log4js`, `winston`, `bunyan`, `pino`)."
         }
       }
     }

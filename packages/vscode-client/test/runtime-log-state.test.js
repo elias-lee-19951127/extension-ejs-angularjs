@@ -5,7 +5,14 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const { RuntimeLogState, summarizeRuntimeStatus, formatRuntimeStatusBarText } = require('../out/runtime-log-state');
+const {
+  RuntimeLogState,
+  summarizeRuntimeStatus,
+  formatRuntimeStatusBarText,
+  formatSkipReason,
+  formatWrapperSuggestionText,
+  escapeGlobPath,
+} = require('../out/runtime-log-state');
 
 test('RuntimeLogState: recording an entry for a fresh file returns just that entry', () => {
   const state = new RuntimeLogState();
@@ -70,6 +77,8 @@ test('summarizeRuntimeStatus: an empty connection list summarizes to all zeros',
     connecting: 0,
     connected: 0,
     failed: 0,
+    recentLogs: [],
+    wrapperSuggestion: null,
   });
 });
 
@@ -85,7 +94,146 @@ test('summarizeRuntimeStatus: sums received/drawn across connections, and droppe
     connecting: 0,
     connected: 2,
     failed: 0,
+    recentLogs: [],
+    wrapperSuggestion: null,
   });
+});
+
+/**
+ * recentLogs/wrapperSuggestion (ticket 03, .scratch/runtime-remote-env/issues/03-chon-frame.md,
+ * items 6-7): purely additive fields on the same `ejsng/runtimeStatus` per-connection object.
+ */
+test('summarizeRuntimeStatus: merges recentLogs across every connection', () => {
+  const logA = { frames: [], chosenPath: 'a.js', at: 100 };
+  const logB = { frames: [], chosenPath: 'b.js', at: 200 };
+  const connections = [
+    { key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, recentLogs: [logA], wrapperSuggestion: null },
+    { key: 'b', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, recentLogs: [logB], wrapperSuggestion: null },
+  ];
+  assert.deepStrictEqual(summarizeRuntimeStatus(connections).recentLogs, [logA, logB]);
+});
+
+test('summarizeRuntimeStatus: caps merged recentLogs to the most recent few, even across several connections', () => {
+  const logs = Array.from({ length: 4 }, (_, i) => ({ frames: [], chosenPath: `f${i}.js`, at: i }));
+  const connections = [
+    { key: 'a', state: 'connected', received: 4, drawn: 4, droppedByReason: {}, recentLogs: logs.slice(0, 2), wrapperSuggestion: null },
+    { key: 'b', state: 'connected', received: 4, drawn: 4, droppedByReason: {}, recentLogs: logs.slice(2), wrapperSuggestion: null },
+  ];
+  // MAX_SUMMARY_RECENT_LOGS is 5 — a 4-log merge fits, so this proves the cap doesn't trim early
+  // when nothing needs trimming. The cap itself is exercised by a larger fixture below.
+  assert.strictEqual(summarizeRuntimeStatus(connections).recentLogs.length, 4);
+
+  const many = [
+    {
+      key: 'a',
+      state: 'connected',
+      received: 8,
+      drawn: 8,
+      droppedByReason: {},
+      recentLogs: Array.from({ length: 8 }, (_, i) => ({ frames: [], chosenPath: 'x.js', at: i })),
+      wrapperSuggestion: null,
+    },
+  ];
+  assert.strictEqual(summarizeRuntimeStatus(many).recentLogs.length, 5);
+});
+
+/**
+ * The bug this guards against: with several LIVE runtime connections (ticket 02a supports
+ * more than one at once), naively concatenating each connection's recentLogs and slicing from
+ * the end would keep whichever connection happens to be iterated last, not whichever entries are
+ * actually most recent — e.g. an OLDER log from a connection iterated later could survive the cap
+ * while a NEWER log from a connection iterated earlier gets dropped. Sorting by `at` before
+ * capping (summarizeRuntimeStatus) fixes this.
+ */
+test('summarizeRuntimeStatus: keeps the chronologically most-recent entries across connections, not just the last-iterated connection\'s', () => {
+  const connections = [
+    // Connection 'a' is iterated FIRST but has the NEWER timestamps.
+    {
+      key: 'a',
+      state: 'connected',
+      received: 3,
+      drawn: 3,
+      droppedByReason: {},
+      recentLogs: [
+        { frames: [], chosenPath: 'newest.js', at: 300 },
+        { frames: [], chosenPath: 'newer.js', at: 200 },
+      ],
+      wrapperSuggestion: null,
+    },
+    // Connection 'b' is iterated LAST but has the OLDER timestamps.
+    {
+      key: 'b',
+      state: 'connected',
+      received: 1,
+      drawn: 1,
+      droppedByReason: {},
+      recentLogs: [{ frames: [], chosenPath: 'oldest.js', at: 100 }],
+      wrapperSuggestion: null,
+    },
+  ];
+  // Every entry fits under MAX_SUMMARY_RECENT_LOGS (5), so this checks ORDER: oldest -> newest.
+  const paths = summarizeRuntimeStatus(connections).recentLogs.map((l) => l.chosenPath);
+  assert.deepStrictEqual(paths, ['oldest.js', 'newer.js', 'newest.js']);
+});
+
+test('summarizeRuntimeStatus: reports the STRONGEST wrapper suggestion (highest share) across connections', () => {
+  const connections = [
+    { key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, recentLogs: [], wrapperSuggestion: { path: 'weak.js', share: 0.6 } },
+    { key: 'b', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, recentLogs: [], wrapperSuggestion: { path: 'strong.js', share: 0.9 } },
+  ];
+  assert.deepStrictEqual(summarizeRuntimeStatus(connections).wrapperSuggestion, { path: 'strong.js', share: 0.9 });
+});
+
+test('summarizeRuntimeStatus: no connection has a suggestion -> null, not undefined or a stray object', () => {
+  const connections = [{ key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, recentLogs: [], wrapperSuggestion: null }];
+  assert.strictEqual(summarizeRuntimeStatus(connections).wrapperSuggestion, null);
+});
+
+test('formatSkipReason: a chosen frame reads "chosen"', () => {
+  assert.strictEqual(formatSkipReason({ url: '/a.js', lineNumber: 0, columnNumber: 0, skipReason: null }), 'chosen');
+});
+
+test('formatSkipReason: a pattern-skipped frame names the matched pattern', () => {
+  const entry = { url: '/app/node_modules/x.js', lineNumber: 0, columnNumber: 0, skipReason: 'skip-pattern', matchedPattern: '**/node_modules/**' };
+  assert.match(formatSkipReason(entry), /\*\*\/node_modules\/\*\*/);
+});
+
+test('formatSkipReason: an obfuscated frame explains why, without needing a matched pattern', () => {
+  assert.match(formatSkipReason({ url: '/bundle.min.js', lineNumber: 0, columnNumber: 0, skipReason: 'obfuscated' }), /minified|obfuscated/);
+});
+
+test('formatSkipReason: outside-workspace and unreadable-file each get their own distinct explanation', () => {
+  const outside = formatSkipReason({ url: '/elsewhere.js', lineNumber: 0, columnNumber: 0, skipReason: 'outside-workspace' });
+  const unreadable = formatSkipReason({ url: '/gone.js', lineNumber: 0, columnNumber: 0, skipReason: 'unreadable-file' });
+  assert.notStrictEqual(outside, unreadable);
+  assert.match(outside, /workspace/);
+  assert.match(unreadable, /readable|read/);
+});
+
+test('formatWrapperSuggestionText: names the file and its share as a percentage', () => {
+  assert.strictEqual(
+    formatWrapperSuggestionText({ path: 'shared/log.js', share: 0.85 }),
+    '"shared/log.js" accounts for 85% of recent logs — looks like a wrapper.',
+  );
+});
+
+/**
+ * escapeGlobPath (ticket 03, item 7): the "Skip this file" pattern is built from a real
+ * workspace-relative path, which can legitimately contain glob-special characters — those must
+ * be escaped so the saved skipFrames pattern still matches the literal file, not something else.
+ */
+test('escapeGlobPath: an ordinary path is left untouched', () => {
+  assert.strictEqual(escapeGlobPath('src/utils/log.js'), 'src/utils/log.js');
+});
+
+test('escapeGlobPath: parentheses, brackets, and a leading bang are escaped', () => {
+  assert.strictEqual(escapeGlobPath('src/(shared)/log.js'), 'src/\\(shared\\)/log.js');
+  assert.strictEqual(escapeGlobPath('lib/[legacy]/wrap.js'), 'lib/\\[legacy\\]/wrap.js');
+  assert.strictEqual(escapeGlobPath('!important/log.js'), '\\!important/log.js');
+});
+
+test('escapeGlobPath: star and question-mark wildcards are escaped', () => {
+  assert.strictEqual(escapeGlobPath('a*b?c.js'), 'a\\*b\\?c.js');
 });
 
 test('summarizeRuntimeStatus: counts connections by state, including connecting and failed', () => {

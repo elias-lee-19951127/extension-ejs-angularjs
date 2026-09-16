@@ -13,6 +13,12 @@ const {
   filterConnectableTargets,
   mapContainerPath,
   rewriteWebSocketUrl,
+  DEFAULT_SKIP_FRAME_PATTERNS,
+  matchesSkipPattern,
+  classifyFrameCandidates,
+  isLikelyMinified,
+  stripAnsi,
+  suggestWrapperFile,
 } = require('../dist');
 
 test('offsetForLocation: mid-file location maps to the correct character offset', () => {
@@ -34,7 +40,14 @@ test('offsetForLocation: line 0 needs no preceding newline count', () => {
  * docs/research/console-ninja-inline-log.md section 2 (citing CDP's js_protocol.json,
  * domain Runtime, event consoleAPICalled / types StackTrace, CallFrame) — not a live capture.
  */
-test('parseConsoleApiCalled: joins primitive args and reads location from the top call frame', () => {
+/**
+ * Ticket 03 (.scratch/runtime-remote-env/issues/03-chon-frame.md) changed this function's return
+ * shape: it used to pick `callFrames[0]` itself and return an already-anchored
+ * `{url, line, character}`. Frame selection (skip patterns, obfuscation heuristic) needs file
+ * content this pure layer has no IO to read — so it now hands back every candidate call frame,
+ * unpicked, and lets packages/server/src/index.ts's `onLog` choose one.
+ */
+test('parseConsoleApiCalled: joins primitive args and carries every call frame through, in original order', () => {
   const event = {
     type: 'log',
     args: [
@@ -44,13 +57,15 @@ test('parseConsoleApiCalled: joins primitive args and reads location from the to
     stackTrace: {
       callFrames: [
         { functionName: 'render', scriptId: '1', url: 'file:///app/views/profile.js', lineNumber: 5, columnNumber: 2 },
+        { functionName: 'caller', scriptId: '2', url: 'file:///app/index.js', lineNumber: 10, columnNumber: 0 },
       ],
     },
   };
   assert.deepStrictEqual(parseConsoleApiCalled(event), {
-    url: 'file:///app/views/profile.js',
-    line: 5,
-    character: 2,
+    callFrames: [
+      { url: 'file:///app/views/profile.js', lineNumber: 5, columnNumber: 2 },
+      { url: 'file:///app/index.js', lineNumber: 10, columnNumber: 0 },
+    ],
     value: 'total 42',
     severity: 'log',
   });
@@ -191,7 +206,7 @@ test('parseRuntimeLogMessage: a well-formed consoleAPICalled frame parses throug
   });
   assert.deepStrictEqual(parseRuntimeLogMessage(raw), {
     kind: 'log',
-    log: { url: '/app.js', line: 0, character: 0, value: 'hi', severity: 'log' },
+    log: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }], value: 'hi', severity: 'log' },
   });
 });
 
@@ -274,4 +289,145 @@ test('rewriteWebSocketUrl: preserves the path and query string', () => {
 
 test('rewriteWebSocketUrl: a malformed URL is returned unchanged rather than throwing', () => {
   assert.strictEqual(rewriteWebSocketUrl('not a url', 'localhost', 9229), 'not a url');
+});
+
+// ============================================================================================
+// Ticket 03 (.scratch/runtime-remote-env/issues/03-chon-frame.md) — skip library/logger frames
+// by pattern, skip obfuscated/minified files by content, strip ANSI, suggest a wrapper file.
+// ============================================================================================
+
+test('matchesSkipPattern: node:internal/** matches a Node internal module specifier', () => {
+  assert.strictEqual(
+    matchesSkipPattern('node:internal/modules/cjs/loader', DEFAULT_SKIP_FRAME_PATTERNS),
+    'node:internal/**',
+  );
+});
+
+test('matchesSkipPattern: **/node_modules/** matches a dependency file, plain path or file:// URL alike', () => {
+  assert.strictEqual(
+    matchesSkipPattern('/Users/me/project/node_modules/lodash/index.js', DEFAULT_SKIP_FRAME_PATTERNS),
+    '**/node_modules/**',
+  );
+  assert.strictEqual(
+    matchesSkipPattern('file:///Users/me/project/node_modules/lodash/index.js', DEFAULT_SKIP_FRAME_PATTERNS),
+    '**/node_modules/**',
+  );
+});
+
+test('matchesSkipPattern: a common vendored logger directory (log4js) is matched by default, without any user config', () => {
+  assert.strictEqual(
+    matchesSkipPattern('/Users/me/project/aocs/utility/log4js/appenders/console.js', DEFAULT_SKIP_FRAME_PATTERNS),
+    '**/log4js/**',
+  );
+});
+
+test('matchesSkipPattern: ordinary user code matches nothing', () => {
+  assert.strictEqual(matchesSkipPattern('/Users/me/project/src/controllers/profile.js', DEFAULT_SKIP_FRAME_PATTERNS), null);
+});
+
+test('classifyFrameCandidates: keeps frame order, marking each as skipped-by-pattern or not', () => {
+  const frames = [
+    { url: '/app/node_modules/x/index.js', lineNumber: 1, columnNumber: 0 },
+    { url: '/app/src/controller.js', lineNumber: 5, columnNumber: 2 },
+  ];
+  assert.deepStrictEqual(classifyFrameCandidates(frames, []), [
+    { frame: frames[0], skippedByPattern: '**/node_modules/**' },
+    { frame: frames[1], skippedByPattern: null },
+  ]);
+});
+
+test('classifyFrameCandidates: ejsng.runtimeLog.skipFrames ADDS to the default list, never replaces it', () => {
+  const frames = [
+    { url: '/app/team-wrapper/log.js', lineNumber: 0, columnNumber: 0 },
+    { url: '/app/node_modules/x/index.js', lineNumber: 0, columnNumber: 0 }, // still caught by the DEFAULT list
+  ];
+  const result = classifyFrameCandidates(frames, ['**/team-wrapper/**']);
+  assert.strictEqual(result[0].skippedByPattern, '**/team-wrapper/**');
+  assert.strictEqual(result[1].skippedByPattern, '**/node_modules/**');
+});
+
+test('classifyFrameCandidates: an empty pattern list (no user skipFrames) still applies the defaults', () => {
+  const frames = [{ url: 'node:internal/timers', lineNumber: 0, columnNumber: 0 }];
+  assert.strictEqual(classifyFrameCandidates(frames, [])[0].skippedByPattern, 'node:internal/**');
+});
+
+/**
+ * isLikelyMinified (ticket 03, checklist item 3): "almost no newline characters relative to the
+ * file's size" — measured as average characters per line, so short files are never flagged just
+ * for being short (a one-line test fixture is not "obfuscated").
+ */
+test('isLikelyMinified: a short one-line file is NOT flagged — too small to mean anything', () => {
+  assert.strictEqual(isLikelyMinified('console.log(1);\n'), false);
+  assert.strictEqual(isLikelyMinified('const x = 1;'), false);
+});
+
+test('isLikelyMinified: an ordinary multi-line source file is not flagged', () => {
+  const line = 'function add(a, b) { return a + b; }';
+  const source = Array(60).fill(line).join('\n'); // ~60 short lines, well above the size floor
+  assert.strictEqual(isLikelyMinified(source), false);
+});
+
+test('isLikelyMinified: a large file crammed onto one long line IS flagged', () => {
+  const source = 'var a=1,b=2,c=3;'.repeat(200); // one line, thousands of characters
+  assert.strictEqual(isLikelyMinified(source), true);
+});
+
+test('isLikelyMinified: a large file with a FEW long lines (not truly one-line) is still flagged', () => {
+  const longLine = 'x'.repeat(1000);
+  const source = [longLine, longLine, longLine].join('\n'); // 3 lines, ~333 chars average
+  assert.strictEqual(isLikelyMinified(source), true);
+});
+
+test('isLikelyMinified: a large file that IS properly broken into many lines is not flagged', () => {
+  const line = 'x'.repeat(40);
+  const source = Array(100).fill(line).join('\n'); // 4000 chars, but avg line length is only 40
+  assert.strictEqual(isLikelyMinified(source), false);
+});
+
+/** stripAnsi (ticket 03, checklist item 5) — the log4js colored layout the spec targets. */
+test('stripAnsi: removes SGR color codes, leaving the plain text', () => {
+  assert.strictEqual(stripAnsi('[32mhello[39m'), 'hello');
+});
+
+test('stripAnsi: removes multiple escape sequences in one string', () => {
+  assert.strictEqual(stripAnsi('[1m[31merror:[39m[22m something broke'), 'error: something broke');
+});
+
+test('stripAnsi: a string with no escape codes is returned unchanged', () => {
+  assert.strictEqual(stripAnsi('plain text, nothing to strip'), 'plain text, nothing to strip');
+});
+
+test('stripAnsi: an empty string stays empty', () => {
+  assert.strictEqual(stripAnsi(''), '');
+});
+
+/** suggestWrapperFile (ticket 03, checklist item 7). */
+test('suggestWrapperFile: too few samples yet — no suggestion even if one file dominates', () => {
+  const recent = Array(10).fill('src/log.js');
+  assert.strictEqual(suggestWrapperFile(recent), null);
+});
+
+test('suggestWrapperFile: one file accounting for most recent logs is suggested, with its share', () => {
+  const recent = [...Array(15).fill('src/log.js'), ...Array(5).fill('src/other.js')];
+  assert.deepStrictEqual(suggestWrapperFile(recent), { path: 'src/log.js', share: 0.75 });
+});
+
+test('suggestWrapperFile: a healthy spread across many files is not suggested', () => {
+  const recent = ['a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'a.js', 'b.js', 'c.js', 'd.js', 'e.js'];
+  assert.strictEqual(suggestWrapperFile(recent), null);
+});
+
+test('suggestWrapperFile: an empty history suggests nothing', () => {
+  assert.strictEqual(suggestWrapperFile([]), null);
+});
+
+test('suggestWrapperFile: minSamples/shareThreshold are configurable', () => {
+  const recent = [...Array(2).fill('src/log.js'), ...Array(2).fill('src/other.js')]; // share 0.5
+  // Enough samples (custom minSamples: 4) but 0.5 share doesn't clear the DEFAULT 0.6 threshold.
+  assert.strictEqual(suggestWrapperFile(recent, { minSamples: 4 }), null);
+  // Lowering the threshold to 0.5 as well now clears it.
+  assert.deepStrictEqual(suggestWrapperFile(recent, { minSamples: 4, shareThreshold: 0.5 }), {
+    path: 'src/log.js',
+    share: 0.5,
+  });
 });

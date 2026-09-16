@@ -9,6 +9,7 @@ import {
   type ServerOptions,
 } from 'vscode-languageclient/node';
 import {
+  escapeGlobPath,
   formatRuntimeStatusBarText,
   RuntimeLogState,
   summarizeRuntimeStatus,
@@ -133,6 +134,24 @@ async function connectToRuntime(host: string, port: number): Promise<void> {
   }
 }
 
+/**
+ * Ticket 03, item 7: the panel suggested `path` (workspace-relative) as a likely logging wrapper
+ * — the user clicked "Skip this file", so add it to `ejsng.runtimeLog.skipFrames`. NEVER done
+ * automatically — this is the only place that writes to this setting. Written as `**\/<path>` so
+ * it matches regardless of the absolute prefix the runtime happens to report the file under
+ * (container path, host path, …) — see `matchesSkipPattern` in packages/core.
+ */
+async function acceptWrapperSuggestion(path: string): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('ejsng');
+  const current = cfg.get<string[]>('runtimeLog.skipFrames') ?? [];
+  const pattern = `**/${escapeGlobPath(path)}`;
+  if (current.includes(pattern)) return;
+  await cfg.update('runtimeLog.skipFrames', [...current, pattern], vscode.ConfigurationTarget.Workspace);
+  void vscode.window.showInformationMessage(
+    `EJS/NG: added "${pattern}" to ejsng.runtimeLog.skipFrames. Reconnect (or reload) for it to take effect.`,
+  );
+}
+
 /** Parse the free-text `host:port` field (Command Palette input box or the panel's own field). */
 function parseHostPort(input: string): { host: string; port: number } | null {
   const [host, portText] = input.split(':');
@@ -222,7 +241,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ejsDelimiter: cfg.get('ejsDelimiter'),
       customDirectives: cfg.get('customDirectives'),
       diagnostics: { enabled: cfg.get('diagnostics.enabled') },
-      runtimeLog: { pathMappings: cfg.get('runtimeLog.pathMappings') },
+      runtimeLog: { pathMappings: cfg.get('runtimeLog.pathMappings'), skipFrames: cfg.get('runtimeLog.skipFrames') },
     },
   };
 
@@ -240,6 +259,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     disconnect: () => void disconnectRuntime(),
     launchChromeDebug: (port) => launchChromeDebug(context, port),
     openSettings: () => void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog'),
+    acceptWrapperSuggestion: (path) => void acceptWrapperSuggestion(path),
   });
 
   runtimeLogDecorationType = vscode.window.createTextEditorDecorationType({
