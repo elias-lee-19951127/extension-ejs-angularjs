@@ -57,3 +57,32 @@ The interface in `packages/core/src/resolve/rename-orchestrator.ts` that Rename 
 to read `Workspace`: everything in `FactSource` plus `templatePaths()`, `openTemplatePaths()`
 (replacing a direct read of `overlays` — `Workspace`'s own private Map), and `resolveScopeRefs()`
 (wraps `Linker`, fully hiding the Linker's existence from the orchestrator).
+
+## Runtime Log
+
+**Runtime Target**:
+A running Node process or browser tab that the extension attaches to over the debug protocol to
+read `console.*` calls.
+_Avoid_: runtime, inspector, debug port (a debug port is only where a target is reachable)
+
+**Runtime Path**:
+The file path or URL a Runtime Target reports for a log line — as seen from inside the target
+(a container path, a browser `http://` URL), not necessarily existing on the machine that has the
+workspace open.
+_Avoid_: remote path, container path
+
+**Path Mapping**:
+A rule that rewrites a Runtime Path prefix to a path prefix on the machine that has the workspace
+open. Sources, highest priority first: user-declared > derived from Docker mounts (longest mount
+wins) > suffix match (browser URLs only).
+_Avoid_: remote/local mapping, path rewrite
+
+**Shadowed File**:
+A workspace file the Runtime Target never runs, because a more specific Docker mount covers its
+path inside the container — editing it has no effect on the runtime.
+
+**Stale File**:
+A file whose content on disk differs from the copy the Runtime Target is running (edited, but not
+yet reloaded by the runtime). Logs from a Stale File are never drawn inline, since their line
+numbers no longer hold.
+_Avoid_: outdated file, dirty file

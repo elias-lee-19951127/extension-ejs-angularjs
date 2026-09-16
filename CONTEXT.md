@@ -55,3 +55,31 @@ Interface `packages/core/src/resolve/rename-orchestrator.ts` dung de Rename Orch
 Workspace: gom moi thu cua `FactSource` cong them `templatePaths()`, `openTemplatePaths()` (thay
 cho doc thang `overlays` — Map rieng cua Workspace), va `resolveScopeRefs()` (boc `Linker`, giau
 hoan toan su ton tai cua Linker khoi orchestrator).
+
+## Runtime Log
+
+**Runtime Target**:
+Mot tien trinh Node hoac mot tab trinh duyet dang chay ma extension gan vao qua giao thuc debug
+de doc `console.*`.
+_Avoid_: runtime, inspector, debug port (debug port chi la noi reach duoc target)
+
+**Runtime Path**:
+Duong dan file hoac URL ma Runtime Target bao cho mot dong log — nhin tu ben trong target
+(duong dan trong container, URL `http://` cua trinh duyet), chua chac ton tai tren may dang mo
+workspace.
+_Avoid_: remote path, container path
+
+**Path Mapping**:
+Quy tac doi mot tien to Runtime Path sang tien to duong dan tren may dang mo workspace. Nguon
+theo thu tu uu tien: nguoi dung tu khai > suy tu mount Docker (mount dai nhat thang) > khop duoi
+(chi cho URL trinh duyet).
+_Avoid_: remote/local mapping, path rewrite
+
+**Shadowed File**:
+File trong workspace ma Runtime Target khong bao gio chay, vi mot mount Docker cu the hon da de
+len duong dan cua no ben trong container — sua file nay khong anh huong gi toi runtime.
+
+**Stale File**:
+File tren dia co noi dung khac voi ban Runtime Target dang chay (da sua nhung runtime chua nap
+lai). Log tu Stale File khong duoc ve inline vi so dong khong con dung.
+_Avoid_: outdated file, dirty file
