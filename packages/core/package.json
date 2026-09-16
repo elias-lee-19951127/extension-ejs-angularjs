@@ -8,6 +8,10 @@
     "acorn-loose": "^8.4.0",
     "acorn-walk": "^8.3.4",
     "angular-html-parser": "^5.2.0",
-    "fast-glob": "^3.3.2"
+    "fast-glob": "^3.3.2",
+    "micromatch": "^4.0.8"
+  },
+  "devDependencies": {
+    "@types/micromatch": "^4.0.9"
   }
 }

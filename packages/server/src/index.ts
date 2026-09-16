@@ -31,6 +31,13 @@ import {
   formatDockerCandidateLabel,
   partitionDockerCandidates,
   filterDockerCandidatesByAppPort,
+  classifyFrameCandidates,
+  isLikelyMinified,
+  stripAnsi,
+  suggestWrapperFile,
+  type CallFrame,
+  type FrameDiagnosticEntry,
+  type RuntimeLogFrameDiagnostic,
 } from '@ejsng/core';
 import {
   connectRuntimeLog,
@@ -57,6 +64,10 @@ let diagnosticsEnabled = false;
  */
 type RuntimeLogConnectionState = 'connecting' | 'connected' | 'failed';
 
+/** Ticket 03 (.scratch/runtime-remote-env/issues/03-chon-frame.md) — bounded ring buffers so recent-log diagnostics and wrapper-file detection don't grow forever. */
+const MAX_RECENT_FRAME_DIAGNOSTICS = 5;
+const MAX_RECENT_CHOSEN_PATHS = 50;
+
 /** Per-connection counters, exposed over LSP so a client can show "received / drawn / dropped" instead of just a count (ticket 02, item 4). */
 interface RuntimeLogConnectionInfo {
   socket: WebSocket;
@@ -68,12 +79,18 @@ interface RuntimeLogConnectionInfo {
   drawn: number;
   /** `received - drawn`, broken down by WHY each one was dropped — never silently vanish. */
   droppedByReason: Record<string, number>;
+  /** Ticket 03, item 6 — the last few logs' frame-selection story (chosen + every skipped frame, with reasons), most recent last. */
+  recentFrameDiagnostics: RuntimeLogFrameDiagnostic[];
+  /** Ticket 03, item 7 — every recently CHOSEN frame's workspace-relative path, for wrapper-file detection (see `suggestWrapperFile`). */
+  recentChosenPaths: string[];
 }
 
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
 const runtimeLogConnections = new Map<string, RuntimeLogConnectionInfo>();
 /** `ejsng.runtimeLog.pathMappings` — container path -> host path, for Docker targets (ticket 11). */
 let runtimeLogPathMappings: PathMapping[] = [];
+/** `ejsng.runtimeLog.skipFrames` — user-added patterns, ON TOP OF `DEFAULT_SKIP_FRAME_PATTERNS` (ticket 03). */
+let runtimeLogSkipFramePatterns: string[] = [];
 /**
  * Does the client support dynamic watcher registration
  * (workspace.didChangeWatchedFiles.dynamicRegistration)?
@@ -87,10 +104,11 @@ connection.onInitialize((params): InitializeResult => {
 
   const settings = (params.initializationOptions ?? {}) as Partial<Config> & {
     diagnostics?: { enabled?: boolean };
-    runtimeLog?: { pathMappings?: PathMapping[] };
+    runtimeLog?: { pathMappings?: PathMapping[]; skipFrames?: string[] };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
   runtimeLogPathMappings = settings.runtimeLog?.pathMappings ?? [];
+  runtimeLogSkipFramePatterns = settings.runtimeLog?.skipFrames ?? [];
   // LSP 3.17: RenameOptions is only sent when the client declares prepareSupport.
   const prepareSupport = params.capabilities.textDocument?.rename?.prepareSupport === true;
   const watched = params.capabilities.workspace?.didChangeWatchedFiles;
@@ -435,6 +453,87 @@ function recordDrop(info: RuntimeLogConnectionInfo, reason: string): void {
   info.droppedByReason[reason] = (info.droppedByReason[reason] ?? 0) + 1;
 }
 
+/** Push `item` onto a bounded ring buffer, dropping the oldest entry once `max` is exceeded. */
+function pushBounded<T>(buffer: T[], item: T, max: number): void {
+  buffer.push(item);
+  if (buffer.length > max) buffer.shift();
+}
+
+/**
+ * Ticket 03 (.scratch/runtime-remote-env/issues/03-chon-frame.md) — frame selection.
+ *
+ * `parseConsoleApiCalled` (packages/core) no longer picks a frame itself: it hands back every
+ * candidate call frame, because deciding between them needs file content (obfuscation check) and
+ * workspace/path-mapping knowledge that pure layer has no IO to reach. This walks them here:
+ *
+ *  1. Classify every frame against the skip-pattern list (`classifyFrameCandidates`, pure) —
+ *     `node:internal/**`, `node_modules`, common vendored-logger directories, plus the user's own
+ *     `ejsng.runtimeLog.skipFrames`. Frames that match are never considered further.
+ *  2. Walk the surviving candidates IN ORDER. For each: map the container path (ticket 11),
+ *     resolve it to a workspace-relative path, and read its content — exactly the same
+ *     containment/readability checks `onLog` already did for `callFrames[0]` pre-ticket-03. A
+ *     candidate that fails containment, is unreadable, OR whose content trips `isLikelyMinified`
+ *     (almost no newlines relative to file size — an obfuscated/minified bundle with no source
+ *     map) is skipped forward to the NEXT candidate (spec story #16: fall back to the nearest
+ *     frame that's actually usable, not just the nearest readable one — none of these three
+ *     reasons should stop the walk early when a later frame might still work). The first candidate
+ *     that clears all three wins.
+ *  3. If nothing is left standing, the log draws nowhere — panel-only, counted under a specific
+ *     reason, never silently dropped: the reason of the LAST candidate actually attempted
+ *     (`outside-workspace` / `unreadable-file`), or `all-frames-skipped` (ticket 03, checklist
+ *     item 4) when the candidate list was empty to begin with (every frame was pattern-skipped)
+ *     or the last attempted candidate's own failure was `obfuscated` — obfuscation-driven
+ *     exhaustion is grouped under the same bucket as pattern-driven exhaustion, since both are
+ *     "frame selection gave up", not a workspace/path-mapping problem to fix.
+ *
+ * Every frame tried (pattern-skipped, obfuscated, or chosen) is recorded into `tried`, for the
+ * panel's "stack tried / frames skipped, with reason" view (ticket 03, item 6).
+ */
+function selectRuntimeLogFrame(
+  ws: Workspace,
+  callFrames: CallFrame[],
+  skipPatterns: string[],
+  pathMappings: PathMapping[],
+): { chosen: { frame: CallFrame; relPath: string; source: string } | null; dropReason: string; tried: FrameDiagnosticEntry[] } {
+  const classified = classifyFrameCandidates(callFrames, skipPatterns);
+  const tried: FrameDiagnosticEntry[] = [];
+  let lastAttemptReason: 'outside-workspace' | 'unreadable-file' | 'obfuscated' | null = null;
+
+  for (const { frame, skippedByPattern } of classified) {
+    if (skippedByPattern !== null) {
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'skip-pattern', matchedPattern: skippedByPattern });
+      continue;
+    }
+
+    const rawPath = frame.url.startsWith('file://') ? URI.parse(frame.url).fsPath : frame.url;
+    const fsPath = mapContainerPath(rawPath, pathMappings);
+    const relPath = ws.toRelative(fsPath);
+
+    if (!isWithinRoot(relPath)) {
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'outside-workspace' });
+      lastAttemptReason = 'outside-workspace';
+      continue;
+    }
+    const source = ws.source(relPath);
+    if (source == null) {
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'unreadable-file' });
+      lastAttemptReason = 'unreadable-file';
+      continue;
+    }
+    if (isLikelyMinified(source)) {
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'obfuscated' });
+      lastAttemptReason = 'obfuscated';
+      continue;
+    }
+
+    tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: null });
+    return { chosen: { frame, relPath, source }, dropReason: '', tried };
+  }
+
+  const dropReason = lastAttemptReason === 'outside-workspace' || lastAttemptReason === 'unreadable-file' ? lastAttemptReason : 'all-frames-skipped';
+  return { chosen: null, dropReason, tried };
+}
+
 /**
  * Move `info` to a new state and, if it actually changed, push `ejsng/runtimeStatusChanged` —
  * lets a client learn the REAL connecting -> connected/failed transition promptly instead of
@@ -463,6 +562,8 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): v
     received: 0,
     drawn: 0,
     droppedByReason: {},
+    recentFrameDiagnostics: [],
+    recentChosenPaths: [],
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -480,18 +581,20 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): v
       // completed initialize), the log must still be COUNTED, not silently missing from both
       // `drawn` and every entry of `droppedByReason`.
       if (!workspace) return recordDrop(info, 'server-not-ready');
-      const rawPath = log.url.startsWith('file://') ? URI.parse(log.url).fsPath : log.url;
-      const fsPath = mapContainerPath(rawPath, runtimeLogPathMappings);
-      const relPath = workspace.toRelative(fsPath);
-      if (!isWithinRoot(relPath)) return recordDrop(info, 'outside-workspace'); // not ours to read
-      const source = workspace.source(relPath);
-      if (source == null) return recordDrop(info, 'unreadable-file');
-      const offset = offsetForLocation(source, log.line, log.character);
+
+      const { chosen, dropReason, tried } = selectRuntimeLogFrame(workspace, log.callFrames, runtimeLogSkipFramePatterns, runtimeLogPathMappings);
+      pushBounded(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath: chosen?.relPath ?? null }, MAX_RECENT_FRAME_DIAGNOSTICS);
+
+      if (!chosen) return recordDrop(info, dropReason);
+
+      const { frame, relPath, source } = chosen;
+      const offset = offsetForLocation(source, frame.lineNumber, frame.columnNumber);
       info.drawn++;
+      pushBounded(info.recentChosenPaths, relPath, MAX_RECENT_CHOSEN_PATHS);
       void connection.sendNotification('ejsng/runtimeLog', {
         uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
         range: toRange(source, { start: offset, end: offset }),
-        value: log.value,
+        value: stripAnsi(log.value),
         severity: log.severity,
       });
     },
@@ -628,6 +731,10 @@ connection.onRequest('ejsng/disconnectRuntime', (params: { key: string }) => {
  * "received / drawn / dropped" display instead of just a connection count, and see the true
  * connecting/connected/failed state per connection instead of trusting connectRuntime's
  * synchronous (and, for back-compat, still optimistic) 'connected' response.
+ *
+ * `recentLogs`/`wrapperSuggestion` are ticket 03's additions (also purely additive fields on the
+ * SAME per-connection object) — the panel's "stack tried / frames skipped" view (item 6) and the
+ * "this file looks like a wrapper — skip it?" suggestion (item 7).
  */
 connection.onRequest('ejsng/runtimeStatus', () => ({
   connections: [...runtimeLogConnections.entries()].map(([key, info]) => ({
@@ -637,6 +744,8 @@ connection.onRequest('ejsng/runtimeStatus', () => ({
     received: info.received,
     drawn: info.drawn,
     droppedByReason: info.droppedByReason,
+    recentLogs: info.recentFrameDiagnostics,
+    wrapperSuggestion: suggestWrapperFile(info.recentChosenPaths),
   })),
 }));
 
