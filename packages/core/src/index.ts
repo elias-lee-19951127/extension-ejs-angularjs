@@ -16,3 +16,4 @@ export * from './resolve/linker';
 export * from './extract/bindings';
 export * from './resolve/rename';
 export * from './runtime-log';
+export * from './runtime-log-docker';

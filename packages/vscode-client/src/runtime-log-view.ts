@@ -3,6 +3,11 @@ import type { RuntimeStatusSummary } from './runtime-log-state';
 
 /** What the webview asks the extension host to do — one message type per button/field. */
 export interface RuntimeLogViewCallbacks {
+  /**
+   * `hostPort` may be `''` (ticket 04: the field left blank — try Docker discovery with no app
+   * port filter), a bare number with no colon (an app port — Docker discovery first, narrowed to
+   * whichever container publishes it), or `host:port` (unchanged, direct connect).
+   */
   connect(hostPort: string): void;
   disconnect(): void;
   launchChromeDebug(port: number): void;
@@ -36,7 +41,9 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = this.html();
     webviewView.webview.onDidReceiveMessage((msg: { type: string; hostPort?: string; port?: number }) => {
-      if (msg.type === 'connect' && msg.hostPort) this.callbacks.connect(msg.hostPort);
+      // Ticket 04: an empty `hostPort` is a valid Connect click too — "leave blank to
+      // auto-detect via Docker" — so this must NOT require a truthy value like it used to.
+      if (msg.type === 'connect') this.callbacks.connect(msg.hostPort ?? '');
       else if (msg.type === 'disconnect') this.callbacks.disconnect();
       else if (msg.type === 'launchChrome') this.callbacks.launchChromeDebug(msg.port ?? this.defaultChromePort());
       else if (msg.type === 'openSettings') this.callbacks.openSettings();
@@ -86,7 +93,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
 
   <h4>Connect to Runtime</h4>
   <div class="row">
-    <input id="hostPort" type="text" placeholder="127.0.0.1:5000" />
+    <input id="hostPort" type="text" placeholder="blank = auto-detect via Docker" />
     <button id="connectBtn">Connect</button>
   </div>
   <div class="row">
@@ -109,7 +116,9 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   const chromePortEl = document.getElementById('chromePort');
 
   document.getElementById('connectBtn').addEventListener('click', () => {
-    if (hostPortEl.value.trim()) vscode.postMessage({ type: 'connect', hostPort: hostPortEl.value.trim() });
+    // Ticket 04: an empty field is a legitimate click too — "Connect" with nothing typed tries
+    // Docker discovery on its own, it isn't rejected here anymore.
+    vscode.postMessage({ type: 'connect', hostPort: hostPortEl.value.trim() });
   });
   hostPortEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('connectBtn').click(); });
   document.getElementById('disconnectBtn').addEventListener('click', () => vscode.postMessage({ type: 'disconnect' }));
@@ -134,7 +143,8 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       statusEl.textContent = 'Not connected';
     }
     if (!chromePortEl.value) chromePortEl.value = String(msg.chromePort);
-    if (!hostPortEl.value) hostPortEl.value = '127.0.0.1:' + msg.chromePort;
+    // Ticket 04: no longer auto-fills hostPort with a guessed "127.0.0.1:<port>" here — leaving
+    // it blank is now the deliberate "auto-detect via Docker" gesture, not an unfinished field.
   });
 </script>
 </body>

@@ -141,6 +141,119 @@ function parseHostPort(input: string): { host: string; port: number } | null {
   return { host, port };
 }
 
+/** One connectable Docker container, as `ejsng/discoverRuntimeTargets` reports it for a Quick Pick. */
+interface DockerCandidateSummary {
+  host: string;
+  port: number;
+  label: string;
+}
+
+type DiscoverRuntimeTargetsResult =
+  | { status: 'connected'; key: string; host: string; port: number; unreachable: string[] }
+  | {
+      status: 'choose';
+      host: string;
+      port: number;
+      targets: Array<{ id: string; title: string; url: string; type: string }>;
+      unreachable: string[];
+    }
+  | { status: 'choose-container'; candidates: DockerCandidateSummary[]; unreachable: string[] }
+  | { status: 'no-docker-target' }
+  | { status: 'unreachable-containers'; containers: string[] }
+  | { status: 'error'; message: string };
+
+/**
+ * Checklist item 6: a Node container with `--inspect` enabled but no published inspector port is
+ * surfaced by name — even when another container connected fine, so it isn't lost just because
+ * something else happened to work (see the shape note on `unreachable` in
+ * packages/server/src/index.ts's `ejsng/discoverRuntimeTargets` handler).
+ */
+function warnAboutUnreachableContainers(names: string[]): void {
+  if (names.length === 0) return;
+  void vscode.window.showWarningMessage(
+    `EJS/NG: found Node container(s) with --inspect enabled but no published inspector port — ${names.join(', ')}. ` +
+      "Publish it (e.g. \"--inspect=0.0.0.0:9229\" plus a compose port mapping) to connect.",
+  );
+}
+
+/**
+ * Ticket 04 (.scratch/runtime-remote-env/issues/04-tim-runtime-target-qua-docker.md): "Connect"
+ * with nothing typed at all, or with an app port instead of a debug port — tries Docker container
+ * discovery FIRST, via the new `ejsng/discoverRuntimeTargets` request, before the user ever has
+ * to supply host:port by hand. Kept as its own self-contained function rather than folded into
+ * `connectToRuntime` above, so this ticket's addition can't change that function's existing
+ * behavior for the plain host:port case at all.
+ *
+ * Falls through to `fallback` whenever Docker isn't available or found nothing usable for
+ * `appPort` — `'no-docker-target'` is never shown as an error (per spec, no Docker is an
+ * expected, common case for a local/non-Docker user); `'unreachable-containers'` (checklist item
+ * 6: a Node container exists but never published its inspector) is surfaced as a warning first,
+ * then still falls through, so the user isn't left with no way to connect at all.
+ */
+async function discoverDockerRuntime(appPort: number | undefined, fallback: () => void | Promise<void>): Promise<void> {
+  try {
+    const result = await client?.sendRequest<DiscoverRuntimeTargetsResult>('ejsng/discoverRuntimeTargets', { appPort });
+    if (!result || result.status === 'no-docker-target') {
+      await fallback();
+      return;
+    }
+    if (result.status === 'connected') {
+      warnAboutUnreachableContainers(result.unreachable);
+      runtimeLogConnections.set(result.key, `${result.host}:${result.port}`);
+      updateRuntimeStatusBar();
+      void refreshRuntimeStatus();
+      return;
+    }
+    if (result.status === 'choose') {
+      warnAboutUnreachableContainers(result.unreachable);
+      // The rare case: exactly one Docker container matched, but IT exposes multiple CDP
+      // targets — reuses the existing ejsng/connectRuntimeTarget request unchanged, same as the
+      // plain host:port flow's own 'choose' handling in connectToRuntime.
+      const picked = await vscode.window.showQuickPick(
+        result.targets.map((t) => ({ label: t.title || t.url, description: t.url, target: t })),
+        { title: 'EJS/NG: multiple targets found — choose one', placeHolder: 'Pick a target' },
+      );
+      if (!picked) return;
+      const chosen = await client?.sendRequest<ConnectRuntimeResult>('ejsng/connectRuntimeTarget', {
+        host: result.host,
+        port: result.port,
+        targetId: picked.target.id,
+      });
+      if (chosen?.status === 'connected') {
+        runtimeLogConnections.set(chosen.key, `${result.host}:${chosen.port} — ${picked.label}`);
+        updateRuntimeStatusBar();
+        void refreshRuntimeStatus();
+      } else {
+        void vscode.window.showErrorMessage(`EJS/NG: ${chosen?.status === 'error' ? chosen.message : 'failed to connect.'}`);
+      }
+      return;
+    }
+    if (result.status === 'choose-container') {
+      warnAboutUnreachableContainers(result.unreachable);
+      // Checklist item 5: multiple Docker containers found — Quick Pick "<container name>: <app
+      // port>" (e.g. "cityos-web: 5000"), per the spec's exact phrasing (user story #4).
+      const picked = await vscode.window.showQuickPick(
+        result.candidates.map((c) => ({ label: c.label, description: `${c.host}:${c.port}`, candidate: c })),
+        { title: 'EJS/NG: multiple Docker containers found — choose one', placeHolder: 'Pick a container' },
+      );
+      if (!picked) return;
+      // The chosen candidate's host:port is directly usable with the existing, unchanged
+      // ejsng/connectRuntime — no extra request needed for this step.
+      await connectToRuntime(picked.candidate.host, picked.candidate.port);
+      return;
+    }
+    if (result.status === 'unreachable-containers') {
+      warnAboutUnreachableContainers(result.containers);
+      await fallback();
+      return;
+    }
+    void vscode.window.showErrorMessage(`EJS/NG: ${result.message}`);
+  } catch (err) {
+    void vscode.window.showErrorMessage(`EJS/NG: Docker discovery failed — ${String(err)}`);
+    await fallback();
+  }
+}
+
 async function disconnectRuntime(): Promise<void> {
   if (runtimeLogConnections.size === 0) {
     void vscode.window.showInformationMessage('EJS/NG: no active runtime connections.');
@@ -229,13 +342,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   client = new LanguageClient('ejsng', 'EJS + AngularJS Navigator', serverOptions, clientOptions);
 
   runtimeLogView = new RuntimeLogViewProvider(() => runtimeLogConnections.size, defaultChromeDebugPort, () => runtimeStatusSummary, {
+    // Ticket 04: blank field = "Connect with nothing typed" (Docker discovery only); a bare
+    // number with no colon = an app port (Docker discovery first, then the pre-Docker app-port
+    // flow via connectToRuntime if Docker doesn't find it); host:port = unchanged, direct connect.
     connect: (hostPort) => {
-      const parsed = parseHostPort(hostPort);
-      if (!parsed) {
-        void vscode.window.showErrorMessage(`EJS/NG: "${hostPort}" isn't host:port — try something like 127.0.0.1:5000.`);
+      const trimmed = hostPort.trim();
+      if (!trimmed) {
+        void discoverDockerRuntime(undefined, () => {
+          void vscode.window.showErrorMessage('EJS/NG: no Docker container found — type a host:port or an app port to connect.');
+        });
         return;
       }
-      void connectToRuntime(parsed.host, parsed.port);
+      const parsed = parseHostPort(trimmed);
+      if (parsed) {
+        void connectToRuntime(parsed.host, parsed.port);
+        return;
+      }
+      const appPort = Number(trimmed);
+      if (Number.isFinite(appPort)) {
+        void discoverDockerRuntime(appPort, () => connectToRuntime('127.0.0.1', appPort));
+        return;
+      }
+      void vscode.window.showErrorMessage(`EJS/NG: "${hostPort}" isn't host:port or a port number — try something like 127.0.0.1:5000 or just 5000.`);
     },
     disconnect: () => void disconnectRuntime(),
     launchChromeDebug: (port) => launchChromeDebug(context, port),
@@ -268,20 +396,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const r = await client?.sendRequest('ejsng/stats');
       void vscode.window.showInformationMessage(`EJS/NG: ${JSON.stringify(r)}`);
     }),
-    vscode.commands.registerCommand('ejsng.connectRuntime', async () => {
-      const input = await vscode.window.showInputBox({
-        title: 'EJS/NG: Connect to Runtime',
-        prompt: "Your app's port (we'll enable its inspector automatically), or a debug port directly",
-        placeHolder: '127.0.0.1:5000',
-      });
-      if (!input) return;
-      const parsed = parseHostPort(input);
-      if (!parsed) {
-        void vscode.window.showErrorMessage(`EJS/NG: "${input}" isn't host:port — try something like 127.0.0.1:5000.`);
-        return;
-      }
-      await connectToRuntime(parsed.host, parsed.port);
-    }),
+    // Ticket 04, user story #1: hitting Connect no longer requires typing host:port up front —
+    // Docker discovery runs FIRST, with no app port filter, and the input box (this command's
+    // entire old behavior, unchanged) is only a fallback for when Docker isn't available/found
+    // nothing to offer.
+    vscode.commands.registerCommand('ejsng.connectRuntime', () =>
+      discoverDockerRuntime(undefined, async () => {
+        const input = await vscode.window.showInputBox({
+          title: 'EJS/NG: Connect to Runtime',
+          prompt: "Your app's port (we'll enable its inspector automatically), or a debug port directly",
+          placeHolder: '127.0.0.1:5000',
+        });
+        if (!input) return;
+        const parsed = parseHostPort(input);
+        if (!parsed) {
+          void vscode.window.showErrorMessage(`EJS/NG: "${input}" isn't host:port — try something like 127.0.0.1:5000.`);
+          return;
+        }
+        await connectToRuntime(parsed.host, parsed.port);
+      }),
+    ),
     vscode.commands.registerCommand('ejsng.disconnectRuntime', disconnectRuntime),
     // A split/reopened editor for a file with existing hits starts undecorated otherwise.
     vscode.window.onDidChangeVisibleTextEditors((editors) => {

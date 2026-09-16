@@ -21,7 +21,17 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import { isWithinRoot, mapContainerPath, offsetForLocation, Workspace, type Config, type Span } from '@ejsng/core';
+import {
+  isWithinRoot,
+  mapContainerPath,
+  offsetForLocation,
+  Workspace,
+  type Config,
+  type Span,
+  formatDockerCandidateLabel,
+  partitionDockerCandidates,
+  filterDockerCandidatesByAppPort,
+} from '@ejsng/core';
 import {
   connectRuntimeLog,
   discoverTargets,
@@ -30,6 +40,7 @@ import {
   type DiscoveredTarget,
   type PathMapping,
 } from './runtime-log';
+import { listDockerRuntimeCandidates } from './docker';
 import type WebSocket from 'ws';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -628,6 +639,126 @@ connection.onRequest('ejsng/runtimeStatus', () => ({
     droppedByReason: info.droppedByReason,
   })),
 }));
+
+// ---------------------------------------------------------------------------------------------
+// Ticket 04 (.scratch/runtime-remote-env/issues/04-tim-runtime-target-qua-docker.md): find a
+// Runtime Target through Docker, so the user can hit Connect with nothing typed at all, or with
+// their app's ordinary port instead of a debug port. New request only — does NOT touch
+// ejsng/connectRuntime, connectRuntimeTarget, disconnectRuntime, or runtimeLog's existing shape
+// (same additive convention ticket 02 used for ejsng/runtimeStatus/runtimeStatusChanged, see its
+// Comments). Intentionally kept self-contained rather than sharing helpers with the handlers
+// above, so it doesn't risk altering their behavior or shape.
+
+/** Docker always publishes a container's ports on the Docker host's own loopback interface. */
+const DOCKER_DISCOVERY_HOST = '127.0.0.1';
+
+/** One connectable Docker container, shaped for a client-side Quick Pick (checklist item 5). */
+interface DockerCandidateSummary {
+  host: string;
+  port: number;
+  label: string;
+}
+
+type DiscoverRuntimeTargetsResult =
+  | { status: 'connected'; key: string; host: string; port: number; unreachable: string[] }
+  | {
+      status: 'choose';
+      host: string;
+      port: number;
+      targets: Array<{ id: string; title: string; url: string; type: string }>;
+      unreachable: string[];
+    }
+  | { status: 'choose-container'; candidates: DockerCandidateSummary[]; unreachable: string[] }
+  | { status: 'no-docker-target' }
+  | { status: 'unreachable-containers'; containers: string[] }
+  | { status: 'error'; message: string };
+
+/**
+ * Discover Runtime Targets through Docker. `params.appPort`, when given, narrows to the
+ * container that PUBLISHES that port as an app port (checklist item 4) — e.g. typing `5000`
+ * finds `cityos-web`. Omitted entirely (the "Connect with nothing typed" flow, checklist item 1)
+ * considers every candidate found on the machine.
+ *
+ * `'no-docker-target'` covers BOTH "no `docker` on PATH" and "Docker is fine but nothing here
+ * matched" — either way the client should fall straight through to its existing pre-Docker flow
+ * (an `ejsng/connectRuntime` call, same as before this ticket) without surfacing an error; per
+ * the spec, no Docker is an expected, common case, not a failure.
+ *
+ * Checklist item 6 (a container IS running Node with `--inspect` enabled, but never published
+ * that port to the host — report it by name, never touch the running container to try to fix
+ * that itself; out of scope per the spec: no `docker exec`, no modifying compose) is carried as
+ * `unreachable` container names on EVERY status, not only when nothing else is connectable — a
+ * user with `cityos-web` (connectable) AND `cityos-worker` (not) should still be told about
+ * `cityos-worker` once `cityos-web` connects, not just when it's the only container found at all.
+ * `'unreachable-containers'` on its own is the case where NOTHING is connectable, `unreachable`
+ * is the whole story, and there's no `'connected'`/`'choose*'` result to attach it to instead.
+ */
+connection.onRequest(
+  'ejsng/discoverRuntimeTargets',
+  async (params: { appPort?: number }): Promise<DiscoverRuntimeTargetsResult> => {
+    const containers = await listDockerRuntimeCandidates();
+    const filtered = params.appPort != null ? filterDockerCandidatesByAppPort(containers, params.appPort) : containers;
+    const { connectable, unreachable } = partitionDockerCandidates(filtered);
+    const unreachableNames = unreachable.map((c) => c.containerName);
+
+    if (connectable.length === 0) {
+      if (unreachableNames.length > 0) {
+        return { status: 'unreachable-containers', containers: unreachableNames };
+      }
+      return { status: 'no-docker-target' };
+    }
+
+    if (connectable.length > 1) {
+      return {
+        status: 'choose-container',
+        candidates: connectable.map((c) => ({
+          host: DOCKER_DISCOVERY_HOST,
+          port: c.hostInspectorPort as number, // non-null: filtered into `connectable` on exactly that
+          label: formatDockerCandidateLabel(c),
+        })),
+        unreachable: unreachableNames,
+      };
+    }
+
+    // Exactly one connectable container (checklist item 5: exactly one candidate connects
+    // immediately) — its inspector target still needs the ordinary CDP discovery dance (almost
+    // always exactly one target for a Node process, but handled generally in case it ever isn't).
+    const [only] = connectable;
+    if (!only) return { status: 'no-docker-target' }; // unreachable in practice: connectable.length === 1 here
+    const port = only.hostInspectorPort as number;
+    let targets: DiscoveredTarget[];
+    try {
+      targets = await discoverTargets(DOCKER_DISCOVERY_HOST, port);
+    } catch (err) {
+      return { status: 'error', message: err instanceof Error ? err.message : String(err) };
+    }
+    if (targets.length === 0) {
+      return {
+        status: 'error',
+        message: `container "${only.containerName}" publishes an inspector port at ${DOCKER_DISCOVERY_HOST}:${port}, but nothing answered the debug protocol there`,
+      };
+    }
+    if (targets.length > 1) {
+      return {
+        status: 'choose',
+        host: DOCKER_DISCOVERY_HOST,
+        port,
+        targets: targets.map((t) => ({ id: t.id, title: t.title, url: t.url, type: t.type })),
+        unreachable: unreachableNames,
+      };
+    }
+    const [target] = targets;
+    if (!target) {
+      return {
+        status: 'error',
+        message: `container "${only.containerName}" publishes an inspector port at ${DOCKER_DISCOVERY_HOST}:${port}, but nothing answered the debug protocol there`,
+      };
+    }
+    const key = runtimeLogConnectionKey(DOCKER_DISCOVERY_HOST, port, target.id);
+    startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
+    return { status: 'connected', key, host: DOCKER_DISCOVERY_HOST, port, unreachable: unreachableNames };
+  },
+);
 
 documents.listen(connection);
 connection.listen();
