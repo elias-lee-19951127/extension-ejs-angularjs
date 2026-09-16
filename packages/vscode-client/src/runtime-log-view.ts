@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { RuntimeStatusSummary } from './runtime-log-state';
 
 /** What the webview asks the extension host to do — one message type per button/field. */
 export interface RuntimeLogViewCallbacks {
@@ -20,10 +21,12 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly connectionCount: () => number,
     private readonly defaultChromePort: () => number,
+    /** Ticket 02, item 4 — the real received/drawn/dropped totals, not just a connection count. */
+    private readonly statusSummary: () => RuntimeStatusSummary,
     private readonly callbacks: RuntimeLogViewCallbacks,
   ) {}
 
-  /** Call whenever the connection count changes, so the status line stays current. */
+  /** Call whenever the connection count or status summary changes, so the panel stays current. */
   refresh(): void {
     this.postStatus();
   }
@@ -42,10 +45,16 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   }
 
   private postStatus(): void {
+    const summary = this.statusSummary();
     void this.view?.webview.postMessage({
       type: 'status',
       count: this.connectionCount(),
       chromePort: this.defaultChromePort(),
+      received: summary.received,
+      drawn: summary.drawn,
+      dropped: summary.dropped,
+      connecting: summary.connecting,
+      failed: summary.failed,
     });
   }
 
@@ -115,7 +124,15 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   window.addEventListener('message', (event) => {
     const msg = event.data;
     if (msg.type !== 'status') return;
-    statusEl.textContent = msg.count > 0 ? msg.count + ' connected' : 'Not connected';
+    if (msg.count > 0) {
+      // Ticket 02: "received / drawn / dropped" tells a WAY more useful story than a bare
+      // connection count — the classic symptom this replaces is "1 connected" with nothing
+      // ever drawing and no way to tell why.
+      var note = msg.connecting > 0 ? ' (connecting…)' : msg.failed > 0 ? ' (failed)' : '';
+      statusEl.textContent = 'received ' + msg.received + ' / drawn ' + msg.drawn + ' / dropped ' + msg.dropped + note;
+    } else {
+      statusEl.textContent = 'Not connected';
+    }
     if (!chromePortEl.value) chromePortEl.value = String(msg.chromePort);
     if (!hostPortEl.value) hostPortEl.value = '127.0.0.1:' + msg.chromePort;
   });

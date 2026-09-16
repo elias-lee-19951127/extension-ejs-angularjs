@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createServer } = require('node:http');
 const { spawn } = require('node:child_process');
-const { mkdtempSync, realpathSync, rmSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -160,10 +160,12 @@ test('LSP: ejsng/connectRuntime with a plain app port auto-enables the inspector
   const already = await discoverTargets('127.0.0.1', 9229).catch(() => null);
   if (already) return t.skip('something is already listening on 9229 on this machine');
 
-  // realpathSync: macOS's tmpdir() is itself a symlink (/var/folders/... -> /private/var/...),
-  // and Node reports a script's REALPATH in stack traces — an un-resolved root would make every
-  // log from this app look like it's outside the workspace. See ticket 12.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ejsng-autoenable-')));
+  // Deliberately NOT realpathSync'd: macOS's tmpdir() is itself a symlink
+  // (/var/folders/... -> /private/var/...), and Node reports a script's REALPATH in stack
+  // traces. Before ticket 02's symlink fix, this un-resolved root made every log from this app
+  // look like it was outside the workspace (see .scratch/inline-runtime-log/issues/12-symlinked-root-path-mismatch.md)
+  // — leaving the root unresolved here is what proves that fix end-to-end.
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-autoenable-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const appFile = join(root, 'auto-app.js');
   writeFileSync(

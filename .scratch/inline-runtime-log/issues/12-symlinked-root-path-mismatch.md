@@ -14,20 +14,21 @@ nào biết vì sao.
 
 **Blocked by:** None — độc lập, sửa được ngay.
 
-**Status:** ready-for-agent
+**Status:** done (via ticket 02 — see Comments)
 
-- [ ] Resolve symlink ở **cả hai phía** trước khi so sánh: `workspace.config.root` (một lần, lúc
+- [x] Resolve symlink ở **cả hai phía** trước khi so sánh: `workspace.config.root` (một lần, lúc
       khởi tạo hoặc cache lại) và `fsPath` từ CDP event (mỗi lần, vì đây là input từ ngoài) — dùng
       `fs.realpathSync` thay vì chỉ `path.resolve`
-- [ ] Không phá vỡ hành vi hiện có khi không có symlink nào (đường dẫn thường vẫn resolve y hệt
+- [x] Không phá vỡ hành vi hiện có khi không có symlink nào (đường dẫn thường vẫn resolve y hệt
       như cũ)
-- [ ] `realpathSync` throw nếu file không tồn tại (ví dụ CDP báo đường dẫn ảo, script eval) — bọc
+- [x] `realpathSync` throw nếu file không tồn tại (ví dụ CDP báo đường dẫn ảo, script eval) — bọc
       an toàn, coi như "không resolve được" → vẫn áp guard chặn như hiện tại, không throw ra ngoài
-- [ ] Test: file thật trong workspace, truy cập qua một symlink trỏ tới workspace root → resolve
+- [x] Test: file thật trong workspace, truy cập qua một symlink trỏ tới workspace root → resolve
       đúng, không bị chặn nhầm (tái hiện đúng kịch bản đã gặp ở macOS `tmpdir()`)
-- [ ] Cân nhắc: sửa ở `isWithinRoot`/chỗ gọi nó trong `packages/server/src/index.ts`, hay sửa sâu
+- [x] Cân nhắc: sửa ở `isWithinRoot`/chỗ gọi nó trong `packages/server/src/index.ts`, hay sửa sâu
       hơn trong `Workspace.toRelative` (packages/core) — vì `refreshFiles` cũng dùng chung logic
       này và có thể gặp đúng lỗi tương tự với file thay đổi ngoài editor qua đường dẫn symlink
+      → **đã chọn sửa sâu ở `Workspace.toRelative`**, xem chi tiết trong Comments của ticket 02.
 
 ## Comments
 

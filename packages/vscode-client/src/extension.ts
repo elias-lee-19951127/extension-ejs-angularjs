@@ -8,7 +8,14 @@ import {
   type LanguageClientOptions,
   type ServerOptions,
 } from 'vscode-languageclient/node';
-import { RuntimeLogState, type RuntimeLogEntry } from './runtime-log-state';
+import {
+  formatRuntimeStatusBarText,
+  RuntimeLogState,
+  summarizeRuntimeStatus,
+  type RuntimeLogEntry,
+  type RuntimeStatusConnection,
+  type RuntimeStatusSummary,
+} from './runtime-log-state';
 import { RuntimeLogViewProvider } from './runtime-log-view';
 
 let client: LanguageClient | undefined;
@@ -18,6 +25,8 @@ const runtimeLogState = new RuntimeLogState();
 /** Connections this window knows it opened, key -> a human label for the Disconnect picker. */
 const runtimeLogConnections = new Map<string, string>();
 let runtimeLogView: RuntimeLogViewProvider;
+/** The last snapshot fetched via `ejsng/runtimeStatus` — see refreshRuntimeStatus. */
+let runtimeStatusSummary: RuntimeStatusSummary = summarizeRuntimeStatus([]);
 
 /** No bundled default per OS — Chrome's install location varies too much (edition, Homebrew cask, Flatpak, …). */
 function defaultChromeExecutablePath(): string {
@@ -66,9 +75,20 @@ type ConnectRuntimeResult =
 
 function updateRuntimeStatusBar(): void {
   if (!runtimeLogStatusBar) return;
-  runtimeLogStatusBar.text =
-    runtimeLogConnections.size > 0 ? `EJS/NG Runtime: ${runtimeLogConnections.size} connected` : 'EJS/NG Runtime: off';
+  runtimeLogStatusBar.text = formatRuntimeStatusBarText(runtimeLogConnections.size, runtimeStatusSummary);
   runtimeLogView.refresh();
+}
+
+/**
+ * Ask the server for every connection's REAL state and received/drawn/dropped-by-reason counts
+ * (ticket 02, item 4) and refresh the status bar/panel from it. `ejsng/connectRuntime` itself
+ * keeps reporting 'connected' synchronously the instant discovery succeeds, for backward
+ * compatibility (ticket 02, item 5) — this is the only place that sees the TRUE lifecycle.
+ */
+async function refreshRuntimeStatus(): Promise<void> {
+  const result = await client?.sendRequest<{ connections: RuntimeStatusConnection[] }>('ejsng/runtimeStatus');
+  runtimeStatusSummary = summarizeRuntimeStatus(result?.connections ?? []);
+  updateRuntimeStatusBar();
 }
 
 /**
@@ -84,6 +104,7 @@ async function connectToRuntime(host: string, port: number): Promise<void> {
     if (result.status === 'connected') {
       runtimeLogConnections.set(result.key, `${host}:${result.port}`);
       updateRuntimeStatusBar();
+      void refreshRuntimeStatus();
     } else if (result.status === 'choose') {
       const picked = await vscode.window.showQuickPick(
         result.targets.map((t) => ({ label: t.title || t.url, description: t.url, target: t })),
@@ -98,6 +119,7 @@ async function connectToRuntime(host: string, port: number): Promise<void> {
       if (chosen?.status === 'connected') {
         runtimeLogConnections.set(chosen.key, `${host}:${chosen.port} — ${picked.label}`);
         updateRuntimeStatusBar();
+        void refreshRuntimeStatus();
       } else {
         void vscode.window.showErrorMessage(`EJS/NG: ${chosen?.status === 'error' ? chosen.message : 'failed to connect.'}`);
       }
@@ -132,6 +154,7 @@ async function disconnectRuntime(): Promise<void> {
   await client?.sendRequest('ejsng/disconnectRuntime', { key: picked.key });
   runtimeLogConnections.delete(picked.key);
   updateRuntimeStatusBar();
+  void refreshRuntimeStatus();
 }
 
 /** The shape of an `ejsng/runtimeLog` notification's params — mirrors packages/server/src/index.ts. */
@@ -205,7 +228,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   client = new LanguageClient('ejsng', 'EJS + AngularJS Navigator', serverOptions, clientOptions);
 
-  runtimeLogView = new RuntimeLogViewProvider(() => runtimeLogConnections.size, defaultChromeDebugPort, {
+  runtimeLogView = new RuntimeLogViewProvider(() => runtimeLogConnections.size, defaultChromeDebugPort, () => runtimeStatusSummary, {
     connect: (hostPort) => {
       const parsed = parseHostPort(hostPort);
       if (!parsed) {
@@ -226,9 +249,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   runtimeLogStatusBar.text = 'EJS/NG Runtime: off';
   runtimeLogStatusBar.show();
 
+  // Keeps received/drawn/dropped fresh while logs are actively flowing, independent of the
+  // per-transition push below — a no-op (no request sent) whenever there's nothing connected.
+  const runtimeStatusPollInterval = setInterval(() => {
+    if (runtimeLogConnections.size > 0) void refreshRuntimeStatus();
+  }, 2000);
+
   context.subscriptions.push(
     runtimeLogDecorationType,
     runtimeLogStatusBar,
+    new vscode.Disposable(() => clearInterval(runtimeStatusPollInterval)),
     vscode.window.registerWebviewViewProvider('ejsngRuntimeView', runtimeLogView),
     vscode.commands.registerCommand('ejsng.reindex', async () => {
       const r = await client?.sendRequest('ejsng/reindex');
@@ -274,6 +304,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     redrawRuntimeLogDecorations(params.uri, entries);
   });
+
+  // The REAL connecting -> connected/failed transition (ticket 02, item 4) — pushed so the
+  // status bar/panel don't have to wait for the next poll tick to stop lying about a connection
+  // that's still `connecting` or has already `failed`.
+  client.onNotification('ejsng/runtimeStatusChanged', () => void refreshRuntimeStatus());
 }
 
 export function deactivate(): Thenable<void> | undefined {

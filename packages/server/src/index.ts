@@ -21,13 +21,11 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
-import { isWithinRoot, Workspace, type Config, type Span } from '@ejsng/core';
+import { isWithinRoot, mapContainerPath, offsetForLocation, Workspace, type Config, type Span } from '@ejsng/core';
 import {
   connectRuntimeLog,
   discoverTargets,
   findPidListeningOnPort,
-  mapContainerPath,
-  offsetForLocation,
   waitForTargets,
   type DiscoveredTarget,
   type PathMapping,
@@ -39,8 +37,30 @@ const documents = new TextDocuments(TextDocument);
 
 let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
+
+/**
+ * Real connection lifecycle (ticket 02, item 4): the panel used to report `connected` the
+ * instant the socket was CREATED, not when it actually opened. `connecting` is the state from
+ * creation until the WebSocket really opens; `connected` only after that; `failed` on any error
+ * or an unexpected close, always with a human-readable `reason`.
+ */
+type RuntimeLogConnectionState = 'connecting' | 'connected' | 'failed';
+
+/** Per-connection counters, exposed over LSP so a client can show "received / drawn / dropped" instead of just a count (ticket 02, item 4). */
+interface RuntimeLogConnectionInfo {
+  socket: WebSocket;
+  state: RuntimeLogConnectionState;
+  reason?: string;
+  /** Every console call the CDP endpoint sent that could be classified as a console call at all. */
+  received: number;
+  /** Successfully turned into an `ejsng/runtimeLog` notification. */
+  drawn: number;
+  /** `received - drawn`, broken down by WHY each one was dropped — never silently vanish. */
+  droppedByReason: Record<string, number>;
+}
+
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
-const runtimeLogConnections = new Map<string, WebSocket>();
+const runtimeLogConnections = new Map<string, RuntimeLogConnectionInfo>();
 /** `ejsng.runtimeLog.pathMappings` — container path -> host path, for Docker targets (ticket 11). */
 let runtimeLogPathMappings: PathMapping[] = [];
 /**
@@ -399,6 +419,23 @@ function runtimeLogConnectionKey(host: string, port: number, targetId: string): 
   return `${host}:${port}:${targetId}`;
 }
 
+/** Count one dropped log under `reason` — see RuntimeLogConnectionInfo.droppedByReason. */
+function recordDrop(info: RuntimeLogConnectionInfo, reason: string): void {
+  info.droppedByReason[reason] = (info.droppedByReason[reason] ?? 0) + 1;
+}
+
+/**
+ * Move `info` to a new state and, if it actually changed, push `ejsng/runtimeStatusChanged` —
+ * lets a client learn the REAL connecting -> connected/failed transition promptly instead of
+ * polling `ejsng/runtimeStatus` on a timer just to catch it (ticket 02, item 4).
+ */
+function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: RuntimeLogConnectionState, reason?: string): void {
+  if (info.state === state && info.reason === reason) return;
+  info.state = state;
+  info.reason = reason;
+  void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason });
+}
+
 /**
  * Open (or replace) the CDP connection for `key`, forwarding every console call it can anchor
  * to a line as an `ejsng/runtimeLog` notification — shared by every target this server connects
@@ -407,21 +444,39 @@ function runtimeLogConnectionKey(host: string, port: number, targetId: string): 
 function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): void {
   // `terminate()`, not `close()`: a reconnect to the SAME key supersedes it, doesn't shut it
   // down gracefully — don't wait on a close handshake before starting the replacement.
-  runtimeLogConnections.get(key)?.terminate();
-  const socket = connectRuntimeLog(
-    webSocketDebuggerUrl,
-    (log) => {
-      // A message already in flight on a socket this key has since replaced or dropped — ignore
-      // it, so a reconnect (or disconnect) can't mix in logs from a connection no longer current.
-      if (runtimeLogConnections.get(key) !== socket) return;
-      if (!workspace) return;
+  runtimeLogConnections.get(key)?.socket.terminate();
+
+  const info: RuntimeLogConnectionInfo = {
+    socket: undefined as unknown as WebSocket, // set right below, before any callback can fire
+    state: 'connecting',
+    received: 0,
+    drawn: 0,
+    droppedByReason: {},
+  };
+  // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
+  // in flight on a connection this key has since replaced or disconnected must be ignored, so a
+  // reconnect (or disconnect) can't mix in state from a connection no longer current.
+  const socket = connectRuntimeLog(webSocketDebuggerUrl, {
+    onOpen: () => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      setConnectionState(key, info, 'connected');
+    },
+    onLog: (log) => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      info.received++;
+      // Defensive: `workspace` is set once in onInitialize and never reset, so this shouldn't be
+      // reachable in practice — but if it ever were (e.g. a client connecting before/without a
+      // completed initialize), the log must still be COUNTED, not silently missing from both
+      // `drawn` and every entry of `droppedByReason`.
+      if (!workspace) return recordDrop(info, 'server-not-ready');
       const rawPath = log.url.startsWith('file://') ? URI.parse(log.url).fsPath : log.url;
       const fsPath = mapContainerPath(rawPath, runtimeLogPathMappings);
       const relPath = workspace.toRelative(fsPath);
-      if (!isWithinRoot(relPath)) return; // outside the workspace — not ours to read
+      if (!isWithinRoot(relPath)) return recordDrop(info, 'outside-workspace'); // not ours to read
       const source = workspace.source(relPath);
-      if (source == null) return;
+      if (source == null) return recordDrop(info, 'unreadable-file');
       const offset = offsetForLocation(source, log.line, log.character);
+      info.drawn++;
       void connection.sendNotification('ejsng/runtimeLog', {
         uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
         range: toRange(source, { start: offset, end: offset }),
@@ -429,12 +484,24 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): v
         severity: log.severity,
       });
     },
-    (err) => {
-      if (runtimeLogConnections.get(key) !== socket) return;
+    onUnanchored: () => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      info.received++;
+      recordDrop(info, 'no-stack-trace');
+    },
+    onError: (err) => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      setConnectionState(key, info, 'failed', err.message);
       connection.console.error(`ejsng/connectRuntime (${key}): ${err.message}`);
     },
-  );
-  runtimeLogConnections.set(key, socket);
+    onClose: (code, reason) => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      if (info.state === 'failed') return; // already have a more specific reason from onError
+      setConnectionState(key, info, 'failed', reason || `connection closed (code ${code})`);
+    },
+  });
+  info.socket = socket;
+  runtimeLogConnections.set(key, info);
 }
 
 function discoverTargetsOrError(host: string, port: number): Promise<DiscoveredTarget[] | { status: 'error'; message: string }> {
@@ -534,12 +601,33 @@ connection.onRequest('ejsng/connectRuntimeTarget', async (params: { host: string
 
 /** Close and forget one runtime-log connection. Disconnecting an unknown key is a no-op. */
 connection.onRequest('ejsng/disconnectRuntime', (params: { key: string }) => {
-  const socket = runtimeLogConnections.get(params.key);
-  if (!socket) return { disconnected: false };
+  const info = runtimeLogConnections.get(params.key);
+  if (!info) return { disconnected: false };
+  // Delete BEFORE terminate(): the socket's own 'close' handler guards on this map entry, so an
+  // intentional disconnect must not be mistaken for the connection failing on its own.
   runtimeLogConnections.delete(params.key);
-  socket.terminate();
+  info.socket.terminate();
   return { disconnected: true };
 });
+
+/**
+ * New in ticket 02 (item 4) — additive, does not change any existing request/notification shape
+ * (ejsng/connectRuntime, connectRuntimeTarget, disconnectRuntime, runtimeLog all keep their
+ * current contract, so the future IntelliJ client isn't broken). Lets a client build a real
+ * "received / drawn / dropped" display instead of just a connection count, and see the true
+ * connecting/connected/failed state per connection instead of trusting connectRuntime's
+ * synchronous (and, for back-compat, still optimistic) 'connected' response.
+ */
+connection.onRequest('ejsng/runtimeStatus', () => ({
+  connections: [...runtimeLogConnections.entries()].map(([key, info]) => ({
+    key,
+    state: info.state,
+    reason: info.reason,
+    received: info.received,
+    drawn: info.drawn,
+    droppedByReason: info.droppedByReason,
+  })),
+}));
 
 documents.listen(connection);
 connection.listen();

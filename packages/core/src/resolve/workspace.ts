@@ -1,4 +1,4 @@
-import { readFileSync, statSync, type Stats } from 'node:fs';
+import { readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import fg from 'fast-glob';
 import type { AttrCandidate, Config, FileFacts, ScopeFrame, Span, TemplateExpression, TemplateFacts } from '../types';
@@ -13,11 +13,6 @@ import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
 import { tryParseExpression } from '../ng/parser';
-
-/** Is `relPath` a normal in-workspace relative path — not `..`-escaping the root, not absolute? */
-export function isWithinRoot(relPath: string): boolean {
-  return Boolean(relPath) && !/^\.\.(?:[\\/]|$)/.test(relPath) && !isAbsolute(relPath);
-}
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { resolveDefinition } from './definition';
 import { type FactSource, shapeAtPath, shapeOf } from './shape';
@@ -26,6 +21,31 @@ import {
   renameAt as doRenameAt,
   type RenameSource,
 } from './rename-orchestrator';
+
+/** Is `relPath` a normal in-workspace relative path — not `..`-escaping the root, not absolute? */
+export function isWithinRoot(relPath: string): boolean {
+  return Boolean(relPath) && !/^\.\.(?:[\\/]|$)/.test(relPath) && !isAbsolute(relPath);
+}
+
+/**
+ * Resolve symlinks in `path`, for accurate containment comparisons when the workspace root (or
+ * any ancestor directory) sits behind a symlink — common on macOS (`os.tmpdir()` itself:
+ * `/var/folders/...` -> `/private/var/folders/...`), some `nvm`/`asdf` setups, or a directory
+ * mounted through a symlink. `path.resolve` alone does NOT resolve symlinks, so comparing an
+ * unresolved root against a REALPATH the runtime reports (V8/CDP report realpaths in stack
+ * traces) never matches (ticket .scratch/inline-runtime-log/issues/12-symlinked-root-path-mismatch.md).
+ *
+ * Never throws: `fs.realpathSync` throws when `path` doesn't exist (a virtual/eval path CDP can
+ * report, or a file not yet flushed to disk) — treated as "couldn't resolve", returning `path`
+ * unchanged so the caller's existing "outside workspace" guard still applies safely.
+ */
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
 
 export interface Location {
   path: string;
@@ -104,6 +124,13 @@ export class Workspace implements FactSource, RenameSource {
   private overlays = new Map<string, string>();
   private overlayFacts = new Map<string, FileFacts>();
   private linker = new Linker();
+  /**
+   * `config.root` with symlinks resolved, computed once and cached — used ONLY for the
+   * containment comparison in `toRelative`. `config.root` itself is left untouched everywhere
+   * else (indexing, `source()`, URIs handed back to the editor): those must keep matching the
+   * path the editor actually opened, not its resolved realpath.
+   */
+  private readonly resolvedRoot: string;
 
   /** FactSource.moduleAliases — used by definition resolution (packages/core/src/resolve/definition.ts). */
   get moduleAliases(): string[] {
@@ -117,6 +144,7 @@ export class Workspace implements FactSource, RenameSource {
 
   constructor(config: Partial<Config> & { root: string }, dbPath?: string) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.resolvedRoot = safeRealpath(this.config.root);
     this.store = new IndexStore(dbPath ?? join(this.config.root, '.ejsng-cache', INDEX_FILENAME));
   }
 
@@ -437,8 +465,33 @@ export class Workspace implements FactSource, RenameSource {
     }
   }
 
+  /**
+   * Symlink-aware: resolves symlinks on BOTH sides before comparing — `resolvedRoot` was already
+   * cached at construction, `absPath` is resolved fresh every call since it's external input
+   * (a CDP-reported path, a file-watcher event). See `safeRealpath` above (ticket 12).
+   *
+   * This is called on every buffer edit (`onDidChangeContent`), hover, definition, and file-watch
+   * event — not just from the runtime-log path the symlink fix targeted — so it takes a fast path
+   * first: a plain (non-realpath'd) comparison, which is exactly the pre-fix behavior and is
+   * already correct whenever no symlink is involved (the overwhelmingly common case). Only when
+   * THAT says "outside the workspace" does it pay for `realpathSync` — needed only to tell a
+   * genuine outside path apart from one that merely mismatches through a symlink.
+   *
+   * When `absPath` can't be resolved (most commonly: a file just DELETED — refreshFiles calls
+   * this for a delete event too, and by definition the file no longer exists to realpath) this
+   * falls back to the same plain comparison — mixing a resolved root with an unresolved path
+   * would falsely read as "outside the workspace" for every such path whenever the root itself
+   * sits behind a symlink (e.g. macOS's own tmpdir()), silently breaking deletion handling.
+   */
   toRelative(absPath: string): string {
-    return relative(this.config.root, resolvePath(absPath));
+    const resolved = resolvePath(absPath);
+    const plain = relative(this.config.root, resolved);
+    if (isWithinRoot(plain)) return plain;
+    try {
+      return relative(this.resolvedRoot, realpathSync(resolved));
+    } catch {
+      return plain;
+    }
   }
 
   /**

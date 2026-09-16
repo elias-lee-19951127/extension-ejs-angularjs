@@ -2,6 +2,9 @@
  * Seam of ticket 11 (.scratch/inline-runtime-log/issues/11-docker-path-mapping.md): rewrite a
  * container-internal path (what a Dockerized target's CDP events report) to the matching path
  * on the host, via user-configured {remote, local} pairs.
+ *
+ * `mapContainerPath` itself is a pure function, moved to packages/core/test/runtime-log.test.js
+ * (ticket 02's prefactor) — this file keeps the LSP-level integration tests.
  */
 const test = require('node:test');
 const assert = require('node:assert');
@@ -13,65 +16,47 @@ const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const rpc = require('vscode-jsonrpc/node');
 const { WebSocketServer } = require('ws');
-const { mapContainerPath } = require('../dist/runtime-log');
 
 const SERVER = join(__dirname, '..', 'dist', 'index.js');
 
-test('mapContainerPath: no mappings configured — path passes through unchanged', () => {
-  assert.strictEqual(mapContainerPath('/app/app.js', []), '/app/app.js');
-});
-
-test('mapContainerPath: a matching remote prefix is rewritten to the local path', () => {
-  const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/app/src/index.js', mappings), '/Users/me/project/src/index.js');
-});
-
-test('mapContainerPath: a path that matches no configured remote passes through unchanged', () => {
-  const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/other/index.js', mappings), '/other/index.js');
-});
-
-test('mapContainerPath: does not rewrite a path that merely starts with the same characters as remote, not the same directory', () => {
-  // '/app2/x.js' must NOT match remote '/app' — that would rewrite an unrelated directory.
-  const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/app2/x.js', mappings), '/app2/x.js');
-});
-
-test('mapContainerPath: the first matching mapping wins when several are configured', () => {
-  const mappings = [
-    { remote: '/app/src', local: '/Users/me/project/src-only' },
-    { remote: '/app', local: '/Users/me/project' },
-  ];
-  assert.strictEqual(mapContainerPath('/app/src/index.js', mappings), '/Users/me/project/src-only/index.js');
-});
-
-test('mapContainerPath: an exact match of remote (no trailing separator) still rewrites correctly', () => {
-  const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/app', mappings), '/Users/me/project');
-});
-
-/** A fake CDP endpoint: answers Runtime.enable, then pushes one consoleAPICalled event. */
-async function startFakeInspector(t, event) {
-  const wss = new WebSocketServer({ port: 0 });
-  t.after(() => wss.close());
-  wss.on('connection', (socket) => {
+/**
+ * A combined discovery + CDP endpoint — exactly how `node --inspect` and Chrome serve BOTH
+ * `/json/list` and every target's WebSocket upgrade from the SAME host:port (unlike this suite's
+ * old convention of two separate fake servers, which broke once discoverTargets started
+ * rewriting webSocketDebuggerUrl to the host:port actually used to reach discovery — ticket 02).
+ * `targets`: `{id, type, title, url, event}[]`; `event` is the `Runtime.consoleAPICalled` params
+ * pushed once that target's socket sends `Runtime.enable`.
+ */
+async function startFakeRuntime(t, targets) {
+  const server = createServer((req, res) => {
+    if (req.url === '/json/list') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify(
+          targets.map((tg) => ({
+            id: tg.id,
+            type: tg.type,
+            title: tg.title,
+            url: tg.url,
+            webSocketDebuggerUrl: `ws://placeholder/${tg.id}`, // host:port gets rewritten regardless
+          })),
+        ),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  const wss = new WebSocketServer({ server });
+  wss.on('connection', (socket, req) => {
+    const target = targets.find((tg) => tg.id === req.url.slice(1));
     socket.on('message', (raw) => {
       const msg = JSON.parse(raw.toString());
       if (msg.method === 'Runtime.enable') {
         socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        socket.send(JSON.stringify({ method: 'Runtime.consoleAPICalled', params: event }));
+        if (target?.event) socket.send(JSON.stringify({ method: 'Runtime.consoleAPICalled', params: target.event }));
       }
     });
-  });
-  await new Promise((resolve) => wss.once('listening', resolve));
-  return `ws://127.0.0.1:${wss.address().port}`;
-}
-
-/** A fake discovery endpoint (`GET /json/list`) returning whatever target list the test wants. */
-async function startFakeDiscovery(t, targets) {
-  const server = createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(targets));
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => server.close());
@@ -133,14 +118,19 @@ test('LSP: a container-path log is mapped to the host path via ejsng.runtimeLog.
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(join(root, 'app.js'), 'console.log(1);\n');
 
-  const inspector = await startFakeInspector(t, {
-    type: 'log',
-    args: [{ type: 'string', value: 'from container' }],
-    // The container reports its OWN internal path — not anything under `root`.
-    stackTrace: { callFrames: [{ url: '/app/app.js', lineNumber: 0, columnNumber: 0 }] },
-  });
-  const discovery = await startFakeDiscovery(t, [
-    { id: 't1', type: 'node', title: 'app.js', url: 'file:///app/app.js', webSocketDebuggerUrl: inspector },
+  const discovery = await startFakeRuntime(t, [
+    {
+      id: 't1',
+      type: 'node',
+      title: 'app.js',
+      url: 'file:///app/app.js',
+      event: {
+        type: 'log',
+        args: [{ type: 'string', value: 'from container' }],
+        // The container reports its OWN internal path — not anything under `root`.
+        stackTrace: { callFrames: [{ url: '/app/app.js', lineNumber: 0, columnNumber: 0 }] },
+      },
+    },
   ]);
 
   const { conn, runtimeLogs } = await startServer(t, root, {
@@ -160,13 +150,18 @@ test('LSP: without a matching mapping, a container-path log is still dropped as 
   const root = mkdtempSync(join(tmpdir(), 'ejsng-pathmap-none-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
-  const inspector = await startFakeInspector(t, {
-    type: 'log',
-    args: [{ type: 'string', value: 'should not surface' }],
-    stackTrace: { callFrames: [{ url: '/app/app.js', lineNumber: 0, columnNumber: 0 }] },
-  });
-  const discovery = await startFakeDiscovery(t, [
-    { id: 't1', type: 'node', title: 'app.js', url: 'file:///app/app.js', webSocketDebuggerUrl: inspector },
+  const discovery = await startFakeRuntime(t, [
+    {
+      id: 't1',
+      type: 'node',
+      title: 'app.js',
+      url: 'file:///app/app.js',
+      event: {
+        type: 'log',
+        args: [{ type: 'string', value: 'should not surface' }],
+        stackTrace: { callFrames: [{ url: '/app/app.js', lineNumber: 0, columnNumber: 0 }] },
+      },
+    },
   ]);
 
   // No pathMappings configured at all — same as today's behavior.
