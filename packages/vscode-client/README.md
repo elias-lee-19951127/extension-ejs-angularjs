@@ -18,7 +18,8 @@ to every template that reads it, rename across both, and dead-code detection.
 | Shape-based completion | `busy.` → the keys actually assigned on that object |
 | Dead code | controller / directive / filter / property nobody uses |
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
-| Inline runtime log | `console.log`/`warn`/`error` from a running Node process, shown inline next to the line that logged it — color-coded by severity |
+| Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity |
+| Runtime Log panel | One **Connect** button finds your Node container through Docker, maps container paths from its mounts, and shows a step-by-step checklist of what works and why not — with fixes right on the failing step |
 
 ## Requirements
 
@@ -33,23 +34,55 @@ No separate install step — the language server ships bundled inside the extens
 | `ejsng.ejsDelimiter` | `"%"` | Set to `"?"` for `<? ?>` delimiters |
 | `ejsng.customDirectives` | `{}` | e.g. `{"myOn": "statement"}` for your own custom directives |
 | `ejsng.diagnostics.enabled` | `false` | Off by default to avoid false warnings on legacy code |
+| `ejsng.runtimeLog.pathMappings` | `[]` | Container path → local path. Usually inferred from Docker mounts; declare one to override. `${workspaceFolder}` allowed |
+| `ejsng.runtimeLog.skipFrames` | `[]` | Extra stack-frame globs never used as a log's anchor (e.g. your own log wrapper) |
+| `ejsng.runtimeLog.chromeExecutablePath` | `""` | Browser for **Launch browser**. Empty = Chrome, then Edge, then Brave |
+| `ejsng.runtimeLog.chromeDebugPort` | `9222` | Debug port the launched browser opens |
 
 ## Commands
 
 - **EJS/NG: Reindex Workspace**
 - **EJS/NG: Show Index Stats**
-- **EJS/NG: Connect to Runtime** — prompts for `host:port` of a running Node process started with
-  `node --inspect` (or, once available, a browser's `--remote-debugging-port`) and shows its
-  `console.log` output inline. Multiple connections can be open at once.
+- **EJS/NG: Connect to Runtime** — finds a Node container with `--inspect` through Docker, or asks
+  for a `host:port` (an app port works too), and shows its `console.log` output inline. Multiple
+  connections can be open at once.
 - **EJS/NG: Disconnect Runtime** — pick one of the currently open runtime connections to close.
+- **EJS/NG: Launch Browser and Connect** — opens your app in Chrome/Edge/Brave on your machine
+  (on Windows when using Remote-WSL) with a dedicated, persistent debug profile, and connects to the
+  app's tab once it loads.
+
+The **EJS/NG Runtime** view in the Activity Bar does all of the above from one place, plus a
+**Copy report** button (markdown on the clipboard, home directory shown as `~`, nothing sent anywhere).
 
 ## Known limitations
 
 This is an early release: dynamic `templateUrl` expressions, and JS built through a bundler step,
-are reported as "unresolved" rather than followed. The inline runtime log feature currently only
-supports Node processes (`node --inspect`); browser-side (AngularJS) log capture is planned.
+are reported as "unresolved" rather than followed. Runtime log: browser logs need the browser's
+debug port reachable from where the extension runs — under Remote-WSL that means WSL
+`networkingMode=mirrored`; Remote-SSH and Dev Containers support Node logs only for now. Minified or
+obfuscated files without source maps are skipped rather than drawn on "line 1".
 
 ## Release Notes
+
+### 0.3.0
+
+Runtime log that finds its own way in remote and Docker setups:
+
+- **Connect** discovers Node containers through Docker (by container name and app port, including
+  remapped inspector ports) and infers path mappings from the container's mounts — nested mounts
+  resolve to the repo actually running.
+- Logs anchor to your code, not your logger: `node_modules`, common logger directories and your own
+  `skipFrames` are skipped, as are minified/obfuscated files; ANSI colors are stripped.
+- A log is drawn only when the file on disk is what the runtime is running — otherwise the panel
+  says **Stale File** (restart the app) or **Shadowed File** (and names the copy that runs).
+- Browser URLs are matched to workspace files by their path tail (never drawn when ambiguous);
+  files outside the workspace are drawn when a path mapping covers them.
+- The Runtime Log panel is now a checklist — environment, Docker, Node, browser, path mapping,
+  received / drawn / dropped by reason — with fixes in place and **Copy report**.
+- **Launch browser** opens the app on your side (Windows Chrome under Remote-WSL) and connects to
+  its tab by itself.
+- The status bar shows received / drawn / dropped instead of a connection count, and a connection
+  is shown as connected only once its socket really opens.
 
 ### 0.2.1
 
