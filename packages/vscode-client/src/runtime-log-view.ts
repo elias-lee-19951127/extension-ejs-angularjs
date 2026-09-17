@@ -18,7 +18,8 @@ export interface RuntimeLogViewCallbacks {
    */
   connect(hostPort: string): void;
   disconnect(): void;
-  launchChromeDebug(port: number): void;
+  /** Ticket 10 — open the app in a browser on the user's side and connect to its tab. */
+  launchBrowser(port: number): void;
   openSettings(): void;
   /** Ticket 09 — a fix button on a checklist step. Already validated by `isRuntimeChecklistFix`. */
   applyFix(fix: RuntimeChecklistFix): void;
@@ -60,7 +61,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       // Ticket 04: an empty `hostPort` is a valid Connect click too.
       else if (msg.type === 'connect') this.callbacks.connect(msg.hostPort ?? '');
       else if (msg.type === 'disconnect') this.callbacks.disconnect();
-      else if (msg.type === 'launchChrome') this.callbacks.launchChromeDebug(msg.port ?? this.defaultChromePort());
+      else if (msg.type === 'launchBrowser') this.callbacks.launchBrowser(msg.port ?? this.defaultChromePort());
       else if (msg.type === 'openSettings') this.callbacks.openSettings();
       else if (msg.type === 'applyFix' && isRuntimeChecklistFix(msg.fix)) this.callbacks.applyFix(msg.fix);
       else if (msg.type === 'copyReport') this.callbacks.copyReport();
@@ -138,6 +139,10 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
     <button id="disconnectBtn" class="secondary" hidden>Disconnect…</button>
   </div>
 
+  <div class="row">
+    <button id="launchBrowserBtn" class="secondary" style="flex:1" title="Opens your app in Chrome/Edge/Brave on your machine with a debug port, then connects to its tab">Launch browser</button>
+  </div>
+
   <div id="checklist"></div>
   <div class="row" style="margin-top:8px">
     <button id="copyReportBtn" class="secondary" style="flex:1" title="Markdown on the clipboard, home directory shown as ~. Nothing is sent anywhere.">Copy report</button>
@@ -150,8 +155,8 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       <button id="connectBtn">Connect</button>
     </div>
     <div class="row">
-      <input id="chromePort" type="number" style="flex: 0 0 5em" />
-      <button id="launchChromeBtn" style="flex:1">Launch Chrome debug</button>
+      <label for="chromePort" style="flex:1; align-self:center">Browser debug port</label>
+      <input id="chromePort" type="number" style="flex: 0 0 6em" />
     </div>
     <div class="row"><a id="settingsLink">Runtime Log Settings…</a></div>
   </details>
@@ -177,11 +182,9 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   hostPortEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('connectBtn').click(); });
   disconnectBtn.addEventListener('click', () => vscode.postMessage({ type: 'disconnect' }));
   document.getElementById('copyReportBtn').addEventListener('click', () => vscode.postMessage({ type: 'copyReport' }));
-  document.getElementById('launchChromeBtn').addEventListener('click', () => {
+  document.getElementById('launchBrowserBtn').addEventListener('click', () => {
     const port = Number(chromePortEl.value);
-    const p = Number.isFinite(port) && port > 0 ? port : undefined;
-    vscode.postMessage({ type: 'launchChrome', port: p });
-    if (p) hostPortEl.value = '127.0.0.1:' + p; // pre-fill Connect once the tab has loaded
+    vscode.postMessage({ type: 'launchBrowser', port: Number.isInteger(port) && port > 0 ? port : undefined });
   });
   document.getElementById('settingsLink').addEventListener('click', () => vscode.postMessage({ type: 'openSettings' }));
 

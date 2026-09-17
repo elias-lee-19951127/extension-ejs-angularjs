@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
@@ -22,6 +21,15 @@ import {
   type RuntimeStatusSummary,
 } from './runtime-log-state';
 import { RuntimeLogViewProvider } from './runtime-log-view';
+import {
+  appUrlForPort,
+  browserLaunchArgs,
+  chooseAppPort,
+  launchRouteFor,
+  parseAppAddress,
+  type AppPortSource,
+} from './browser-locator';
+import { browserProfileDir, locateBrowser, spawnBrowser } from './browser-launch';
 
 let client: LanguageClient | undefined;
 let runtimeLogStatusBar: vscode.StatusBarItem | undefined;
@@ -49,48 +57,211 @@ function rememberLastTarget(host: string, port: number): void {
   void extensionContext?.workspaceState.update(STATE_LAST_TARGET, { host, port });
 }
 
-/** No bundled default per OS — Chrome's install location varies too much (edition, Homebrew cask, Flatpak, …). */
-function defaultChromeExecutablePath(): string {
-  if (process.platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  if (process.platform === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-  return 'google-chrome';
-}
-
 function defaultChromeDebugPort(): number {
   return vscode.workspace.getConfiguration('ejsng').get<number>('runtimeLog.chromeDebugPort') ?? 9222;
 }
 
-/**
- * Launch Chrome with `--remote-debugging-port` in a throw-away profile (never the user's real
- * one — a debug port on a real profile is a local attacker's way into every logged-in session).
- * Doesn't connect anything itself: the user still hits Connect once the target page has loaded,
- * same as pointing it at a Node `--inspect` process.
- */
-function launchChromeDebug(context: vscode.ExtensionContext, port: number): void {
-  const configured = vscode.workspace.getConfiguration('ejsng').get<string>('runtimeLog.chromeExecutablePath');
-  const execPath = configured?.trim() ? configured.trim() : defaultChromeExecutablePath();
-  const userDataDir = path.join(context.globalStorageUri.fsPath, 'chrome-debug-profile');
+/** Duplicated from packages/core on purpose: the client bundle does not pull in core. */
+const WSL_MIRRORED_GUIDE_URL = 'https://learn.microsoft.com/windows/wsl/networking#mirrored-mode-networking';
+/** Where the browser's debug port is reached from here — its own loopback, or Windows' through WSL mirrored networking. */
+const BROWSER_DEBUG_HOST = '127.0.0.1';
+const BROWSER_POLL_MS = 1000;
+/** Nothing answering on the debug port by then means it won't: a browser starts in a few seconds. */
+const BROWSER_UNREACHABLE_GIVE_UP_MS = 20_000;
+/** Long enough to sign in (Keycloak) before the app's own tab exists. */
+const BROWSER_APP_TAB_TIMEOUT_MS = 180_000;
+
+type FindBrowserTargetResult =
+  | { status: 'found'; targetId: string; url: string }
+  | { status: 'waiting'; urls: string[] }
+  | { status: 'unreachable'; message: string };
+
+/** A tab URL safe to show in a notification: a login redirect's query string can carry tokens. */
+function displayUrl(url: string): string {
   try {
-    mkdirSync(userDataDir, { recursive: true });
-    const child = spawn(
-      execPath,
-      [`--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`, '--no-first-run', '--no-default-browser-check'],
-      { detached: true, stdio: 'ignore' },
-    );
-    // Ticket 09: remembered per machine only once it really started — for the checklist and report.
-    child.once('spawn', () => void context.workspaceState.update(STATE_BROWSER, execPath));
-    child.once('error', (err) =>
-      void vscode.window.showErrorMessage(`EJS/NG: couldn't launch Chrome at "${execPath}" — ${err.message}. Set ejsng.runtimeLog.chromeExecutablePath.`),
-    );
-    child.unref();
-    void vscode.window.showInformationMessage(
-      `EJS/NG: opened Chrome with --remote-debugging-port=${port}. Once your page has loaded, Connect to 127.0.0.1:${port}.`,
-    );
-  } catch (err) {
-    void vscode.window.showErrorMessage(
-      `EJS/NG: couldn't launch Chrome at "${execPath}" — ${String(err)}. Set ejsng.runtimeLog.chromeExecutablePath.`,
-    );
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
   }
+}
+
+/**
+ * Ticket 10, checklist item 4: the URL Launch opens — inferred from the app ports Docker
+ * containers publish, asked once when there are several (or none), and remembered for this
+ * workspace in `workspaceState`.
+ */
+async function chooseAppUrl(context: vscode.ExtensionContext): Promise<string | null> {
+  let containers: AppPortSource[] = [];
+  try {
+    containers = (await client?.sendRequest<{ containers: AppPortSource[] }>('ejsng/listDockerContainers'))?.containers ?? [];
+  } catch {
+    // No Docker, or the server couldn't ask it — the user is asked below instead.
+  }
+  const remembered = context.workspaceState.get<number>(STATE_LAST_APP_PORT);
+  const choice = chooseAppPort(containers, remembered);
+  if (choice.kind === 'use') {
+    await context.workspaceState.update(STATE_LAST_APP_PORT, choice.port);
+    return appUrlForPort(choice.port);
+  }
+  if (choice.kind === 'ask') {
+    const picked = await vscode.window.showQuickPick(
+      choice.options.map((o) => ({ label: o.label, description: appUrlForPort(o.port), port: o.port })),
+      { title: 'EJS/NG: which app should the browser open?', placeHolder: 'Remembered for this workspace' },
+    );
+    if (!picked) return null;
+    await context.workspaceState.update(STATE_LAST_APP_PORT, picked.port);
+    return appUrlForPort(picked.port);
+  }
+  const input = await vscode.window.showInputBox({
+    title: 'EJS/NG: Launch browser',
+    prompt: "Your app's port or URL (no Docker container to infer it from)",
+    placeHolder: '5000 or http://localhost:5000/',
+    value: remembered !== undefined ? String(remembered) : '',
+    validateInput: (v) => (parseAppAddress(v) ? null : 'Enter a port like 5000, or a URL like http://localhost:5000/'),
+  });
+  const parsed = input ? parseAppAddress(input) : null;
+  if (!parsed) return null;
+  if (parsed.port !== null) await context.workspaceState.update(STATE_LAST_APP_PORT, parsed.port);
+  return parsed.url;
+}
+
+function warnWslMirrored(message: string): void {
+  void vscode.window.showWarningMessage(message, 'Open mirrored networking guide').then((choice) => {
+    if (choice) void vscode.env.openExternal(vscode.Uri.parse(WSL_MIRRORED_GUIDE_URL));
+  });
+}
+
+/**
+ * Ticket 10 (.scratch/runtime-remote-env/issues/10-launch-trinh-duyet-phia-ui.md): open the app in
+ * a browser on the USER's side with a debug port, then connect to the app's tab by itself.
+ *
+ * - Locally the browser is spawned directly; under Remote-WSL the Windows executable is started
+ *   through interop, with a Windows `--user-data-dir` (a `/home/...` path means nothing to
+ *   `chrome.exe`). SSH and containers have no way to reach the user's machine from here yet.
+ * - The profile is dedicated and persistent: logins survive between launches, and the user's real
+ *   profile is never used — Chrome 136+ ignores the debug port there, and it would expose every
+ *   signed-in session.
+ * - Under WSL NAT the browser still opens, but the extension says straight away that it cannot
+ *   reach the debug port from WSL, and how to switch to mirrored.
+ */
+async function launchBrowser(context: vscode.ExtensionContext, debugPort: number): Promise<void> {
+  const route = launchRouteFor(vscode.env.remoteName);
+  if (route === 'unsupported') {
+    void vscode.window.showWarningMessage(
+      `EJS/NG: Launch can't start a browser on your machine from a ${vscode.env.remoteName} window yet. ` +
+        `Start Chrome yourself with --remote-debugging-port=${debugPort} and its own --user-data-dir, then connect under Advanced. Node logs work as usual.`,
+    );
+    return;
+  }
+  const wsl = route === 'wsl-interop';
+
+  const appUrl = await chooseAppUrl(context);
+  if (!appUrl) return;
+
+  const configured = vscode.workspace.getConfiguration('ejsng').get<string>('runtimeLog.chromeExecutablePath') ?? '';
+  const located = await locateBrowser(configured, wsl);
+  if (!located.browser) {
+    const message = located.configuredMissing
+      ? `EJS/NG: ejsng.runtimeLog.chromeExecutablePath points at "${located.tried[0]}", which doesn't exist.`
+      : `EJS/NG: no Chrome, Edge or Brave found${wsl ? ' on Windows' : ''}. Set ejsng.runtimeLog.chromeExecutablePath.`;
+    void vscode.window.showErrorMessage(message, 'Open Settings').then((choice) => {
+      if (choice) void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog.chromeExecutablePath');
+    });
+    return;
+  }
+  const { browser } = located;
+
+  const localProfile = path.join(context.globalStorageUri.fsPath, 'chrome-debug-profile');
+  if (!wsl) mkdirSync(localProfile, { recursive: true });
+  const profile = await browserProfileDir(wsl, localProfile);
+  if (!profile) {
+    void vscode.window.showErrorMessage('EJS/NG: could not find %LOCALAPPDATA% on Windows for the browser profile.');
+    return;
+  }
+
+  try {
+    await spawnBrowser(browser, browserLaunchArgs({ debugPort, userDataDir: profile, url: appUrl }));
+  } catch (err) {
+    void vscode.window.showErrorMessage(`EJS/NG: couldn't start ${browser.displayPath} — ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  // Per machine, never in settings (decision #12) — shown in the checklist and the report.
+  await context.workspaceState.update(STATE_BROWSER, browser.displayPath);
+
+  if (wsl) {
+    let networking: string | null = null;
+    try {
+      networking = (await client?.sendRequest<{ wslNetworking: string | null }>('ejsng/detectRuntimeEnvironment'))?.wslNetworking ?? null;
+    } catch {
+      // Unknown: fall through and find out by probing.
+    }
+    void refreshRuntimeStatus();
+    if (networking === 'nat') {
+      warnWslMirrored(
+        `EJS/NG: opened ${appUrl} in ${browser.displayPath}, but WSL uses NAT networking, so the extension can't reach the browser's debug port. ` +
+          'Switch WSL to networkingMode=mirrored for browser logs.',
+      );
+      return;
+    }
+  }
+  await connectWhenAppTabLoads(debugPort, appUrl, wsl);
+}
+
+/**
+ * Ticket 10, checklist item 5: poll the browser's debug endpoint until the app's own tab exists,
+ * then connect to it — no second Connect click. Polled from here, one probe per request, so the
+ * wait is cancellable and a slow login holds nothing open on the server.
+ */
+async function connectWhenAppTabLoads(debugPort: number, appUrl: string, wsl: boolean): Promise<void> {
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `EJS/NG: waiting for ${appUrl} to load`, cancellable: true },
+    async (progress, token) => {
+      const startedAt = Date.now();
+      let reachable = false;
+      while (!token.isCancellationRequested) {
+        const result = await client
+          ?.sendRequest<FindBrowserTargetResult>('ejsng/findBrowserTarget', { host: BROWSER_DEBUG_HOST, port: debugPort, appUrl })
+          .catch(() => null);
+        if (result?.status === 'found') {
+          const chosen = await client?.sendRequest<ConnectRuntimeResult>('ejsng/connectRuntimeTarget', {
+            host: BROWSER_DEBUG_HOST,
+            port: debugPort,
+            targetId: result.targetId,
+          });
+          if (chosen?.status === 'connected') {
+            runtimeLogConnections.set(chosen.key, `${BROWSER_DEBUG_HOST}:${debugPort} — ${displayUrl(result.url)}`);
+            updateRuntimeStatusBar();
+            void refreshRuntimeStatus();
+          } else {
+            void vscode.window.showErrorMessage(`EJS/NG: ${chosen?.status === 'error' ? chosen.message : 'failed to connect to the browser tab.'}`);
+          }
+          return;
+        }
+        if (result?.status === 'waiting') {
+          reachable = true;
+          progress.report({ message: result.urls.length > 0 ? `tab is on ${displayUrl(result.urls[0]!)}` : 'no tab yet' });
+        }
+        const elapsed = Date.now() - startedAt;
+        if (!reachable && elapsed > BROWSER_UNREACHABLE_GIVE_UP_MS) {
+          const where = `${BROWSER_DEBUG_HOST}:${debugPort}`;
+          if (wsl) {
+            warnWslMirrored(`EJS/NG: can't reach the browser's debug port ${where} from WSL. If WSL uses NAT networking, switch to mirrored.`);
+          } else {
+            void vscode.window.showWarningMessage(
+              `EJS/NG: the browser never opened its debug port ${where}. If that profile was already open without it, close the window and Launch again.`,
+            );
+          }
+          return;
+        }
+        if (elapsed > BROWSER_APP_TAB_TIMEOUT_MS) {
+          void vscode.window.showWarningMessage(`EJS/NG: no tab showed ${appUrl} in time. Open it in the launched browser, then Launch again.`);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, BROWSER_POLL_MS));
+      }
+    },
+  );
 }
 
 type ConnectRuntimeResult =
@@ -550,7 +721,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(`EJS/NG: "${hostPort}" isn't host:port or a port number — try something like 127.0.0.1:5000 or just 5000.`);
       },
       disconnect: () => void disconnectRuntime(),
-      launchChromeDebug: (port) => launchChromeDebug(context, port),
+      launchBrowser: (port) => void launchBrowser(context, port),
       openSettings: () => void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog'),
       applyFix: (fix) => void applyChecklistFix(fix),
       copyReport: () => void copyRuntimeReport(),
@@ -604,6 +775,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }),
     ),
     vscode.commands.registerCommand('ejsng.disconnectRuntime', disconnectRuntime),
+    vscode.commands.registerCommand('ejsng.launchBrowser', () => launchBrowser(context, defaultChromeDebugPort())),
     // A split/reopened editor for a file with existing hits starts undecorated otherwise.
     vscode.window.onDidChangeVisibleTextEditors((editors) => {
       for (const editor of editors) {

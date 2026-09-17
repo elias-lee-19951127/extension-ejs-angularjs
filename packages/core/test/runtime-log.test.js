@@ -670,3 +670,27 @@ test('urlSuffixMapping: a non-URL, or more segments than either side has, yields
   assert.strictEqual(urlSuffixMapping('/not/a/url.js', 'a/url.js', 2, '/ws'), null);
   assert.strictEqual(urlSuffixMapping('http://localhost:5000/app.js', 'app.js', 5, '/ws'), null);
 });
+
+/**
+ * Ticket 10 (.scratch/runtime-remote-env/issues/10-launch-trinh-duyet-phia-ui.md): after Launch,
+ * connect to the app's own tab — never to a login page on another origin or an unrelated tab.
+ */
+test('findAppTarget: picks the page on the app origin, whatever its path', () => {
+  const { findAppTarget } = require('../dist');
+  const targets = [
+    { id: 'newtab', type: 'page', title: 'New Tab', url: 'chrome://newtab/', webSocketDebuggerUrl: 'ws://x/1' },
+    { id: 'sw', type: 'service_worker', title: 'sw', url: 'http://localhost:5000/sw.js', webSocketDebuggerUrl: 'ws://x/2' },
+    { id: 'app', type: 'page', title: 'CityOS', url: 'http://localhost:5000/dashboard#/map', webSocketDebuggerUrl: 'ws://x/3' },
+  ];
+  assert.strictEqual(findAppTarget(targets, 'http://localhost:5000/').id, 'app');
+});
+
+test('findAppTarget: localhost and 127.0.0.1 are the same app; another port or a login origin is not', () => {
+  const { findAppTarget } = require('../dist');
+  const page = (id, url) => ({ id, type: 'page', title: id, url, webSocketDebuggerUrl: `ws://x/${id}` });
+  assert.strictEqual(findAppTarget([page('a', 'http://127.0.0.1:5000/')], 'http://localhost:5000/').id, 'a');
+  assert.strictEqual(findAppTarget([page('b', 'http://localhost:5001/')], 'http://localhost:5000/'), null);
+  assert.strictEqual(findAppTarget([page('kc', 'https://sso.example.com/realms/x/auth?client_id=web')], 'http://localhost:5000/'), null);
+  assert.strictEqual(findAppTarget([page('a', 'http://localhost/')], 'http://localhost:80/').id, 'a');
+  assert.strictEqual(findAppTarget([page('a', 'http://localhost:5000/')], 'not a url'), null);
+});

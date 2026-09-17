@@ -685,3 +685,34 @@ export function urlSuffixMapping(url: string, relPath: string, segments: number,
     local: localRest.length > 0 ? `${workspaceRoot}/${localRest.join('/')}` : workspaceRoot,
   };
 }
+
+// ============================================================================================
+// Ticket 10 (.scratch/runtime-remote-env/issues/10-launch-trinh-duyet-phia-ui.md): after Launch
+// opens the app in a browser, connect to the app's own tab on its own — not to whichever tab
+// happens to be listed first (a login redirect, a new-tab page, another app).
+// ============================================================================================
+
+function originOf(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    // `localhost` and `127.0.0.1` are the same app as far as the user is concerned.
+    const host = u.hostname === '127.0.0.1' || u.hostname === '[::1]' ? 'localhost' : u.hostname;
+    return `${u.protocol}//${host}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The page target showing the app at `appUrl` — same origin (scheme, host, port), any path.
+ * `null` while no such tab exists yet, e.g. the tab is still on a Keycloak login page of a
+ * different origin: the caller keeps waiting rather than attaching to the login page. The first
+ * listed match wins — Chrome lists the most recently active tab first.
+ */
+export function findAppTarget(targets: DiscoveredTarget[], appUrl: string): DiscoveredTarget | null {
+  const want = originOf(appUrl);
+  if (!want) return null;
+  const matches = targets.filter((t) => t.type === 'page' && originOf(t.url) === want);
+  return matches[0] ?? null;
+}

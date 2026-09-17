@@ -376,7 +376,7 @@ function connectionStep(
     step.detail = 'Browser logs are not supported from this remote yet — Node logs still work.';
   } else {
     step.status = 'skipped';
-    step.detail = 'No browser connected. Use "Launch Chrome debug" under Advanced for browser logs.';
+    step.detail = 'No browser connected. Press "Launch browser" for browser logs.';
   }
   return step;
 }

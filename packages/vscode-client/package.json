@@ -66,6 +66,10 @@
       {
         "command": "ejsng.disconnectRuntime",
         "title": "EJS/NG: Disconnect Runtime"
+      },
+      {
+        "command": "ejsng.launchBrowser",
+        "title": "EJS/NG: Launch Browser and Connect"
       }
     ],
     "configuration": {
@@ -130,12 +134,12 @@
         "ejsng.runtimeLog.chromeExecutablePath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the Chrome/Edge executable used by the activity-bar panel's 'Launch Chrome debug' button. Empty = guess a default install location for this OS.\n\n- macOS: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`\n- Windows: `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`"
+          "markdownDescription": "Browser executable used by the panel's **Launch browser** button. Empty = find one on your machine: Chrome, then Edge, then Brave (on Windows, the registry first, then the usual install folders). When set, this path always wins.\n\nUnder Remote-WSL the browser runs on Windows: a Windows path such as `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe` works."
         },
         "ejsng.runtimeLog.chromeDebugPort": {
           "type": "number",
           "default": 9222,
-          "description": "Default --remote-debugging-port used by the activity-bar panel's 'Launch Chrome debug' button and pre-filled into its Connect field."
+          "description": "--remote-debugging-port the panel's 'Launch browser' button starts the browser with, and connects to."
         },
         "ejsng.runtimeLog.skipFrames": {
           "type": "array",

@@ -49,6 +49,7 @@ import {
   suggestWrapperFile,
   buildRuntimeChecklist,
   buildRuntimeReport,
+  findAppTarget,
   type CallFrame,
   type ChecklistConnection,
   type ChecklistContainer,
@@ -1373,6 +1374,54 @@ connection.onRequest('ejsng/runtimeReport', (params: { browser?: string | null; 
     version: params?.version,
   }),
 }));
+
+// ---------------------------------------------------------------------------------------------
+// Ticket 10 (.scratch/runtime-remote-env/issues/10-launch-trinh-duyet-phia-ui.md): Launch opens
+// the app in a browser on the user's side, then connects to the app's tab on its own. The client
+// does the launching; these requests are the probing it needs.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Every Node container Docker can see, WITHOUT connecting to any of them — Launch only needs
+ * their app ports to know which URL to open. Refreshes what the checklist reports, too.
+ */
+connection.onRequest('ejsng/listDockerContainers', async (): Promise<{ containers: ChecklistContainer[] }> => {
+  const candidates = await listDockerRuntimeCandidates();
+  lastDockerContainers = candidates.map((c) => ({
+    name: c.containerName,
+    appPorts: c.appPorts,
+    hostInspectorPort: c.hostInspectorPort,
+    inspectorContainerPort: c.inspectorContainerPort,
+  }));
+  return { containers: lastDockerContainers };
+});
+
+type FindBrowserTargetResult =
+  | { status: 'found'; targetId: string; url: string }
+  | { status: 'waiting'; urls: string[] }
+  | { status: 'unreachable'; message: string };
+
+/**
+ * One probe of a browser's debug endpoint for the tab showing `appUrl`. Deliberately a single
+ * look, not a wait: the client polls, so the user can cancel, and so a slow login (the tab sits on
+ * another origin until the user signs in) never holds a request open. Plain discovery only —
+ * never the app-port auto-enable of `ejsng/connectRuntime`, which would signal whatever process
+ * owns the port, here the browser itself.
+ */
+connection.onRequest(
+  'ejsng/findBrowserTarget',
+  async (params: { host: string; port: number; appUrl: string }): Promise<FindBrowserTargetResult> => {
+    let targets: DiscoveredTarget[];
+    try {
+      targets = await discoverTargets(params.host, params.port);
+    } catch (err) {
+      return { status: 'unreachable', message: err instanceof Error ? err.message : String(err) };
+    }
+    const target = findAppTarget(targets, params.appUrl);
+    if (target) return { status: 'found', targetId: target.id, url: target.url };
+    return { status: 'waiting', urls: targets.filter((t) => t.type === 'page').map((t) => t.url) };
+  },
+);
 
 documents.listen(connection);
 connection.listen();
