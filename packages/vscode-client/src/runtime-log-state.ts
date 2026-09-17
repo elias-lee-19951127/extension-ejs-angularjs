@@ -16,7 +16,7 @@ export interface RuntimeFrameDiagnosticEntry {
   url: string;
   lineNumber: number;
   columnNumber: number;
-  skipReason: 'skip-pattern' | 'obfuscated' | 'outside-workspace' | 'unreadable-file' | null;
+  skipReason: 'skip-pattern' | 'obfuscated' | 'outside-workspace' | 'unreadable-file' | 'no-path-mapping' | null;
   matchedPattern?: string;
 }
 
@@ -115,6 +115,8 @@ export function formatSkipReason(entry: RuntimeFrameDiagnosticEntry): string {
       return 'skipped — outside the workspace';
     case 'unreadable-file':
       return 'skipped — file not readable';
+    case 'no-path-mapping':
+      return 'skipped — no path mapping covers this path';
   }
 }
 

@@ -117,13 +117,13 @@
         "ejsng.runtimeLog.pathMappings": {
           "type": "array",
           "default": [],
-          "description": "Maps a container-internal path to its path on this machine, for inline runtime log from a Dockerized process (e.g. [{\"remote\": \"/app\", \"local\": \"/Users/me/project\"}]). Not needed for a process running directly on this machine.",
+          "description": "Maps a container-internal path to its path on this machine, for inline runtime log from a Dockerized process (e.g. [{\"remote\": \"/app\", \"local\": \"/Users/me/project\"}]). Usually not needed: mappings are inferred from the connected container's own mounts. Declare one here to override that, or for a process this extension can't read the mounts of. Not needed at all for a process running directly on this machine.",
           "items": {
             "type": "object",
             "required": ["remote", "local"],
             "properties": {
               "remote": { "type": "string", "description": "Path prefix as reported by the container, e.g. /app" },
-              "local": { "type": "string", "description": "The matching path on this machine, e.g. /Users/me/project" }
+              "local": { "type": "string", "description": "The matching path on this machine, e.g. /Users/me/project. May use ${workspaceFolder} so the mapping can be committed to the repo." }
             }
           }
         },

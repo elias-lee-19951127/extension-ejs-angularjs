@@ -234,18 +234,42 @@ export interface PathMapping {
 }
 
 /**
- * Rewrite a container-internal path (what a Dockerized target's CDP events report, e.g.
- * `/app/index.js`) to the matching path on the host, via user-configured mappings — checked in
- * order, first match wins. A path with no configured mapping passes through unchanged (the
- * existing, non-Docker behavior). `remote` only matches whole path segments: `/app2/x.js` does
- * NOT match a `/app` mapping.
+ * The result of running a path through `mapContainerPath`. `matched` is what lets a caller tell
+ * "this path passed through untouched because it needs no mapping" from "no configured mapping
+ * covers this path" — the second is a drop worth counting and naming (ticket 05, checklist item
+ * 5: never silently), the first is the ordinary non-Docker case.
  */
-export function mapContainerPath(fsPath: string, mappings: PathMapping[]): string {
+export interface MappedPath {
+  path: string;
+  matched: boolean;
+}
+
+/**
+ * Rewrite a container-internal path (what a Dockerized target's CDP events report, e.g.
+ * `/app/index.js`) to the matching path on the host, via mappings — checked in order, first match
+ * wins. A path with no matching mapping passes through unchanged, reported as `matched: false`.
+ * `remote` only matches whole path segments: `/app2/x.js` does NOT match a `/app` mapping.
+ *
+ * Callers pass user-configured mappings (`ejsng.runtimeLog.pathMappings`) FIRST and mount-inferred
+ * ones (ticket 05, `mappingsFromMounts`) after, so a user's own declaration always wins.
+ */
+export function mapContainerPath(fsPath: string, mappings: PathMapping[]): MappedPath {
   for (const { remote, local } of mappings) {
-    if (fsPath === remote) return local;
-    if (fsPath.startsWith(`${remote}/`)) return local + fsPath.slice(remote.length);
+    if (fsPath === remote) return { path: local, matched: true };
+    if (fsPath.startsWith(`${remote}/`)) return { path: local + fsPath.slice(remote.length), matched: true };
   }
-  return fsPath;
+  return { path: fsPath, matched: false };
+}
+
+/**
+ * Expand `${workspaceFolder}` in every mapping's `local` side (ticket 05, checklist item 3) — so a
+ * mapping can be committed to a repo's `.vscode/settings.json` and work on every machine that
+ * clones it, instead of hardcoding one developer's absolute path. A `local` that carries no
+ * variable is returned byte-for-byte unchanged, which is what keeps every pre-ticket-05 absolute
+ * path working exactly as before.
+ */
+export function resolvePathMappings(mappings: PathMapping[], workspaceFolder: string): PathMapping[] {
+  return mappings.map(({ remote, local }) => ({ remote, local: local.split('${workspaceFolder}').join(workspaceFolder) }));
 }
 
 // ============================================================================================
@@ -354,8 +378,13 @@ export interface FrameDiagnosticEntry {
   url: string;
   lineNumber: number;
   columnNumber: number;
-  /** `null` means this is the frame that was actually chosen and drawn. */
-  skipReason: 'skip-pattern' | 'obfuscated' | 'outside-workspace' | 'unreadable-file' | null;
+  /**
+   * `null` means this is the frame that was actually chosen and drawn. `'no-path-mapping'` is
+   * ticket 05's addition: the runtime reported a path no mapping covers (neither the user's own
+   * nor any inferred from the connected container's mounts), so it could not even be turned into
+   * a path on this machine to look for.
+   */
+  skipReason: 'skip-pattern' | 'obfuscated' | 'outside-workspace' | 'unreadable-file' | 'no-path-mapping' | null;
   /** Only set when `skipReason` is `'skip-pattern'`. */
   matchedPattern?: string;
 }

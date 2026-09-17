@@ -14,7 +14,7 @@ import {
 } from '@ejsng/core';
 import WebSocket, { type RawData } from 'ws';
 
-export type { DiscoveredTarget, PathMapping } from '@ejsng/core';
+export type { DiscoveredTarget, DockerMount, PathMapping } from '@ejsng/core';
 
 /**
  * Chrome and the Node inspector both refuse any `Host` request header that isn't an IP or

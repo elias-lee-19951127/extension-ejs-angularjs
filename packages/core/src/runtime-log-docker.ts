@@ -5,7 +5,11 @@
  * and `resolveDockerCandidates` from here. Kept in its own file (alongside runtime-log.ts's
  * existing pure functions, not merged into it) so this ticket's additions and ticket 03's stay
  * in non-overlapping files — see the coordination note in this ticket.
+ *
+ * Ticket 05 (path mapping inferred from those same mounts) adds `mappingsFromMounts` at the
+ * bottom — it belongs here, next to the `DockerMount` shape it reads.
  */
+import type { PathMapping } from './runtime-log';
 
 /** One published port pair from `docker inspect`'s `NetworkSettings.Ports`. */
 export interface DockerPortBinding {
@@ -197,6 +201,29 @@ export function filterDockerCandidatesByAppPort(candidates: DockerRuntimeCandida
 /** Same as `filterDockerCandidatesByAppPort`, but just the first match — convenient when the caller only wants one candidate to act on. */
 export function findDockerCandidateByAppPort(candidates: DockerRuntimeCandidate[], appPort: number): DockerRuntimeCandidate | null {
   return filterDockerCandidatesByAppPort(candidates, appPort)[0] ?? null;
+}
+
+/**
+ * Ticket 05 (.scratch/runtime-remote-env/issues/05-path-mapping-tu-mount.md): turn the mounts of
+ * the container being connected to into container-path -> host-path mappings. A mount already
+ * states exactly which host directory a container path IS — no guessing from directory names,
+ * which is what goes wrong with nested mounts.
+ *
+ * Sorted by container-side path length, LONGEST FIRST (checklist item 1), because
+ * `mapContainerPath` is first-match-wins and mounts genuinely nest. On the spec's motivating
+ * machine, `/home/cityos/aocs-cityos` is one repo and `/home/cityos/aocs-cityos/aocs` — a
+ * directory INSIDE it — is a different one: a log from `/home/cityos/aocs-cityos/aocs/x.js` must
+ * resolve through the inner mount to the repo actually running, not through the outer one to the
+ * shadowed directory of the repo it merely sits inside.
+ *
+ * These are never written to settings — the caller recomputes them on every Connect (checklist
+ * item 4), so a container rebuilt with different mounts is picked up without the user editing
+ * anything, and a stale mapping can never outlive the container it was read from.
+ */
+export function mappingsFromMounts(mounts: DockerMount[]): PathMapping[] {
+  return mounts
+    .map((m) => ({ remote: m.destination, local: m.source }))
+    .sort((a, b) => b.remote.length - a.remote.length);
 }
 
 /** `<container name>: <app port>` — the exact Quick Pick phrasing from the spec (user story #4, e.g. `cityos-web: 5000`). */

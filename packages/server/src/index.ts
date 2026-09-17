@@ -31,6 +31,8 @@ import {
   formatDockerCandidateLabel,
   partitionDockerCandidates,
   filterDockerCandidatesByAppPort,
+  mappingsFromMounts,
+  resolvePathMappings,
   classifyFrameCandidates,
   isLikelyMinified,
   stripAnsi,
@@ -45,6 +47,7 @@ import {
   findPidListeningOnPort,
   waitForTargets,
   type DiscoveredTarget,
+  type DockerMount,
   type PathMapping,
 } from './runtime-log';
 import { listDockerRuntimeCandidates } from './docker';
@@ -83,12 +86,30 @@ interface RuntimeLogConnectionInfo {
   recentFrameDiagnostics: RuntimeLogFrameDiagnostic[];
   /** Ticket 03, item 7 — every recently CHOSEN frame's workspace-relative path, for wrapper-file detection (see `suggestWrapperFile`). */
   recentChosenPaths: string[];
+  /**
+   * Ticket 05 — path mappings inferred from the MOUNTS of the container this particular connection
+   * talks to, longest container-side path first. Per-connection, not global: two live connections
+   * can be two different containers with completely different mounts. Empty for a target that
+   * isn't a Docker container (a browser, a local `node --inspect`). Applied AFTER the user's own
+   * `ejsng.runtimeLog.pathMappings`, which always wins (checklist item 2).
+   */
+  inferredPathMappings: PathMapping[];
 }
 
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
 const runtimeLogConnections = new Map<string, RuntimeLogConnectionInfo>();
-/** `ejsng.runtimeLog.pathMappings` — container path -> host path, for Docker targets (ticket 11). */
+/** `ejsng.runtimeLog.pathMappings` — container path -> host path, for Docker targets (ticket 11), with `${workspaceFolder}` already expanded (ticket 05). */
 let runtimeLogPathMappings: PathMapping[] = [];
+/**
+ * Ticket 05 — the mounts of every Docker container `ejsng/discoverRuntimeTargets` found, keyed by
+ * the `host:port` its inspector is published on. Rebuilt from scratch on every discovery (never
+ * persisted, never written to settings, checklist item 4), and read at connect time so all three
+ * connect paths pick up the same inferred mappings: the immediate single-container connect, and
+ * the two follow-ups a client makes after a Quick Pick (`ejsng/connectRuntime` after
+ * `'choose-container'`, `ejsng/connectRuntimeTarget` after `'choose'`), neither of which carries
+ * any container identity of its own.
+ */
+const dockerMountsByEndpoint = new Map<string, DockerMount[]>();
 /** `ejsng.runtimeLog.skipFrames` — user-added patterns, ON TOP OF `DEFAULT_SKIP_FRAME_PATTERNS` (ticket 03). */
 let runtimeLogSkipFramePatterns: string[] = [];
 /**
@@ -107,7 +128,10 @@ connection.onInitialize((params): InitializeResult => {
     runtimeLog?: { pathMappings?: PathMapping[]; skipFrames?: string[] };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
-  runtimeLogPathMappings = settings.runtimeLog?.pathMappings ?? [];
+  // `${workspaceFolder}` is expanded once, here, where the root is known — a mapping's `local` can
+  // then be committed to a repo's settings instead of hardcoding one machine's absolute path
+  // (ticket 05, item 3). An absolute `local` contains no variable and comes back unchanged.
+  runtimeLogPathMappings = resolvePathMappings(settings.runtimeLog?.pathMappings ?? [], root);
   runtimeLogSkipFramePatterns = settings.runtimeLog?.skipFrames ?? [];
   // LSP 3.17: RenameOptions is only sent when the client declares prepareSupport.
   const prepareSupport = params.capabilities.textDocument?.rename?.prepareSupport === true;
@@ -448,6 +472,11 @@ function runtimeLogConnectionKey(host: string, port: number, targetId: string): 
   return `${host}:${port}:${targetId}`;
 }
 
+/** Mount-inferred mappings for whatever container publishes its inspector at `host:port`, or `[]` for a non-Docker target (ticket 05). */
+function inferredMappingsFor(host: string, port: number): PathMapping[] {
+  return mappingsFromMounts(dockerMountsByEndpoint.get(`${host}:${port}`) ?? []);
+}
+
 /** Count one dropped log under `reason` — see RuntimeLogConnectionInfo.droppedByReason. */
 function recordDrop(info: RuntimeLogConnectionInfo, reason: string): void {
   info.droppedByReason[reason] = (info.droppedByReason[reason] ?? 0) + 1;
@@ -469,7 +498,9 @@ function pushBounded<T>(buffer: T[], item: T, max: number): void {
  *  1. Classify every frame against the skip-pattern list (`classifyFrameCandidates`, pure) —
  *     `node:internal/**`, `node_modules`, common vendored-logger directories, plus the user's own
  *     `ejsng.runtimeLog.skipFrames`. Frames that match are never considered further.
- *  2. Walk the surviving candidates IN ORDER. For each: map the container path (ticket 11),
+ *  2. Walk the surviving candidates IN ORDER. For each: map the container path (ticket 11, plus
+ *     ticket 05's mappings inferred from the connected container's mounts — a path that matches
+ *     none of them at all is skipped as `no-path-mapping`),
  *     resolve it to a workspace-relative path, and read its content — exactly the same
  *     containment/readability checks `onLog` already did for `callFrames[0]` pre-ticket-03. A
  *     candidate that fails containment, is unreadable, OR whose content trips `isLikelyMinified`
@@ -497,7 +528,7 @@ function selectRuntimeLogFrame(
 ): { chosen: { frame: CallFrame; relPath: string; source: string } | null; dropReason: string; tried: FrameDiagnosticEntry[] } {
   const classified = classifyFrameCandidates(callFrames, skipPatterns);
   const tried: FrameDiagnosticEntry[] = [];
-  let lastAttemptReason: 'outside-workspace' | 'unreadable-file' | 'obfuscated' | null = null;
+  let lastAttemptReason: 'outside-workspace' | 'unreadable-file' | 'obfuscated' | 'no-path-mapping' | null = null;
 
   for (const { frame, skippedByPattern } of classified) {
     if (skippedByPattern !== null) {
@@ -506,7 +537,16 @@ function selectRuntimeLogFrame(
     }
 
     const rawPath = frame.url.startsWith('file://') ? URI.parse(frame.url).fsPath : frame.url;
-    const fsPath = mapContainerPath(rawPath, pathMappings);
+    const { path: fsPath, matched } = mapContainerPath(rawPath, pathMappings);
+    // Mappings exist but none covers this path: the runtime is reporting paths from somewhere
+    // this server has no translation for (ticket 05, item 5). Named apart from
+    // `outside-workspace` because the fix is a different one — add a mapping / mount the
+    // directory — and because with mappings in play it is the far more likely of the two.
+    if (!matched && pathMappings.length > 0) {
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'no-path-mapping' });
+      lastAttemptReason = 'no-path-mapping';
+      continue;
+    }
     const relPath = ws.toRelative(fsPath);
 
     if (!isWithinRoot(relPath)) {
@@ -530,7 +570,10 @@ function selectRuntimeLogFrame(
     return { chosen: { frame, relPath, source }, dropReason: '', tried };
   }
 
-  const dropReason = lastAttemptReason === 'outside-workspace' || lastAttemptReason === 'unreadable-file' ? lastAttemptReason : 'all-frames-skipped';
+  const dropReason =
+    lastAttemptReason === 'outside-workspace' || lastAttemptReason === 'unreadable-file' || lastAttemptReason === 'no-path-mapping'
+      ? lastAttemptReason
+      : 'all-frames-skipped';
   return { chosen: null, dropReason, tried };
 }
 
@@ -551,7 +594,7 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
  * to a line as an `ejsng/runtimeLog` notification — shared by every target this server connects
  * to, server-side (Node) or browser-side (a Chrome tab), regardless of how many are live at once.
  */
-function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): void {
+function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, inferredPathMappings: PathMapping[]): void {
   // `terminate()`, not `close()`: a reconnect to the SAME key supersedes it, doesn't shut it
   // down gracefully — don't wait on a close handshake before starting the replacement.
   runtimeLogConnections.get(key)?.socket.terminate();
@@ -564,6 +607,7 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): v
     droppedByReason: {},
     recentFrameDiagnostics: [],
     recentChosenPaths: [],
+    inferredPathMappings,
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -582,7 +626,13 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string): v
       // `drawn` and every entry of `droppedByReason`.
       if (!workspace) return recordDrop(info, 'server-not-ready');
 
-      const { chosen, dropReason, tried } = selectRuntimeLogFrame(workspace, log.callFrames, runtimeLogSkipFramePatterns, runtimeLogPathMappings);
+      // User-declared mappings first: `mapContainerPath` is first-match-wins, so listing them
+      // ahead of the container's own mounts is what makes a user's declaration beat an inferred
+      // one for the same path (ticket 05, item 2).
+      const { chosen, dropReason, tried } = selectRuntimeLogFrame(workspace, log.callFrames, runtimeLogSkipFramePatterns, [
+        ...runtimeLogPathMappings,
+        ...info.inferredPathMappings,
+      ]);
       pushBounded(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath: chosen?.relPath ?? null }, MAX_RECENT_FRAME_DIAGNOSTICS);
 
       if (!chosen) return recordDrop(info, dropReason);
@@ -694,7 +744,7 @@ connection.onRequest('ejsng/connectRuntime', async (params: { host: string; port
   const [target] = targets;
   if (!target) return { status: 'not-found' as const };
   const key = runtimeLogConnectionKey(params.host, port, target.id);
-  startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
+  startRuntimeLogConnection(key, target.webSocketDebuggerUrl, inferredMappingsFor(params.host, port));
   return { status: 'connected' as const, key, port };
 });
 
@@ -709,7 +759,7 @@ connection.onRequest('ejsng/connectRuntimeTarget', async (params: { host: string
   const target = targets.find((t) => t.id === params.targetId);
   if (!target) return { status: 'error' as const, message: `target ${params.targetId} not found` };
   const key = runtimeLogConnectionKey(params.host, params.port, target.id);
-  startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
+  startRuntimeLogConnection(key, target.webSocketDebuggerUrl, inferredMappingsFor(params.host, params.port));
   return { status: 'connected' as const, key };
 });
 
@@ -810,6 +860,15 @@ connection.onRequest(
     const { connectable, unreachable } = partitionDockerCandidates(filtered);
     const unreachableNames = unreachable.map((c) => c.containerName);
 
+    // Ticket 05: remember each connectable container's mounts against the endpoint it's reachable
+    // at, for whichever connect path runs next. Cleared first so a container that was rebuilt
+    // with different mounts — or removed entirely — can never leave a stale entry behind: these
+    // mappings are recomputed on every Connect and never written to settings (checklist item 4).
+    dockerMountsByEndpoint.clear();
+    for (const c of connectable) {
+      dockerMountsByEndpoint.set(`${DOCKER_DISCOVERY_HOST}:${c.hostInspectorPort as number}`, c.mounts);
+    }
+
     if (connectable.length === 0) {
       if (unreachableNames.length > 0) {
         return { status: 'unreachable-containers', containers: unreachableNames };
@@ -864,7 +923,7 @@ connection.onRequest(
       };
     }
     const key = runtimeLogConnectionKey(DOCKER_DISCOVERY_HOST, port, target.id);
-    startRuntimeLogConnection(key, target.webSocketDebuggerUrl);
+    startRuntimeLogConnection(key, target.webSocketDebuggerUrl, mappingsFromMounts(only.mounts));
     return { status: 'connected', key, host: DOCKER_DISCOVERY_HOST, port, unreachable: unreachableNames };
   },
 );

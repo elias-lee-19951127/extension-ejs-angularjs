@@ -18,6 +18,8 @@ const {
   partitionDockerCandidates,
   findDockerCandidateByAppPort,
   formatDockerCandidateLabel,
+  mappingsFromMounts,
+  mapContainerPath,
 } = require('../dist');
 
 /** A minimal-but-realistic `docker inspect` entry — only the fields this feature reads. */
@@ -221,4 +223,47 @@ test('formatDockerCandidateLabel: "<container name>: <app port>" — matches the
 test('formatDockerCandidateLabel: a container with no published app port says so instead of showing an empty port', () => {
   const [worker] = resolveDockerCandidates(parseDockerInspect([CITYOS_WORKER]));
   assert.strictEqual(formatDockerCandidateLabel(worker), 'cityos-worker: (no published app port)');
+});
+
+// ============================================================================================
+// Ticket 05 (.scratch/runtime-remote-env/issues/05-path-mapping-tu-mount.md) — path mappings
+// inferred from the connected container's own mounts.
+// ============================================================================================
+
+test('mappingsFromMounts: each mount becomes a container-path -> host-path mapping', () => {
+  const [app] = resolveDockerCandidates(parseDockerInspect([CITYOS_APP]));
+  assert.deepStrictEqual(mappingsFromMounts(app.mounts), [
+    { remote: '/home/cityos/aocs-cityos/aocs', local: '/home/user/projects/aocs' },
+  ]);
+});
+
+test('mappingsFromMounts: nested mounts are ordered longest container path first, so the inner one wins', () => {
+  // cityos-web mounts `aocs-cityos-lusail` at /home/cityos/aocs-cityos AND a DIFFERENT repo,
+  // `aocs`, at /home/cityos/aocs-cityos/aocs — a directory inside the first. `docker inspect`
+  // lists the outer one first; first-match-wins mapping would then send every log under
+  // .../aocs-cityos/aocs to the shadowed directory of the wrong repo.
+  const [web] = resolveDockerCandidates(parseDockerInspect([CITYOS_WEB]));
+  assert.deepStrictEqual(mappingsFromMounts(web.mounts), [
+    { remote: '/home/cityos/aocs-cityos/aocs', local: '/home/user/projects/aocs' },
+    { remote: '/home/cityos/aocs-cityos', local: '/home/user/projects/aocs-cityos-lusail' },
+  ]);
+});
+
+test('mappingsFromMounts: applied through mapContainerPath, a shadowed path resolves to the repo actually running', () => {
+  const [web] = resolveDockerCandidates(parseDockerInspect([CITYOS_WEB]));
+  const mappings = mappingsFromMounts(web.mounts);
+  assert.deepStrictEqual(mapContainerPath('/home/cityos/aocs-cityos/aocs/utility/log.js', mappings), {
+    path: '/home/user/projects/aocs/utility/log.js',
+    matched: true,
+  });
+  // A path under the OUTER mount only still resolves through the outer one, unchanged.
+  assert.deepStrictEqual(mapContainerPath('/home/cityos/aocs-cityos/server.js', mappings), {
+    path: '/home/user/projects/aocs-cityos-lusail/server.js',
+    matched: true,
+  });
+});
+
+test('mappingsFromMounts: a container with no mounts yields no mappings', () => {
+  const [worker] = resolveDockerCandidates(parseDockerInspect([CITYOS_WORKER]));
+  assert.deepStrictEqual(mappingsFromMounts(worker.mounts), []);
 });

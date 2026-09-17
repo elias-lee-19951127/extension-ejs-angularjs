@@ -12,6 +12,7 @@ const {
   parseRuntimeLogMessage,
   filterConnectableTargets,
   mapContainerPath,
+  resolvePathMappings,
   rewriteWebSocketUrl,
   DEFAULT_SKIP_FRAME_PATTERNS,
   matchesSkipPattern,
@@ -228,23 +229,25 @@ test('filterConnectableTargets: an empty list stays empty', () => {
 });
 
 test('mapContainerPath: no mappings configured — path passes through unchanged', () => {
-  assert.strictEqual(mapContainerPath('/app/app.js', []), '/app/app.js');
+  assert.deepStrictEqual(mapContainerPath('/app/app.js', []), { path: '/app/app.js', matched: false });
 });
 
 test('mapContainerPath: a matching remote prefix is rewritten to the local path', () => {
   const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/app/src/index.js', mappings), '/Users/me/project/src/index.js');
+  assert.deepStrictEqual(mapContainerPath('/app/src/index.js', mappings), { path: '/Users/me/project/src/index.js', matched: true });
 });
 
-test('mapContainerPath: a path that matches no configured remote passes through unchanged', () => {
+test('mapContainerPath: a path that matches no configured remote passes through unchanged, reported as unmatched', () => {
+  // `matched: false` is what lets the caller COUNT this as a drop with its own reason
+  // (ticket 05, item 5) instead of letting it fail later as a vague "outside workspace".
   const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/other/index.js', mappings), '/other/index.js');
+  assert.deepStrictEqual(mapContainerPath('/other/index.js', mappings), { path: '/other/index.js', matched: false });
 });
 
 test('mapContainerPath: does not rewrite a path that merely starts with the same characters as remote, not the same directory', () => {
   // '/app2/x.js' must NOT match remote '/app' — that would rewrite an unrelated directory.
   const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/app2/x.js', mappings), '/app2/x.js');
+  assert.deepStrictEqual(mapContainerPath('/app2/x.js', mappings), { path: '/app2/x.js', matched: false });
 });
 
 test('mapContainerPath: the first matching mapping wins when several are configured', () => {
@@ -252,12 +255,37 @@ test('mapContainerPath: the first matching mapping wins when several are configu
     { remote: '/app/src', local: '/Users/me/project/src-only' },
     { remote: '/app', local: '/Users/me/project' },
   ];
-  assert.strictEqual(mapContainerPath('/app/src/index.js', mappings), '/Users/me/project/src-only/index.js');
+  assert.deepStrictEqual(mapContainerPath('/app/src/index.js', mappings), {
+    path: '/Users/me/project/src-only/index.js',
+    matched: true,
+  });
 });
 
 test('mapContainerPath: an exact match of remote (no trailing separator) still rewrites correctly', () => {
   const mappings = [{ remote: '/app', local: '/Users/me/project' }];
-  assert.strictEqual(mapContainerPath('/app', mappings), '/Users/me/project');
+  assert.deepStrictEqual(mapContainerPath('/app', mappings), { path: '/Users/me/project', matched: true });
+});
+
+/**
+ * resolvePathMappings (ticket 05, item 3): `${workspaceFolder}` on a mapping's `local` side, so a
+ * mapping can live in a repo's committed settings. Absolute paths must survive byte-for-byte —
+ * that is what keeps every pre-ticket-05 configuration working exactly as it did.
+ */
+test('resolvePathMappings: ${workspaceFolder} in local is expanded to the workspace root', () => {
+  const mappings = [{ remote: '/home/cityos/aocs-cityos/aocs', local: '${workspaceFolder}/aocs' }];
+  assert.deepStrictEqual(resolvePathMappings(mappings, '/Users/me/project'), [
+    { remote: '/home/cityos/aocs-cityos/aocs', local: '/Users/me/project/aocs' },
+  ]);
+});
+
+test('resolvePathMappings: an absolute local path with no variable is returned unchanged', () => {
+  const mappings = [{ remote: '/app', local: '/Users/me/project' }];
+  assert.deepStrictEqual(resolvePathMappings(mappings, '/somewhere/else'), mappings);
+});
+
+test('resolvePathMappings: every occurrence of the variable is expanded, and remote is never touched', () => {
+  const mappings = [{ remote: '${workspaceFolder}', local: '${workspaceFolder}/a/${workspaceFolder}' }];
+  assert.deepStrictEqual(resolvePathMappings(mappings, '/root'), [{ remote: '${workspaceFolder}', local: '/root/a//root' }]);
 });
 
 /**
