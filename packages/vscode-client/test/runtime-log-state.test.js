@@ -79,6 +79,7 @@ test('summarizeRuntimeStatus: an empty connection list summarizes to all zeros',
     failed: 0,
     recentLogs: [],
     wrapperSuggestion: null,
+    outsideWorkspaceDirs: [],
   });
 });
 
@@ -96,6 +97,7 @@ test('summarizeRuntimeStatus: sums received/drawn across connections, and droppe
     failed: 0,
     recentLogs: [],
     wrapperSuggestion: null,
+    outsideWorkspaceDirs: [],
   });
 });
 
@@ -266,4 +268,29 @@ test('formatRuntimeStatusBarText: a still-connecting connection is flagged, not 
 test('formatRuntimeStatusBarText: a failed connection is flagged, not silently shown as if it were live', () => {
   const text = formatRuntimeStatusBarText(1, { received: 0, drawn: 0, dropped: 0, connecting: 0, connected: 0, failed: 1 });
   assert.match(text, /failed/);
+});
+
+/**
+ * Ticket 08, item 4 (.scratch/runtime-remote-env/issues/08-log-ngoai-workspace.md): directories
+ * logs are drawn in that aren't part of the workspace, merged across connections so the panel
+ * offers each one once. Suggestions only — nothing here adds a folder.
+ */
+test('summarizeRuntimeStatus: outside-the-workspace directories are merged and de-duplicated across connections', () => {
+  const connections = [
+    { key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, outsideWorkspaceDirs: ['/host/aocs/utility'] },
+    {
+      key: 'b',
+      state: 'connected',
+      received: 1,
+      drawn: 1,
+      droppedByReason: {},
+      outsideWorkspaceDirs: ['/host/aocs/utility', '/host/other/src'],
+    },
+  ];
+  assert.deepStrictEqual(summarizeRuntimeStatus(connections).outsideWorkspaceDirs, ['/host/aocs/utility', '/host/other/src']);
+});
+
+test('summarizeRuntimeStatus: a connection from an older server with no outsideWorkspaceDirs field is fine', () => {
+  const connections = [{ key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {} }];
+  assert.deepStrictEqual(summarizeRuntimeStatus(connections).outsideWorkspaceDirs, []);
 });

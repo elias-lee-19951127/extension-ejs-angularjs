@@ -57,6 +57,8 @@ export interface RuntimeStatusConnection {
   recentLogs: RuntimeLogFrameDiagnostic[];
   /** Ticket 03, item 7 — a file dominating recently chosen frames, or `null`. */
   wrapperSuggestion: WrapperSuggestion | null;
+  /** Ticket 08, item 4 — directories outside the workspace that logs were drawn in. Suggestions only. */
+  outsideWorkspaceDirs?: string[];
 }
 
 /** Totals across every live connection — what the status bar and panel actually show. */
@@ -71,6 +73,8 @@ export interface RuntimeStatusSummary {
   recentLogs: RuntimeLogFrameDiagnostic[];
   /** The strongest suggestion across every connection (highest `share`), or `null`. */
   wrapperSuggestion: WrapperSuggestion | null;
+  /** Ticket 08, item 4 — every connection's outside-the-workspace directories, de-duplicated. */
+  outsideWorkspaceDirs: string[];
 }
 
 /** Keep the panel's "recent logs" list to a reasonable size even with several live connections. */
@@ -91,7 +95,9 @@ export function summarizeRuntimeStatus(connections: RuntimeStatusConnection[]): 
     failed: 0,
     recentLogs: [],
     wrapperSuggestion: null,
+    outsideWorkspaceDirs: [],
   };
+  const outsideDirs = new Set<string>();
   for (const c of connections) {
     summary.received += c.received;
     summary.drawn += c.drawn;
@@ -101,7 +107,9 @@ export function summarizeRuntimeStatus(connections: RuntimeStatusConnection[]): 
     if (c.wrapperSuggestion && (!summary.wrapperSuggestion || c.wrapperSuggestion.share > summary.wrapperSuggestion.share)) {
       summary.wrapperSuggestion = c.wrapperSuggestion;
     }
+    for (const dir of c.outsideWorkspaceDirs ?? []) outsideDirs.add(dir);
   }
+  summary.outsideWorkspaceDirs = [...outsideDirs];
   // Sort by TRUE recency (`at`) before capping — with several live connections, concatenation
   // order is connection-iteration order, not chronological, so slicing from the end without
   // sorting first could drop a genuinely more-recent entry in favor of an older one from a

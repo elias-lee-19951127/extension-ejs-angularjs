@@ -559,3 +559,25 @@ export function candidateHostPaths(fsPath: string, mappings: PathMapping[]): str
   }
   return [...seen];
 }
+
+// ============================================================================================
+// Ticket 08 — logs from files outside the workspace
+// (.scratch/runtime-remote-env/issues/08-log-ngoai-workspace.md). With nested mounts the file the
+// runtime is really running can live in a repo the user hasn't opened; those logs used to vanish
+// silently. They are drawn now, but only within a safety boundary: a Runtime Path arrives from a
+// network peer and must never be able to steer a read anywhere it likes.
+// ============================================================================================
+
+/**
+ * Is `hostPath` inside the host side of one of `mappings`? This is the whole read boundary
+ * (checklist item 1): the user either declared that directory in `ejsng.runtimeLog.pathMappings`
+ * or mounted it into the container they are connected to, so it is a place they have already
+ * pointed this extension at. Anything else is refused and counted, no matter what path the
+ * runtime reports.
+ *
+ * Whole-segment matching, exactly like `mapContainerPath`: `/host/projects-old/x.js` is NOT under
+ * a `/host/projects` mapping.
+ */
+export function isUnderMappingLocal(hostPath: string, mappings: PathMapping[]): boolean {
+  return mappings.some(({ local }) => hostPath === local || hostPath.startsWith(`${local}/`));
+}

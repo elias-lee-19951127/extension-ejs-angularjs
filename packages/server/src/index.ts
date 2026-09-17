@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
 import {
   createConnection,
   DiagnosticSeverity,
@@ -24,6 +25,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from 'vscode-uri';
 import {
   isWithinRoot,
+  isUnderMappingLocal,
   mapContainerPath,
   offsetForLocation,
   Workspace,
@@ -76,6 +78,8 @@ type RuntimeLogConnectionState = 'connecting' | 'connected' | 'failed';
 /** Ticket 03 (.scratch/runtime-remote-env/issues/03-chon-frame.md) — bounded ring buffers so recent-log diagnostics and wrapper-file detection don't grow forever. */
 const MAX_RECENT_FRAME_DIAGNOSTICS = 5;
 const MAX_RECENT_CHOSEN_PATHS = 50;
+/** Ticket 08 — how many distinct outside-the-workspace directories the panel will suggest adding. */
+const MAX_OUTSIDE_WORKSPACE_DIRS = 5;
 
 /** Per-connection counters, exposed over LSP so a client can show "received / drawn / dropped" instead of just a count (ticket 02, item 4). */
 interface RuntimeLogConnectionInfo {
@@ -115,6 +119,12 @@ interface RuntimeLogConnectionInfo {
    * awaits could report an older value for a line after a newer one.
    */
   queue: Promise<void>;
+  /**
+   * Ticket 08, item 4 — directories OUTSIDE the workspace that logs were actually drawn in, so
+   * the panel can offer to add them. Only ever SUGGESTED: nothing here changes the user's
+   * workspace on its own. De-duplicated and capped, since a mount can hold a whole repo.
+   */
+  outsideWorkspaceDirs: Set<string>;
 }
 
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
@@ -547,7 +557,7 @@ function selectRuntimeLogFrame(
   skipPatterns: string[],
   pathMappings: PathMapping[],
 ): {
-  chosen: { frame: CallFrame; rawPath: string; hostPath: string; relPath: string; source: string } | null;
+  chosen: { frame: CallFrame; rawPath: string; hostPath: string; relPath: string; source: string; inWorkspace: boolean } | null;
   dropReason: string;
   tried: FrameDiagnosticEntry[];
 } {
@@ -563,23 +573,31 @@ function selectRuntimeLogFrame(
 
     const rawPath = frame.url.startsWith('file://') ? URI.parse(frame.url).fsPath : frame.url;
     const { path: fsPath, matched } = mapContainerPath(rawPath, pathMappings);
-    // Mappings exist but none covers this path: the runtime is reporting paths from somewhere
-    // this server has no translation for (ticket 05, item 5). Named apart from
-    // `outside-workspace` because the fix is a different one — add a mapping / mount the
-    // directory — and because with mappings in play it is the far more likely of the two.
-    if (!matched && pathMappings.length > 0) {
-      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'no-path-mapping' });
-      lastAttemptReason = 'no-path-mapping';
-      continue;
-    }
     const relPath = ws.toRelative(fsPath);
+    const inWorkspace = isWithinRoot(relPath);
 
-    if (!isWithinRoot(relPath)) {
-      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'outside-workspace' });
-      lastAttemptReason = 'outside-workspace';
+    // Ticket 08: a file outside the workspace is still drawable — with nested mounts, the repo the
+    // runtime is really running often isn't the one the user has open — but ONLY when it lies
+    // under the host side of a Path Mapping (mount or hand-written). That is the entire read
+    // boundary: a Runtime Path arrives from a network peer, so anything outside a directory the
+    // user has already pointed this extension at is refused and counted.
+    //
+    // Both checks are needed, and in this order. A path that matched a mapping is under that
+    // mapping's host side by construction; this also admits one that matched NO mapping but is a
+    // real host path already sitting under one — a bind mount whose container path equals its host
+    // path, say. Crucially, "no mapping covered it" is NOT on its own a reason to drop: a local
+    // `node --inspect` reports paths inside the workspace that need no mapping at all, and those
+    // must keep drawing even once some unrelated Docker mapping is configured.
+    if (!inWorkspace && !isUnderMappingLocal(fsPath, pathMappings)) {
+      // Ticket 05, item 5: when mappings exist and none covered this path, say THAT rather than
+      // the vaguer "outside the workspace" — the fix is a different one (add a mapping, or mount
+      // the directory), and with mappings in play it is by far the likelier diagnosis.
+      const reason = !matched && pathMappings.length > 0 ? 'no-path-mapping' : 'outside-workspace';
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: reason });
+      lastAttemptReason = reason;
       continue;
     }
-    const source = ws.source(relPath);
+    const source = inWorkspace ? ws.source(relPath) : readMappedFile(fsPath);
     if (source == null) {
       tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'unreadable-file' });
       lastAttemptReason = 'unreadable-file';
@@ -592,7 +610,7 @@ function selectRuntimeLogFrame(
     }
 
     tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: null });
-    return { chosen: { frame, rawPath, hostPath: fsPath, relPath, source }, dropReason: '', tried };
+    return { chosen: { frame, rawPath, hostPath: fsPath, relPath, source, inWorkspace }, dropReason: '', tried };
   }
 
   const dropReason =
@@ -770,13 +788,21 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     return recordDrop(info, reason);
   }
 
-  const { frame, relPath, source } = chosen;
-  record(relPath);
+  const { frame, relPath, hostPath, source, inWorkspace } = chosen;
+  // A file inside the workspace is addressed through the root, which is what keeps the URI
+  // matching the editor's own when the root sits behind a symlink (ticket 02's fix). One outside
+  // it has no workspace-relative form at all, so it is addressed by its absolute path — that URI
+  // still decorates correctly the moment the user opens the file (ticket 08, item 3).
+  const label = inWorkspace ? relPath : hostPath;
+  record(label);
   const offset = offsetForLocation(source, frame.lineNumber, frame.columnNumber);
   info.drawn++;
-  pushBounded(info.recentChosenPaths, relPath, MAX_RECENT_CHOSEN_PATHS);
+  pushBounded(info.recentChosenPaths, label, MAX_RECENT_CHOSEN_PATHS);
+  if (!inWorkspace && info.outsideWorkspaceDirs.size < MAX_OUTSIDE_WORKSPACE_DIRS) {
+    info.outsideWorkspaceDirs.add(dirname(hostPath));
+  }
   void connection.sendNotification('ejsng/runtimeLog', {
-    uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
+    uri: URI.file(inWorkspace ? `${workspace.config.root}/${relPath}` : hostPath).toString(),
     range: toRange(source, { start: offset, end: offset }),
     value: stripAnsi(log.value),
     severity: log.severity,
@@ -807,6 +833,7 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, in
     openedAt: Date.now(),
     getScriptSource: () => Promise.resolve(null), // replaced right below, before any callback fires
     queue: Promise.resolve(),
+    outsideWorkspaceDirs: new Set(),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -977,6 +1004,7 @@ connection.onRequest('ejsng/runtimeStatus', () => ({
     droppedByReason: info.droppedByReason,
     recentLogs: info.recentFrameDiagnostics,
     wrapperSuggestion: suggestWrapperFile(info.recentChosenPaths),
+    outsideWorkspaceDirs: [...info.outsideWorkspaceDirs],
   })),
 }));
 

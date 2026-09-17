@@ -152,6 +152,19 @@ async function acceptWrapperSuggestion(path: string): Promise<void> {
   );
 }
 
+/**
+ * Ticket 08, item 4: the panel found logs being drawn in `path`, a directory outside the
+ * workspace (with nested mounts, the repo the runtime is really running often isn't the one that
+ * is open), and the user clicked "Add to workspace". This is the ONLY place a folder is added —
+ * never automatically, since adding one restarts the extension host.
+ */
+function addFolderToWorkspace(path: string): void {
+  const uri = vscode.Uri.file(path);
+  if (vscode.workspace.workspaceFolders?.some((f) => f.uri.fsPath === path)) return;
+  const added = vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, null, { uri });
+  if (!added) void vscode.window.showErrorMessage(`EJS/NG: could not add ${path} to the workspace.`);
+}
+
 /** Parse the free-text `host:port` field (Command Palette input box or the panel's own field). */
 function parseHostPort(input: string): { host: string; port: number } | null {
   const [host, portText] = input.split(':');
@@ -388,6 +401,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     launchChromeDebug: (port) => launchChromeDebug(context, port),
     openSettings: () => void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog'),
     acceptWrapperSuggestion: (path) => void acceptWrapperSuggestion(path),
+    addFolderToWorkspace: (path) => addFolderToWorkspace(path),
   });
 
   runtimeLogDecorationType = vscode.window.createTextEditorDecorationType({

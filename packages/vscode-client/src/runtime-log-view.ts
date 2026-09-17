@@ -14,6 +14,12 @@ export interface RuntimeLogViewCallbacks {
   openSettings(): void;
   /** Ticket 03, item 7 — user clicked "Skip this file" on a wrapper-file suggestion. */
   acceptWrapperSuggestion(path: string): void;
+  /**
+   * Ticket 08, item 4 — user clicked "Add to workspace" on a directory logs are being drawn in
+   * that isn't part of the workspace. Only ever reached by an explicit click: the extension
+   * never adds a folder on its own.
+   */
+  addFolderToWorkspace(path: string): void;
 }
 
 /**
@@ -50,6 +56,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       else if (msg.type === 'launchChrome') this.callbacks.launchChromeDebug(msg.port ?? this.defaultChromePort());
       else if (msg.type === 'openSettings') this.callbacks.openSettings();
       else if (msg.type === 'acceptWrapperSuggestion' && msg.path) this.callbacks.acceptWrapperSuggestion(msg.path);
+      else if (msg.type === 'addFolderToWorkspace' && msg.path) this.callbacks.addFolderToWorkspace(msg.path);
     });
     this.postStatus();
   }
@@ -78,6 +85,9 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       wrapperSuggestion: summary.wrapperSuggestion
         ? { path: summary.wrapperSuggestion.path, text: formatWrapperSuggestionText(summary.wrapperSuggestion) }
         : null,
+      // Ticket 08, item 4 — suggested, never applied: adding a folder reloads the workspace, so
+      // it has to be the user's own decision.
+      outsideWorkspaceDirs: summary.outsideWorkspaceDirs,
     });
   }
 
@@ -111,6 +121,10 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   .recentLog .frame { padding-left: 10px; opacity: 0.8; word-break: break-all; }
   .recentLog .frame.drawn { opacity: 1; }
   #recentLogsEmpty { opacity: 0.6; }
+  .outsideDir { margin-bottom: 8px; padding: 6px 8px; border-radius: 2px;
+    background: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-widget-border, transparent); }
+  .outsideDir p { margin: 0 0 6px; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -136,6 +150,8 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
     <button id="launchChromeBtn" style="flex:1">Launch Chrome debug</button>
   </div>
 
+  <div id="outsideDirs"></div>
+
   <h4>Recent logs — frames tried</h4>
   <div id="recentLogs"><div id="recentLogsEmpty">No logs yet.</div></div>
 
@@ -149,6 +165,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   const chromePortEl = document.getElementById('chromePort');
   const recentLogsEl = document.getElementById('recentLogs');
   const wrapperEl = document.getElementById('wrapperSuggestion');
+  const outsideDirsEl = document.getElementById('outsideDirs');
   const wrapperTextEl = document.getElementById('wrapperSuggestionText');
   let wrapperSuggestionPath = null;
 
@@ -170,6 +187,24 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   document.getElementById('wrapperSuggestionBtn').addEventListener('click', () => {
     if (wrapperSuggestionPath) vscode.postMessage({ type: 'acceptWrapperSuggestion', path: wrapperSuggestionPath });
   });
+
+  // Ticket 08, item 4 — one card per directory logs are drawn in that isn't in the workspace.
+  // The button is the ONLY way a folder gets added; nothing here happens automatically.
+  function renderOutsideDirs(dirs) {
+    outsideDirsEl.textContent = '';
+    for (const dir of dirs || []) {
+      const card = document.createElement('div');
+      card.className = 'outsideDir';
+      const text = document.createElement('p');
+      text.textContent = 'Drawing logs in ' + dir + ', which is outside this workspace.';
+      const btn = document.createElement('button');
+      btn.textContent = 'Add to workspace';
+      btn.addEventListener('click', () => vscode.postMessage({ type: 'addFolderToWorkspace', path: dir }));
+      card.appendChild(text);
+      card.appendChild(btn);
+      outsideDirsEl.appendChild(card);
+    }
+  }
 
   function renderRecentLogs(logs) {
     recentLogsEl.textContent = '';
@@ -214,6 +249,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
     // it blank is now the deliberate "auto-detect via Docker" gesture, not an unfinished field.
 
     renderRecentLogs(msg.recentLogs);
+    renderOutsideDirs(msg.outsideWorkspaceDirs);
 
     if (msg.wrapperSuggestion) {
       wrapperSuggestionPath = msg.wrapperSuggestion.path;
