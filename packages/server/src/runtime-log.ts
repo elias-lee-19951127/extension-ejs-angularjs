@@ -11,10 +11,11 @@ import {
   rewriteWebSocketUrl,
   type DiscoveredTarget,
   type ParsedConsoleLog,
+  type ScriptMetadata,
 } from '@ejsng/core';
 import WebSocket, { type RawData } from 'ws';
 
-export type { DiscoveredTarget, DockerMount, PathMapping } from '@ejsng/core';
+export type { DiscoveredTarget, DockerMount, ParsedConsoleLog, PathMapping, ScriptMetadata } from '@ejsng/core';
 
 /**
  * Chrome and the Node inspector both refuse any `Host` request header that isn't an IP or
@@ -31,6 +32,7 @@ const REQUIRED_HOST_HEADER = 'localhost';
  * - `onLog`: a console call anchored to a line, ready to draw.
  * - `onUnanchored`: a console call arrived with no usable stack frame — dropped, but must be
  *   counted (`parseRuntimeLogMessage`'s `'unanchored'` outcome).
+ * - `onScript`: `Debugger.scriptParsed` metadata for one script the runtime compiled (ticket 06).
  * - `onError`: the socket failed to open, or an already-open one errored.
  * - `onClose`: the socket closed for any reason (including after `onError`, which `ws` always
  *   follows with a close) — lets the caller flip a previously-`connected` state to `failed`.
@@ -39,33 +41,88 @@ export interface RuntimeLogCallbacks {
   onOpen?: () => void;
   onLog: (log: ParsedConsoleLog) => void;
   onUnanchored?: () => void;
+  onScript?: (script: ScriptMetadata) => void;
   onError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
 }
+
+/** One open CDP connection: the socket to close, plus the one request ticket 06 ever makes of it. */
+export interface RuntimeLogConnection {
+  socket: WebSocket;
+  /**
+   * `Debugger.getScriptSource` — the exact source the runtime compiled, for confirming a file on
+   * disk really is what is running. Resolves `null` if the socket is not open, the runtime
+   * answers with an error, or the reply doesn't arrive within `timeoutMs`: an unanswerable
+   * verification must degrade to "unverified", never hang a log forever.
+   */
+  getScriptSource(scriptId: string, timeoutMs?: number): Promise<string | null>;
+}
+
+/** Ids 1 and 2 are the two `enable` calls sent on open; client requests are numbered from here. */
+const FIRST_REQUEST_ID = 3;
 
 /**
  * Open a CDP/Inspector Protocol client to `url` (per spec, a target the user started themselves
  * with `node --inspect`) and report every console call it can anchor to a line via `onLog`.
  *
+ * Both `Runtime` and `Debugger` are enabled. `Debugger` is enabled ONLY to receive
+ * `scriptParsed` events (ticket 06, item 2): no breakpoint is ever set and the runtime is never
+ * paused, so the target keeps running exactly as it would without a debugger attached. Measured
+ * cost of the resulting backlog: 246 ms at 10,000 modules, once per connect (see the ticket).
+ *
  * `onError` fires for a connection failure or drop (bad/unreachable `url`, network reset). A
  * `ws` socket THROWS on the process if an `error` event has no listener, so registering it isn't
  * optional polish — without it, one unreachable debug target would crash the whole LSP server.
  */
-export function connectRuntimeLog(url: string, callbacks: RuntimeLogCallbacks): WebSocket {
-  const { onOpen, onLog, onUnanchored, onError, onClose } = callbacks;
+export function connectRuntimeLog(url: string, callbacks: RuntimeLogCallbacks): RuntimeLogConnection {
+  const { onOpen, onLog, onUnanchored, onScript, onError, onClose } = callbacks;
   const socket = new WebSocket(url, { headers: { Host: REQUIRED_HOST_HEADER } });
+  const pending = new Map<number, (result: unknown) => void>();
+  let nextRequestId = FIRST_REQUEST_ID;
+
   socket.on('open', () => {
     onOpen?.();
     socket.send(JSON.stringify({ id: 1, method: 'Runtime.enable' }));
+    socket.send(JSON.stringify({ id: 2, method: 'Debugger.enable' }));
   });
   socket.on('error', (err) => onError?.(err));
-  socket.on('close', (code: number, reason: Buffer) => onClose?.(code, reason.toString()));
+  socket.on('close', (code: number, reason: Buffer) => {
+    // Resolve everything still waiting, so a caller awaiting verification on a connection that
+    // just dropped continues (as "unverified") instead of holding its promise forever.
+    for (const resolve of pending.values()) resolve(undefined);
+    pending.clear();
+    onClose?.(code, reason.toString());
+  });
   socket.on('message', (raw: RawData) => {
     const outcome = parseRuntimeLogMessage(raw.toString());
     if (outcome.kind === 'log') onLog(outcome.log);
     else if (outcome.kind === 'unanchored') onUnanchored?.();
+    else if (outcome.kind === 'script') onScript?.(outcome.script);
+    else if (outcome.kind === 'reply') {
+      pending.get(outcome.id)?.(outcome.result);
+      pending.delete(outcome.id);
+    }
   });
-  return socket;
+
+  return {
+    socket,
+    getScriptSource(scriptId, timeoutMs = 2000) {
+      if (socket.readyState !== WebSocket.OPEN) return Promise.resolve(null);
+      const id = nextRequestId++;
+      return new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve(null);
+        }, timeoutMs);
+        pending.set(id, (result) => {
+          clearTimeout(timer);
+          const source = (result as { scriptSource?: unknown } | undefined)?.scriptSource;
+          resolve(typeof source === 'string' ? source : null);
+        });
+        socket.send(JSON.stringify({ id, method: 'Debugger.getScriptSource', params: { scriptId } }));
+      });
+    },
+  };
 }
 
 /**

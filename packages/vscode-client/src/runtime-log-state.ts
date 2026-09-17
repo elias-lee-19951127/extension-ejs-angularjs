@@ -16,8 +16,19 @@ export interface RuntimeFrameDiagnosticEntry {
   url: string;
   lineNumber: number;
   columnNumber: number;
-  skipReason: 'skip-pattern' | 'obfuscated' | 'outside-workspace' | 'unreadable-file' | 'no-path-mapping' | null;
+  skipReason:
+    | 'skip-pattern'
+    | 'obfuscated'
+    | 'outside-workspace'
+    | 'unreadable-file'
+    | 'no-path-mapping'
+    | 'stale-file'
+    | 'shadowed-file'
+    | 'content-mismatch'
+    | null;
   matchedPattern?: string;
+  /** Only set for `'shadowed-file'` — the file the runtime IS running (ticket 06). */
+  runtimePath?: string;
 }
 
 /** One recent log's full frame-selection story — mirrors `RuntimeLogFrameDiagnostic` in packages/core. */
@@ -117,6 +128,12 @@ export function formatSkipReason(entry: RuntimeFrameDiagnosticEntry): string {
       return 'skipped — file not readable';
     case 'no-path-mapping':
       return 'skipped — no path mapping covers this path';
+    case 'stale-file':
+      return 'not drawn — the file changed since the runtime loaded it; restart the app';
+    case 'shadowed-file':
+      return `not drawn — the runtime is running ${entry.runtimePath ?? 'another copy of this file'}`;
+    case 'content-mismatch':
+      return 'not drawn — this file is not what the runtime is running; check the path mapping, or restart the app';
   }
 }
 

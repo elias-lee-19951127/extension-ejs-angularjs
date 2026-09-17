@@ -7,18 +7,18 @@ chưa nạp lại (**Stale File**), file trong workspace bị mount khác che n�
 
 **Blocked by:** 05 — cần mapping ra file trên đĩa trước khi so nội dung.
 
-**Status:** in-progress
+**Status:** done
 
 - [x] Bắt đầu bằng thí nghiệm với Node thật: metadata script V8 báo về (độ dài, dòng cuối) có khớp
       file trên đĩa không, kể cả với CommonJS. Kết quả quyết định cách so sánh; **ghi vào ticket**
       trước khi viết tiếp — xem "Kết quả thí nghiệm" bên dưới
-- [ ] Bật domain `Debugger` chỉ để nhận sự kiện: không đặt breakpoint, không pause runtime
-- [ ] Nội dung khớp → vẽ inline như hiện tại
-- [ ] Lệch và file trên đĩa mới hơn lúc runtime nạp → không vẽ, báo **Stale File** kèm gợi ý restart
-- [ ] Lệch kiểu khác → không vẽ, báo nghi **Shadowed File** hoặc mapping sai; nếu biết mount thì
+- [x] Bật domain `Debugger` chỉ để nhận sự kiện: không đặt breakpoint, không pause runtime
+- [x] Nội dung khớp → vẽ inline như hiện tại
+- [x] Lệch và file trên đĩa mới hơn lúc runtime nạp → không vẽ, báo **Stale File** kèm gợi ý restart
+- [x] Lệch kiểu khác → không vẽ, báo nghi **Shadowed File** hoặc mapping sai; nếu biết mount thì
       chỉ ra đường dẫn bản runtime đang chạy
-- [ ] Mọi trường hợp không vẽ đều vào bộ đếm lý do của ticket 02
-- [ ] Chi phí bật `Debugger` với dự án vài nghìn file được đo và ghi lại; nếu nặng thì giới hạn
+- [x] Mọi trường hợp không vẽ đều vào bộ đếm lý do của ticket 02
+- [x] Chi phí bật `Debugger` với dự án vài nghìn file được đo và ghi lại; nếu nặng thì giới hạn
       phạm vi script quan tâm
 
 ## Kết quả thí nghiệm (item 1)
@@ -73,3 +73,65 @@ giữ source) để bộ nhớ không phình theo kích thước code.
 `ws://localhost/<id>` — **không có port**. Nối thẳng vào chuỗi đó là ra port 80. Đây đúng là ca
 ticket 02 đã viết `rewriteWebSocketUrl` để xử lý; thí nghiệm này xác nhận nó không phải phòng xa
 mà là đường đi bắt buộc trên Node hiện tại.
+
+## Comments
+
+**2026-09-17, agent:** Xong cả 7 mục. Các quyết định đáng ghi lại:
+
+- **Hai tầng kiểm, theo thứ tự chi phí.** Tầng rẻ là `sourceMatchesScript` (thuần, `packages/core`):
+  so `length` + `endLine` + `endColumn` của `Debugger.scriptParsed` với file mà bước chọn frame dù
+  sao cũng đã đọc — **không round-trip nào**. Tầng chính xác là `Debugger.getScriptSource`, chỉ gọi
+  khi tầng rẻ đã PASS, để bắt ca metadata không nhìn thấy: sửa đổi byte mà không đổi độ dài lẫn cấu
+  trúc dòng (đổi tên biến sang tên khác cùng độ dài). Kết quả cache theo `scriptId` + đường dẫn
+  host, nên tốn một round-trip mỗi *script*, không phải mỗi *log*. Ban đầu tôi định chỉ dùng
+  metadata cho gọn — nhưng ca cùng độ dài chính là ca "mapping tự khai trỏ nhầm" mà ticket muốn
+  chặn, và nó vẽ *sai dòng mà trông như đúng*, đúng thứ tệ nhất. Có test riêng cho ca này.
+- **Shadowed File được CHỨNG MINH, không đoán.** `candidateHostPaths` (thuần) trả về *mọi* đường dẫn
+  host mà các mapping phủ lên Runtime Path, không chỉ cái đầu tiên `mapContainerPath` chọn. Khi lệch,
+  server đọc các ứng viên còn lại và tìm cái khớp metadata — với mount lồng nhau đó chính là bản
+  runtime đang thật sự chạy, nên panel **nêu tên file** thay vì nói chung chung. Đây là lý do mục 4
+  ("nếu biết mount thì chỉ ra đường dẫn bản runtime đang chạy") làm được mà không cần heuristic nào.
+  Chỉ đọc file nằm dưới phía host của một mapping — Runtime Path do một tiến trình mạng gửi tới,
+  không được phép lái lệnh đọc đi chỗ khác (cùng quy tắc ticket 08 sẽ dựng).
+- **Cách định ngày "lúc runtime nạp".** CDP không nói script được nạp lúc nào. Mốc dùng là
+  `openedAt` — thời điểm kết nối mở: mọi thứ runtime đã biên dịch trước đó đều được nạp trước mốc
+  này. File lệch **và** mtime mới hơn mốc → **Stale File** chắc chắn, gợi ý restart. Lệch mà sửa từ
+  trước khi kết nối thì không định ngày được bằng cách này, và rơi vào `content-mismatch` — báo cả
+  hai cách sửa (mapping sai / restart) thay vì đoán bừa một cái. Đã cân nhắc lấy `State.StartedAt`
+  của container để có mốc chính xác hơn, nhưng để lại: nó chỉ giúp ca Docker, mà ca Docker phần lớn
+  đã được nhánh Shadowed bắt trước rồi.
+- **Không verify được thì VẼ, không im lặng.** Frame không có `scriptId`, không có metadata cho
+  script đó, hoặc runtime không trả lời `getScriptSource` (socket đóng, timeout 2s) → coi như khớp
+  và vẽ như trước ticket này. Trình duyệt và mọi target không gửi `scriptParsed` phải chạy y như cũ;
+  một request không có hồi âm không được phép nuốt log. Có test riêng cho ca này.
+- **`onLog` thành bất đồng bộ, và phải giữ thứ tự.** Vì có round-trip, mỗi log được nối vào
+  `info.queue` (promise chain per-connection) thay vì chạy song song — nếu không, hai log đua nhau
+  ở điểm `await` có thể khiến giá trị CŨ của một dòng tới client SAU giá trị mới. Có test 10 log
+  liên tiếp kiểm đúng thứ tự.
+- **Chỉ bật `Debugger` để nghe** (mục 2): adapter gửi `Debugger.enable` ngay sau `Runtime.enable`,
+  và không bao giờ gửi `setBreakpoint`/`pause`/`resume`. Target chạy y như không có debugger.
+  `parseRuntimeLogMessage` có thêm 2 kind: `'script'` (metadata) và `'reply'` (hồi âm JSON-RPC theo
+  `id`) — trước đây hồi âm rơi vào `'ignored'` vì chưa có ai gửi request bao giờ. Chỉ giữ metadata,
+  **không giữ source**, để bộ nhớ không phình theo kích thước code người dùng.
+- **`CallFrame.scriptId` là optional**, không bắt buộc: không phải CDP peer nào cũng gửi, và biến nó
+  thành bắt buộc sẽ khiến `isCallFrame` từ chối những event hoàn toàn hợp lệ. Thiếu nó chỉ có nghĩa
+  "không verify được", xử lý như trên.
+- **Lý do bỏ mới**: `stale-file`, `shadowed-file`, `content-mismatch` — đều vào `droppedByReason`
+  của ticket 02 (mục 6) và vào `skipReason` của frame trong `recentLogs`, kèm `runtimePath` cho ca
+  shadowed. `formatSkipReason` phía panel nói thẳng cách sửa từng ca.
+- **Verification chạy SAU khi chọn frame, không lồng vào vòng lặp chọn.** Tức là một frame lệch nội
+  dung không làm vòng lặp thử tiếp frame dưới (khác với `outside-workspace`/`obfuscated` của ticket
+  03). Cố ý: đưa round-trip vào trong vòng lặp sẽ biến mỗi log thành nhiều round-trip, trong khi
+  frame dưới gần như chắc chắn cũng thuộc cùng một bản lệch. Nếu thực tế cho thấy cần, đây là chỗ
+  để nới.
+- **Test**: `packages/core/test/runtime-log.test.js` (so khớp metadata với hằng số **đo được từ
+  Node thật**, `candidateHostPaths`, 2 kind mới của `parseRuntimeLogMessage`), và file mới
+  `packages/server/test/runtime-log-content-verification.test.js` — fake runtime ở đây nói cả nửa
+  `Debugger` của CDP và **tự suy metadata từ source**, nên test chỉ khai "runtime đang chạy nội dung
+  gì", không tay tính `endLine`/`length`. Đã kiểm chứng bằng cách vô hiệu hoá verification: 3 test
+  (stale, shadowed, cùng-độ-dài) đỏ ngay, 3 test còn lại xanh.
+- **Bẫy đã gặp khi viết test**, ghi lại vì dễ lặp: (1) gửi log ngay khi socket mở thì đua với
+  `scriptParsed` — fake phải báo sẵn sàng *sau* khi đã đẩy metadata; (2) `received` tăng đồng bộ còn
+  verdict ghi sau `await`, nên poll theo `received > 0` sẽ đọc counter đúng vào khe giữa hai thứ.
+  Đã sửa cả test của ticket 05 theo (2).
+- `npm test` ở gốc repo: 269 test, 264 pass — 5 fail còn lại là fixture `smart-city` có sẵn từ trước.

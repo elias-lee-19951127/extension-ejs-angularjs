@@ -264,7 +264,12 @@ test('a path no mapping covers is dropped and counted as no-path-mapping, never 
   const { conn, runtimeLogs } = await startServer(t, root, { dockerPath: docker.dir });
   assert.strictEqual((await conn.sendRequest('ejsng/discoverRuntimeTargets', {})).status, 'connected');
 
-  const status = await waitForStatus(conn, (s) => s.connections[0]?.received > 0);
+  // Wait on a HANDLED log, not merely a received one: `received` is bumped synchronously when the
+  // event arrives, while the verdict lands after ticket 06's verification round-trip.
+  const status = await waitForStatus(conn, (s) => {
+    const c = s.connections[0];
+    return c != null && c.drawn + Object.values(c.droppedByReason).reduce((a, b) => a + b, 0) > 0;
+  });
   const [connection] = status.connections;
   assert.strictEqual(connection.drawn, 0);
   assert.strictEqual(connection.droppedByReason['no-path-mapping'], 1);

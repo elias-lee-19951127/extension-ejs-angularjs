@@ -51,6 +51,14 @@ export interface CallFrame {
   url: string;
   lineNumber: number;
   columnNumber: number;
+  /**
+   * The script this frame is in, as V8 numbers it — the join key to `Debugger.scriptParsed`
+   * metadata (ticket 06's content verification). Optional because it is only usable when the
+   * `Debugger` domain is enabled on that connection and the event actually carried it; a frame
+   * without it simply can't be content-verified, and is drawn on the path match alone, exactly as
+   * before ticket 06.
+   */
+  scriptId?: string;
 }
 
 /** The `Runtime.consoleAPICalled` event params — only the fields v1 needs. */
@@ -75,8 +83,9 @@ function isRemoteObject(v: unknown): v is RemoteObject {
 
 function isCallFrame(v: unknown): v is CallFrame {
   if (typeof v !== 'object' || v === null) return false;
-  const f = v as { url?: unknown; lineNumber?: unknown; columnNumber?: unknown };
-  return typeof f.url === 'string' && typeof f.lineNumber === 'number' && typeof f.columnNumber === 'number';
+  const f = v as { url?: unknown; lineNumber?: unknown; columnNumber?: unknown; scriptId?: unknown };
+  if (typeof f.url !== 'string' || typeof f.lineNumber !== 'number' || typeof f.columnNumber !== 'number') return false;
+  return f.scriptId === undefined || typeof f.scriptId === 'string';
 }
 
 /**
@@ -148,8 +157,13 @@ export function parseConsoleApiCalled(event: unknown): ParsedConsoleLog | null {
   if (rawFrames.length === 0) return null;
   return {
     // Normalized to just what this feature uses — a raw CDP CallFrame also carries
-    // functionName/scriptId/… this pure layer (and everything downstream of it) doesn't need.
-    callFrames: rawFrames.map((f) => ({ url: f.url, lineNumber: f.lineNumber, columnNumber: f.columnNumber })),
+    // functionName/… this pure layer (and everything downstream of it) doesn't need.
+    callFrames: rawFrames.map((f) => ({
+      url: f.url,
+      lineNumber: f.lineNumber,
+      columnNumber: f.columnNumber,
+      ...(f.scriptId !== undefined ? { scriptId: f.scriptId } : {}),
+    })),
     value: event.args.map(formatArg).join(' '),
     severity: severityOf(event.type),
   };
@@ -161,12 +175,21 @@ export function parseConsoleApiCalled(event: unknown): ParsedConsoleLog | null {
  * - `'unanchored'` — a real console call the endpoint sent, but with no usable stack frame to
  *   anchor it to a line. Must still be COUNTED as a dropped log (ticket 02, item 4) — never
  *   silently disappear the way it used to.
- * - `'ignored'` — not a console call event at all (a JSON-RPC reply, unparsable JSON, some other
- *   CDP event this feature doesn't use). Not a "log" in any sense, so not counted anywhere.
+ * - `'script'` — a `Debugger.scriptParsed` event: metadata about a script the runtime compiled,
+ *   for ticket 06's content verification. Not a log, so counted nowhere.
+ * - `'reply'` — a JSON-RPC reply to a request this client sent (`Debugger.getScriptSource`), with
+ *   its `id` so the caller can match it to the pending request.
+ * - `'ignored'` — not a console call event at all (unparsable JSON, some other CDP event this
+ *   feature doesn't use). Not a "log" in any sense, so not counted anywhere.
  *
  * Never throws: the endpoint is a network peer, not a trusted collaborator.
  */
-export type RuntimeLogMessageOutcome = { kind: 'log'; log: ParsedConsoleLog } | { kind: 'unanchored' } | { kind: 'ignored' };
+export type RuntimeLogMessageOutcome =
+  | { kind: 'log'; log: ParsedConsoleLog }
+  | { kind: 'unanchored' }
+  | { kind: 'script'; script: ScriptMetadata }
+  | { kind: 'reply'; id: number; result: unknown }
+  | { kind: 'ignored' };
 
 export function parseRuntimeLogMessage(raw: string): RuntimeLogMessageOutcome {
   let msg: unknown;
@@ -176,10 +199,17 @@ export function parseRuntimeLogMessage(raw: string): RuntimeLogMessageOutcome {
     return { kind: 'ignored' };
   }
   if (typeof msg !== 'object' || msg === null) return { kind: 'ignored' };
-  const { method, params } = msg as { method?: unknown; params?: unknown };
-  if (method !== 'Runtime.consoleAPICalled') return { kind: 'ignored' };
-  const log = parseConsoleApiCalled(params);
-  return log ? { kind: 'log', log } : { kind: 'unanchored' };
+  const { id, method, params, result } = msg as { id?: unknown; method?: unknown; params?: unknown; result?: unknown };
+  if (method === 'Runtime.consoleAPICalled') {
+    const log = parseConsoleApiCalled(params);
+    return log ? { kind: 'log', log } : { kind: 'unanchored' };
+  }
+  if (method === 'Debugger.scriptParsed' && isScriptParsedParams(params)) {
+    const { scriptId, url, endLine, endColumn, length } = params;
+    return { kind: 'script', script: { scriptId, url, endLine, endColumn, length } };
+  }
+  if (method === undefined && typeof id === 'number') return { kind: 'reply', id, result };
+  return { kind: 'ignored' };
 }
 
 /**
@@ -382,11 +412,23 @@ export interface FrameDiagnosticEntry {
    * `null` means this is the frame that was actually chosen and drawn. `'no-path-mapping'` is
    * ticket 05's addition: the runtime reported a path no mapping covers (neither the user's own
    * nor any inferred from the connected container's mounts), so it could not even be turned into
-   * a path on this machine to look for.
+   * a path on this machine to look for. The last three are ticket 06's: the path resolved fine,
+   * but the file there is not what the runtime is actually running.
    */
-  skipReason: 'skip-pattern' | 'obfuscated' | 'outside-workspace' | 'unreadable-file' | 'no-path-mapping' | null;
+  skipReason:
+    | 'skip-pattern'
+    | 'obfuscated'
+    | 'outside-workspace'
+    | 'unreadable-file'
+    | 'no-path-mapping'
+    | 'stale-file'
+    | 'shadowed-file'
+    | 'content-mismatch'
+    | null;
   /** Only set when `skipReason` is `'skip-pattern'`. */
   matchedPattern?: string;
+  /** Only set when `skipReason` is `'shadowed-file'` — the file the runtime IS running, proven by content. */
+  runtimePath?: string;
 }
 
 /**
@@ -442,4 +484,78 @@ export function suggestWrapperFile(
 
   const share = top.count / recentChosenPaths.length;
   return share >= shareThreshold ? { path: top.path, share } : null;
+}
+
+// ============================================================================================
+// Ticket 06 — content verification (.scratch/runtime-remote-env/issues/06-kiem-tra-noi-dung.md).
+// A path match does not mean a content match: the runtime may be running a file the user edited
+// since (Stale File), a different copy shadowed by another mount (Shadowed File), or whatever a
+// wrong hand-written mapping points at. All three draw the log on the WRONG LINE while looking
+// right, which is worse than not drawing at all — so drawing becomes conditional on the content
+// lining up. See the experiment section of that ticket for why these three fields are enough.
+// ============================================================================================
+
+/**
+ * What `Debugger.scriptParsed` reports about one script V8 has compiled. Metadata only, never the
+ * source: a target with thousands of modules sends one of these per script (measured: ~10k events
+ * / 5.9 MB at 10k modules, see the ticket), and holding their sources would make this server's
+ * memory scale with the size of the user's code for no benefit.
+ */
+export interface ScriptMetadata {
+  scriptId: string;
+  url: string;
+  /** 0-based index of the script's last line. */
+  endLine: number;
+  /** Character offset of the script's end WITHIN that last line. */
+  endColumn: number;
+  /** Total length of the script source, in the same units `String.prototype.length` counts. */
+  length: number;
+}
+
+function isScriptParsedParams(v: unknown): v is ScriptMetadata {
+  if (typeof v !== 'object' || v === null) return false;
+  const s = v as { scriptId?: unknown; url?: unknown; endLine?: unknown; endColumn?: unknown; length?: unknown };
+  return (
+    typeof s.scriptId === 'string' &&
+    typeof s.url === 'string' &&
+    typeof s.endLine === 'number' &&
+    typeof s.endColumn === 'number' &&
+    typeof s.length === 'number'
+  );
+}
+
+/**
+ * Does `source` — a file read from disk — match the script the runtime actually compiled?
+ *
+ * Measured against a real `node --inspect` (see the ticket): V8 reports all three fields exactly
+ * as the file on disk has them, with NO CommonJS wrapper folded in, and that holds for CRLF, a
+ * BOM, a shebang, a missing trailing newline, and ESM alike. So this needs no round-trip at all —
+ * the metadata arrived with the event, and the file is one the caller has already read.
+ *
+ * Length alone would be too weak (two files of equal size), and end position alone too weak again
+ * (same shape, different text); together they are strong enough to catch every realistic edit.
+ * The residual case — an edit that changes bytes but neither length nor line structure, e.g.
+ * renaming a variable to another name of the same length — is caught by the caller's exact
+ * `Debugger.getScriptSource` confirmation, which this cheap check gates.
+ */
+export function sourceMatchesScript(source: string, script: ScriptMetadata): boolean {
+  if (source.length !== script.length) return false;
+  const lines = source.split('\n');
+  return lines.length - 1 === script.endLine && (lines[lines.length - 1]?.length ?? 0) === script.endColumn;
+}
+
+/**
+ * Every host path a container path could resolve to — one per mapping that covers it, in mapping
+ * order, de-duplicated. `mapContainerPath` returns only the FIRST, which is the one to draw on;
+ * this returns the rest as well, which is what makes a Shadowed File provable rather than
+ * guessed: with nested mounts the same container path is covered by several mounts, and the copy
+ * whose content matches what the runtime compiled is, by construction, the one actually running.
+ */
+export function candidateHostPaths(fsPath: string, mappings: PathMapping[]): string[] {
+  const seen = new Set<string>();
+  for (const { remote, local } of mappings) {
+    if (fsPath === remote) seen.add(local);
+    else if (fsPath.startsWith(`${remote}/`)) seen.add(local + fsPath.slice(remote.length));
+  }
+  return [...seen];
 }

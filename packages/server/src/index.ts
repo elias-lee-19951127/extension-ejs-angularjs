@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync, statSync } from 'node:fs';
 import {
   createConnection,
   DiagnosticSeverity,
@@ -33,6 +34,8 @@ import {
   filterDockerCandidatesByAppPort,
   mappingsFromMounts,
   resolvePathMappings,
+  sourceMatchesScript,
+  candidateHostPaths,
   classifyFrameCandidates,
   isLikelyMinified,
   stripAnsi,
@@ -48,7 +51,10 @@ import {
   waitForTargets,
   type DiscoveredTarget,
   type DockerMount,
+  type ParsedConsoleLog,
   type PathMapping,
+  type RuntimeLogConnection,
+  type ScriptMetadata,
 } from './runtime-log';
 import { listDockerRuntimeCandidates } from './docker';
 import type WebSocket from 'ws';
@@ -94,6 +100,21 @@ interface RuntimeLogConnectionInfo {
    * `ejsng.runtimeLog.pathMappings`, which always wins (checklist item 2).
    */
   inferredPathMappings: PathMapping[];
+  /** Ticket 06 — `Debugger.scriptParsed` metadata by scriptId. Metadata only: holding sources would scale this server's memory with the size of the user's code. */
+  scripts: Map<string, ScriptMetadata>;
+  /** Ticket 06 — one verdict per `scriptId` + host path, so the exact `getScriptSource` confirmation runs once per script rather than once per log. */
+  verdicts: Map<string, ContentVerdict>;
+  /** Ticket 06 — `Date.now()` when this connection opened. Everything the runtime had already loaded by then was loaded BEFORE it, which is what dates a Stale File. */
+  openedAt: number;
+  /** Ticket 06 — ask the runtime for a script's exact source (see `RuntimeLogConnection`). */
+  getScriptSource: RuntimeLogConnection['getScriptSource'];
+  /**
+   * Ticket 06 — content verification makes handling a log asynchronous (one `getScriptSource`
+   * round-trip, once per script). Chaining every log onto this keeps `ejsng/runtimeLog`
+   * notifications in the order the runtime emitted them; without it, two logs racing on their
+   * awaits could report an older value for a line after a newer one.
+   */
+  queue: Promise<void>;
 }
 
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
@@ -525,7 +546,11 @@ function selectRuntimeLogFrame(
   callFrames: CallFrame[],
   skipPatterns: string[],
   pathMappings: PathMapping[],
-): { chosen: { frame: CallFrame; relPath: string; source: string } | null; dropReason: string; tried: FrameDiagnosticEntry[] } {
+): {
+  chosen: { frame: CallFrame; rawPath: string; hostPath: string; relPath: string; source: string } | null;
+  dropReason: string;
+  tried: FrameDiagnosticEntry[];
+} {
   const classified = classifyFrameCandidates(callFrames, skipPatterns);
   const tried: FrameDiagnosticEntry[] = [];
   let lastAttemptReason: 'outside-workspace' | 'unreadable-file' | 'obfuscated' | 'no-path-mapping' | null = null;
@@ -567,7 +592,7 @@ function selectRuntimeLogFrame(
     }
 
     tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: null });
-    return { chosen: { frame, relPath, source }, dropReason: '', tried };
+    return { chosen: { frame, rawPath, hostPath: fsPath, relPath, source }, dropReason: '', tried };
   }
 
   const dropReason =
@@ -575,6 +600,117 @@ function selectRuntimeLogFrame(
       ? lastAttemptReason
       : 'all-frames-skipped';
   return { chosen: null, dropReason, tried };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ticket 06 (.scratch/runtime-remote-env/issues/06-kiem-tra-noi-dung.md): a path match is not a
+// content match. Drawing inline becomes conditional on the file on disk really being what the
+// runtime compiled — a log drawn on the wrong line while looking right is worse than one not
+// drawn at all.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * - `match` — verified, or unverifiable (no `scriptId` on the frame, no metadata for it, or the
+ *   runtime didn't answer). Unverifiable deliberately DRAWS: a browser target, or any setup where
+ *   the metadata never arrives, must keep working exactly as it did before this ticket.
+ * - `stale` — content differs and the file on disk changed after the runtime had already loaded
+ *   it. The remedy is restarting the app.
+ * - `shadowed` — content differs, and another path this connection's mappings cover DOES match
+ *   what the runtime compiled. `runtimePath` is that file: proven, not guessed.
+ * - `mismatch` — content differs with neither of the above established: a wrong hand-written
+ *   mapping, or a shadowing copy outside the mappings this server knows about.
+ */
+type ContentVerdict = { kind: 'match' } | { kind: 'stale' } | { kind: 'shadowed'; runtimePath: string } | { kind: 'mismatch' };
+
+/** The drop reason / frame skip reason each non-matching verdict is reported under. */
+const VERDICT_REASON = { stale: 'stale-file', shadowed: 'shadowed-file', mismatch: 'content-mismatch' } as const;
+
+/**
+ * Read a file this connection's Path Mappings point at. Only ever called with a path produced BY
+ * a mapping (`candidateHostPaths`), so it is confined to directories the user has already
+ * declared or mounted — a Runtime Path arrives from a network peer and must never be able to
+ * steer a read anywhere else.
+ */
+function readMappedFile(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function modifiedAt(path: string): number | null {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decide whether the chosen frame's file on disk is what the runtime is actually running, and if
+ * not, which of the three failures it is. Two levels of check, in cost order:
+ *
+ *  1. The cheap one: `sourceMatchesScript` against the metadata that arrived with
+ *     `Debugger.scriptParsed` — no round-trip, and the file is one frame selection already read.
+ *  2. The exact one, only when the cheap check passes: `Debugger.getScriptSource`, so an edit that
+ *     changes bytes without changing length or line structure (renaming a variable to another
+ *     name of the same length) can't slip through looking verified. Cached per script + path, so
+ *     it costs one round-trip per script, not one per log.
+ *
+ * A mismatch is then classified by looking for the copy the runtime IS running among the other
+ * paths this connection's mappings cover — with nested mounts, that is exactly the Shadowed File
+ * case, and finding it lets the panel name the file instead of speculating.
+ */
+async function verifyChosenFrame(
+  info: RuntimeLogConnectionInfo,
+  chosen: { frame: CallFrame; rawPath: string; hostPath: string; source: string },
+  mappings: PathMapping[],
+): Promise<ContentVerdict> {
+  const { frame, rawPath, hostPath, source } = chosen;
+  if (frame.scriptId === undefined) return { kind: 'match' };
+  const script = info.scripts.get(frame.scriptId);
+  if (!script) return { kind: 'match' };
+
+  const cacheKey = `${frame.scriptId} ${hostPath}`;
+  const cached = info.verdicts.get(cacheKey);
+  if (cached) return cached;
+
+  const verdict = await computeVerdict(info, script, rawPath, hostPath, source, mappings);
+  info.verdicts.set(cacheKey, verdict);
+  return verdict;
+}
+
+async function computeVerdict(
+  info: RuntimeLogConnectionInfo,
+  script: ScriptMetadata,
+  rawPath: string,
+  hostPath: string,
+  source: string,
+  mappings: PathMapping[],
+): Promise<ContentVerdict> {
+  if (sourceMatchesScript(source, script)) {
+    const runtimeSource = await info.getScriptSource(script.scriptId);
+    // No answer (socket closed, runtime refused, timed out): the cheap check passed and there is
+    // nothing better to go on — draw rather than withhold a log over an unanswered request.
+    if (runtimeSource === null || runtimeSource === source) return { kind: 'match' };
+  }
+
+  for (const candidate of candidateHostPaths(rawPath, mappings)) {
+    if (candidate === hostPath) continue;
+    const candidateSource = readMappedFile(candidate);
+    if (candidateSource !== null && sourceMatchesScript(candidateSource, script)) {
+      return { kind: 'shadowed', runtimePath: candidate };
+    }
+  }
+
+  const mtime = modifiedAt(hostPath);
+  // `openedAt` is a floor, not the exact load time: everything the runtime had compiled before
+  // this connection opened was loaded before it. A file edited after that and still not matching
+  // is unambiguously stale. An older edit can't be dated this way and stays `mismatch`, which
+  // reports both remedies rather than guessing one.
+  if (mtime !== null && mtime > info.openedAt) return { kind: 'stale' };
+  return { kind: 'mismatch' };
 }
 
 /**
@@ -587,6 +723,64 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
   info.state = state;
   info.reason = reason;
   void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason });
+}
+
+/**
+ * Handle one console call: pick a frame, verify the file on disk is what the runtime is really
+ * running (ticket 06), and either draw it or count exactly why it wasn't drawn. Runs serialized
+ * on the connection's own queue — see `RuntimeLogConnectionInfo.queue`.
+ */
+async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log: ParsedConsoleLog): Promise<void> {
+  // Re-checked here as well as in `onLog`: this runs after an await, by which point the key may
+  // have been reconnected or disconnected.
+  if (runtimeLogConnections.get(key) !== info) return;
+  // Defensive: `workspace` is set once in onInitialize and never reset, so this shouldn't be
+  // reachable in practice — but if it ever were (e.g. a client connecting before/without a
+  // completed initialize), the log must still be COUNTED, not silently missing from both
+  // `drawn` and every entry of `droppedByReason`.
+  if (!workspace) return recordDrop(info, 'server-not-ready');
+
+  // User-declared mappings first: `mapContainerPath` is first-match-wins, so listing them
+  // ahead of the container's own mounts is what makes a user's declaration beat an inferred
+  // one for the same path (ticket 05, item 2).
+  const mappings = [...runtimeLogPathMappings, ...info.inferredPathMappings];
+  const { chosen, dropReason, tried } = selectRuntimeLogFrame(workspace, log.callFrames, runtimeLogSkipFramePatterns, mappings);
+  const record = (chosenPath: string | null): void => {
+    pushBounded(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath }, MAX_RECENT_FRAME_DIAGNOSTICS);
+  };
+
+  if (!chosen) {
+    record(null);
+    return recordDrop(info, dropReason);
+  }
+
+  const verdict = await verifyChosenFrame(info, chosen, mappings);
+  if (runtimeLogConnections.get(key) !== info) return;
+  if (verdict.kind !== 'match') {
+    const reason = VERDICT_REASON[verdict.kind];
+    // The chosen frame's own entry is the last one pushed — restate it as skipped, with the
+    // proven runtime path when there is one, so the panel explains this log instead of showing
+    // a frame marked "chosen" for a log that never appeared.
+    const entry = tried[tried.length - 1];
+    if (entry) {
+      entry.skipReason = reason;
+      if (verdict.kind === 'shadowed') entry.runtimePath = verdict.runtimePath;
+    }
+    record(null);
+    return recordDrop(info, reason);
+  }
+
+  const { frame, relPath, source } = chosen;
+  record(relPath);
+  const offset = offsetForLocation(source, frame.lineNumber, frame.columnNumber);
+  info.drawn++;
+  pushBounded(info.recentChosenPaths, relPath, MAX_RECENT_CHOSEN_PATHS);
+  void connection.sendNotification('ejsng/runtimeLog', {
+    uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
+    range: toRange(source, { start: offset, end: offset }),
+    value: stripAnsi(log.value),
+    severity: log.severity,
+  });
 }
 
 /**
@@ -608,45 +802,31 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, in
     recentFrameDiagnostics: [],
     recentChosenPaths: [],
     inferredPathMappings,
+    scripts: new Map(),
+    verdicts: new Map(),
+    openedAt: Date.now(),
+    getScriptSource: () => Promise.resolve(null), // replaced right below, before any callback fires
+    queue: Promise.resolve(),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
   // reconnect (or disconnect) can't mix in state from a connection no longer current.
-  const socket = connectRuntimeLog(webSocketDebuggerUrl, {
+  const cdp = connectRuntimeLog(webSocketDebuggerUrl, {
     onOpen: () => {
       if (runtimeLogConnections.get(key) !== info) return;
+      info.openedAt = Date.now();
       setConnectionState(key, info, 'connected');
     },
     onLog: (log) => {
       if (runtimeLogConnections.get(key) !== info) return;
       info.received++;
-      // Defensive: `workspace` is set once in onInitialize and never reset, so this shouldn't be
-      // reachable in practice — but if it ever were (e.g. a client connecting before/without a
-      // completed initialize), the log must still be COUNTED, not silently missing from both
-      // `drawn` and every entry of `droppedByReason`.
-      if (!workspace) return recordDrop(info, 'server-not-ready');
-
-      // User-declared mappings first: `mapContainerPath` is first-match-wins, so listing them
-      // ahead of the container's own mounts is what makes a user's declaration beat an inferred
-      // one for the same path (ticket 05, item 2).
-      const { chosen, dropReason, tried } = selectRuntimeLogFrame(workspace, log.callFrames, runtimeLogSkipFramePatterns, [
-        ...runtimeLogPathMappings,
-        ...info.inferredPathMappings,
-      ]);
-      pushBounded(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath: chosen?.relPath ?? null }, MAX_RECENT_FRAME_DIAGNOSTICS);
-
-      if (!chosen) return recordDrop(info, dropReason);
-
-      const { frame, relPath, source } = chosen;
-      const offset = offsetForLocation(source, frame.lineNumber, frame.columnNumber);
-      info.drawn++;
-      pushBounded(info.recentChosenPaths, relPath, MAX_RECENT_CHOSEN_PATHS);
-      void connection.sendNotification('ejsng/runtimeLog', {
-        uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
-        range: toRange(source, { start: offset, end: offset }),
-        value: stripAnsi(log.value),
-        severity: log.severity,
-      });
+      // Chained, not awaited: content verification (ticket 06) makes this asynchronous, and logs
+      // must still reach the client in the order the runtime emitted them.
+      info.queue = info.queue.then(() => handleRuntimeLog(key, info, log));
+    },
+    onScript: (script) => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      info.scripts.set(script.scriptId, script);
     },
     onUnanchored: () => {
       if (runtimeLogConnections.get(key) !== info) return;
@@ -664,7 +844,8 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, in
       setConnectionState(key, info, 'failed', reason || `connection closed (code ${code})`);
     },
   });
-  info.socket = socket;
+  info.socket = cdp.socket;
+  info.getScriptSource = cdp.getScriptSource;
   runtimeLogConnections.set(key, info);
 }
 

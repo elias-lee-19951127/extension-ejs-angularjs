@@ -20,6 +20,8 @@ const {
   isLikelyMinified,
   stripAnsi,
   suggestWrapperFile,
+  sourceMatchesScript,
+  candidateHostPaths,
 } = require('../dist');
 
 test('offsetForLocation: mid-file location maps to the correct character offset', () => {
@@ -62,14 +64,26 @@ test('parseConsoleApiCalled: joins primitive args and carries every call frame t
       ],
     },
   };
+  // `scriptId` is carried through as of ticket 06 — it is the join key to the script metadata
+  // content verification compares against. `functionName` stays dropped: nothing uses it.
   assert.deepStrictEqual(parseConsoleApiCalled(event), {
     callFrames: [
-      { url: 'file:///app/views/profile.js', lineNumber: 5, columnNumber: 2 },
-      { url: 'file:///app/index.js', lineNumber: 10, columnNumber: 0 },
+      { url: 'file:///app/views/profile.js', lineNumber: 5, columnNumber: 2, scriptId: '1' },
+      { url: 'file:///app/index.js', lineNumber: 10, columnNumber: 0, scriptId: '2' },
     ],
     value: 'total 42',
     severity: 'log',
   });
+});
+
+test('parseConsoleApiCalled: a frame with no scriptId parses fine, without inventing one', () => {
+  // Not every CDP peer sends scriptId; such a frame simply can't be content-verified later.
+  const event = {
+    type: 'log',
+    args: [{ type: 'string', value: 'x' }],
+    stackTrace: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }] },
+  };
+  assert.deepStrictEqual(parseConsoleApiCalled(event)?.callFrames, [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }]);
 });
 
 test('parseConsoleApiCalled: maps the CDP event type to a simplified severity', () => {
@@ -185,7 +199,36 @@ test('parseRuntimeLogMessage: non-JSON frames are ignored instead of throwing', 
 test('parseRuntimeLogMessage: JSON that is not an object, or has no matching method, is ignored', () => {
   assert.deepStrictEqual(parseRuntimeLogMessage('42'), { kind: 'ignored' });
   assert.deepStrictEqual(parseRuntimeLogMessage('null'), { kind: 'ignored' });
-  assert.deepStrictEqual(parseRuntimeLogMessage(JSON.stringify({ id: 1, result: {} })), { kind: 'ignored' }); // a request reply, not an event
+  assert.deepStrictEqual(parseRuntimeLogMessage(JSON.stringify({ method: 'Runtime.executionContextCreated', params: {} })), {
+    kind: 'ignored',
+  });
+});
+
+test('parseRuntimeLogMessage: a JSON-RPC reply is routed back to its request by id (ticket 06 getScriptSource)', () => {
+  // Before ticket 06 this was 'ignored' — nothing sent requests, so nothing awaited replies.
+  assert.deepStrictEqual(parseRuntimeLogMessage(JSON.stringify({ id: 7, result: { scriptSource: 'x' } })), {
+    kind: 'reply',
+    id: 7,
+    result: { scriptSource: 'x' },
+  });
+});
+
+test('parseRuntimeLogMessage: a Debugger.scriptParsed event becomes script metadata', () => {
+  const raw = JSON.stringify({
+    method: 'Debugger.scriptParsed',
+    params: { scriptId: '12', url: 'file:///app/index.js', endLine: 4, endColumn: 0, length: 87, hash: 'abc' },
+  });
+  assert.deepStrictEqual(parseRuntimeLogMessage(raw), {
+    kind: 'script',
+    // `hash` is deliberately not carried: reproducing V8's own hash client-side would be a
+    // version dependency, and endLine/endColumn/length already settle the comparison.
+    script: { scriptId: '12', url: 'file:///app/index.js', endLine: 4, endColumn: 0, length: 87 },
+  });
+});
+
+test('parseRuntimeLogMessage: a malformed scriptParsed is ignored rather than trusted', () => {
+  const raw = JSON.stringify({ method: 'Debugger.scriptParsed', params: { scriptId: 12, url: 'file:///x.js' } });
+  assert.deepStrictEqual(parseRuntimeLogMessage(raw), { kind: 'ignored' });
 });
 
 test('parseRuntimeLogMessage: a consoleAPICalled event with no usable call frame is "unanchored", not silently dropped', () => {
@@ -458,4 +501,62 @@ test('suggestWrapperFile: minSamples/shareThreshold are configurable', () => {
     path: 'src/log.js',
     share: 0.5,
   });
+});
+
+// ============================================================================================
+// Ticket 06 — content verification. The constants below come from a REAL `node --inspect`
+// measurement recorded in .scratch/runtime-remote-env/issues/06-kiem-tra-noi-dung.md: V8 reports
+// length/endLine/endColumn exactly as the file on disk has them, with no CommonJS wrapper folded
+// in, for CRLF / BOM / shebang / no-trailing-newline / ESM alike.
+// ============================================================================================
+
+const script = (over) => ({ scriptId: '1', url: 'file:///app/index.js', endLine: 0, endColumn: 0, length: 0, ...over });
+
+test('sourceMatchesScript: a file matching the reported length and end position verifies', () => {
+  const source = 'const a = 1;\nconsole.log(a);\n';
+  assert.strictEqual(sourceMatchesScript(source, script({ endLine: 2, endColumn: 0, length: source.length })), true);
+});
+
+test('sourceMatchesScript: a file with no trailing newline verifies on its last line, not a phantom one', () => {
+  const source = 'console.log("no trailing newline");';
+  assert.strictEqual(sourceMatchesScript(source, script({ endLine: 0, endColumn: source.length, length: source.length })), true);
+});
+
+test('sourceMatchesScript: CRLF counts toward the preceding line, matching what V8 reports', () => {
+  const source = 'const b = 2;\r\nconsole.log(b);\r\n';
+  assert.strictEqual(sourceMatchesScript(source, script({ endLine: 2, endColumn: 0, length: source.length })), true);
+});
+
+test('sourceMatchesScript: an edit that changes the length does not verify', () => {
+  const source = 'const a = 1;\nconsole.log(a);\n';
+  assert.strictEqual(sourceMatchesScript(source, script({ endLine: 2, endColumn: 0, length: source.length + 5 })), false);
+});
+
+test('sourceMatchesScript: a same-length file with a different line structure does not verify', () => {
+  const source = 'const a = 1; console.log(a);\n';
+  assert.strictEqual(sourceMatchesScript(source, script({ endLine: 2, endColumn: 0, length: source.length })), false);
+});
+
+test('candidateHostPaths: with nested mounts, every mapping that covers the path is returned, in order', () => {
+  // The first is what gets drawn on; the rest are where a Shadowed File would be found.
+  const mappings = [
+    { remote: '/home/cityos/aocs-cityos/aocs', local: '/host/aocs' },
+    { remote: '/home/cityos/aocs-cityos', local: '/host/lusail' },
+  ];
+  assert.deepStrictEqual(candidateHostPaths('/home/cityos/aocs-cityos/aocs/utility/log.js', mappings), [
+    '/host/aocs/utility/log.js',
+    '/host/lusail/aocs/utility/log.js',
+  ]);
+});
+
+test('candidateHostPaths: a path no mapping covers has no candidates', () => {
+  assert.deepStrictEqual(candidateHostPaths('/opt/vendor/x.js', [{ remote: '/app', local: '/host' }]), []);
+});
+
+test('candidateHostPaths: two mappings resolving to the same host path yield it once', () => {
+  const mappings = [
+    { remote: '/app', local: '/host' },
+    { remote: '/app', local: '/host' },
+  ];
+  assert.deepStrictEqual(candidateHostPaths('/app/x.js', mappings), ['/host/x.js']);
 });
