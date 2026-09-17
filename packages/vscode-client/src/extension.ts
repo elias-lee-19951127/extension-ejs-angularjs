@@ -11,8 +11,12 @@ import {
 import {
   escapeGlobPath,
   formatRuntimeStatusBarText,
+  mappingForSettings,
+  orderByLastAppPort,
   RuntimeLogState,
   summarizeRuntimeStatus,
+  type RuntimeChecklistFix,
+  type RuntimeChecklistStep,
   type RuntimeLogEntry,
   type RuntimeStatusConnection,
   type RuntimeStatusSummary,
@@ -28,6 +32,22 @@ const runtimeLogConnections = new Map<string, string>();
 let runtimeLogView: RuntimeLogViewProvider;
 /** The last snapshot fetched via `ejsng/runtimeStatus` — see refreshRuntimeStatus. */
 let runtimeStatusSummary: RuntimeStatusSummary = summarizeRuntimeStatus([]);
+/** The last checklist fetched via `ejsng/runtimeChecklist` (ticket 09). */
+let runtimeChecklistSteps: RuntimeChecklistStep[] = [];
+let extensionContext: vscode.ExtensionContext | undefined;
+
+/**
+ * Ticket 09, decision #12: choices that belong to THIS machine live in `workspaceState`, never in
+ * settings a team commits — the app port picked from the container list, the browser Launch
+ * used, and the last target that connected.
+ */
+const STATE_LAST_APP_PORT = 'ejsng.runtimeLog.lastAppPort';
+const STATE_BROWSER = 'ejsng.runtimeLog.browser';
+const STATE_LAST_TARGET = 'ejsng.runtimeLog.lastTarget';
+
+function rememberLastTarget(host: string, port: number): void {
+  void extensionContext?.workspaceState.update(STATE_LAST_TARGET, { host, port });
+}
 
 /** No bundled default per OS — Chrome's install location varies too much (edition, Homebrew cask, Flatpak, …). */
 function defaultChromeExecutablePath(): string {
@@ -56,6 +76,11 @@ function launchChromeDebug(context: vscode.ExtensionContext, port: number): void
       execPath,
       [`--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`, '--no-first-run', '--no-default-browser-check'],
       { detached: true, stdio: 'ignore' },
+    );
+    // Ticket 09: remembered per machine only once it really started — for the checklist and report.
+    child.once('spawn', () => void context.workspaceState.update(STATE_BROWSER, execPath));
+    child.once('error', (err) =>
+      void vscode.window.showErrorMessage(`EJS/NG: couldn't launch Chrome at "${execPath}" — ${err.message}. Set ejsng.runtimeLog.chromeExecutablePath.`),
     );
     child.unref();
     void vscode.window.showInformationMessage(
@@ -87,8 +112,14 @@ function updateRuntimeStatusBar(): void {
  * compatibility (ticket 02, item 5) — this is the only place that sees the TRUE lifecycle.
  */
 async function refreshRuntimeStatus(): Promise<void> {
-  const result = await client?.sendRequest<{ connections: RuntimeStatusConnection[] }>('ejsng/runtimeStatus');
+  const [result, checklist] = await Promise.all([
+    client?.sendRequest<{ connections: RuntimeStatusConnection[] }>('ejsng/runtimeStatus'),
+    client?.sendRequest<{ steps: RuntimeChecklistStep[] }>('ejsng/runtimeChecklist', {
+      browser: extensionContext?.workspaceState.get<string>(STATE_BROWSER) ?? null,
+    }),
+  ]);
   runtimeStatusSummary = summarizeRuntimeStatus(result?.connections ?? []);
+  runtimeChecklistSteps = checklist?.steps ?? runtimeChecklistSteps;
   updateRuntimeStatusBar();
 }
 
@@ -104,6 +135,7 @@ async function connectToRuntime(host: string, port: number): Promise<void> {
     if (!result) return;
     if (result.status === 'connected') {
       runtimeLogConnections.set(result.key, `${host}:${result.port}`);
+      rememberLastTarget(host, result.port);
       updateRuntimeStatusBar();
       void refreshRuntimeStatus();
     } else if (result.status === 'choose') {
@@ -119,6 +151,7 @@ async function connectToRuntime(host: string, port: number): Promise<void> {
       });
       if (chosen?.status === 'connected') {
         runtimeLogConnections.set(chosen.key, `${host}:${chosen.port} — ${picked.label}`);
+        rememberLastTarget(host, result.port);
         updateRuntimeStatusBar();
         void refreshRuntimeStatus();
       } else {
@@ -141,40 +174,36 @@ async function connectToRuntime(host: string, port: number): Promise<void> {
  * it matches regardless of the absolute prefix the runtime happens to report the file under
  * (container path, host path, …) — see `matchesSkipPattern` in packages/core.
  */
-async function acceptWrapperSuggestion(path: string): Promise<void> {
+async function skipFramesIn(path: string): Promise<void> {
   const cfg = vscode.workspace.getConfiguration('ejsng');
   const current = cfg.get<string[]>('runtimeLog.skipFrames') ?? [];
   const pattern = `**/${escapeGlobPath(path)}`;
   if (current.includes(pattern)) return;
   await cfg.update('runtimeLog.skipFrames', [...current, pattern], vscode.ConfigurationTarget.Workspace);
   void vscode.window.showInformationMessage(
-    `EJS/NG: added "${pattern}" to ejsng.runtimeLog.skipFrames. Reconnect (or reload) for it to take effect.`,
+    `EJS/NG: added "${pattern}" to ejsng.runtimeLog.skipFrames. Reload the window for it to take effect.`,
   );
 }
 
 /**
- * Ticket 07, item 4: the panel worked out that `remote` (a browser URL prefix) is `local` on this
- * machine, by matching the tail of a URL against the indexed files, and the user clicked Save.
- * Until this click the mapping lives only for the duration of the connection.
- *
- * Written per ticket 05's convention: a `local` inside the workspace is stored as
- * `${workspaceFolder}/…` in Workspace settings, so the mapping can be committed and works for
- * everyone who clones the repo. With no workspace folder open there is nowhere to commit it to,
- * so it goes to User settings as an absolute path.
+ * The panel worked out that `remote` is `local` on this machine — from a container mount (ticket
+ * 05) or by matching the tail of a browser URL (ticket 07) — and the user clicked Save. Until
+ * this click the mapping lives only for the duration of the connection (decision #12: an inferred
+ * mapping is never saved on its own). Where it is written: see `mappingForSettings`.
  */
-async function saveUrlMapping(remote: string, local: string): Promise<void> {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  const insideFolder = folder && (local === folder.uri.fsPath || local.startsWith(`${folder.uri.fsPath}/`));
-  const mapping = insideFolder
-    ? { remote, local: `\${workspaceFolder}${local.slice(folder.uri.fsPath.length)}` }
-    : { remote, local };
-  const target = insideFolder ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
-
+async function saveMapping(remote: string, local: string): Promise<void> {
+  const { mapping, target } = mappingForSettings(remote, local, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
   const cfg = vscode.workspace.getConfiguration('ejsng');
   const current = cfg.get<Array<{ remote: string; local: string }>>('runtimeLog.pathMappings') ?? [];
   if (current.some((m) => m.remote === mapping.remote && m.local === mapping.local)) return;
-  await cfg.update('runtimeLog.pathMappings', [...current, mapping], target);
-  void vscode.window.showInformationMessage(`EJS/NG: saved "${mapping.remote}" -> "${mapping.local}" to ejsng.runtimeLog.pathMappings.`);
+  await cfg.update(
+    'runtimeLog.pathMappings',
+    [...current, mapping],
+    target === 'workspace' ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
+  );
+  void vscode.window.showInformationMessage(
+    `EJS/NG: saved "${mapping.remote}" -> "${mapping.local}" to ejsng.runtimeLog.pathMappings. Reload the window for it to take effect.`,
+  );
 }
 
 /**
@@ -203,6 +232,8 @@ interface DockerCandidateSummary {
   host: string;
   port: number;
   label: string;
+  /** Absent from a server older than ticket 09. */
+  appPorts?: number[];
 }
 
 type DiscoverRuntimeTargetsResult =
@@ -257,6 +288,7 @@ async function discoverDockerRuntime(appPort: number | undefined, fallback: () =
     if (result.status === 'connected') {
       warnAboutUnreachableContainers(result.unreachable);
       runtimeLogConnections.set(result.key, `${result.host}:${result.port}`);
+      rememberLastTarget(result.host, result.port);
       updateRuntimeStatusBar();
       void refreshRuntimeStatus();
       return;
@@ -278,6 +310,7 @@ async function discoverDockerRuntime(appPort: number | undefined, fallback: () =
       });
       if (chosen?.status === 'connected') {
         runtimeLogConnections.set(chosen.key, `${result.host}:${chosen.port} — ${picked.label}`);
+        rememberLastTarget(result.host, result.port);
         updateRuntimeStatusBar();
         void refreshRuntimeStatus();
       } else {
@@ -289,11 +322,19 @@ async function discoverDockerRuntime(appPort: number | undefined, fallback: () =
       warnAboutUnreachableContainers(result.unreachable);
       // Checklist item 5: multiple Docker containers found — Quick Pick "<container name>: <app
       // port>" (e.g. "cityos-web: 5000"), per the spec's exact phrasing (user story #4).
+      // Ticket 09: the container whose app port was picked last time on this machine comes first.
+      const lastAppPort = extensionContext?.workspaceState.get<number>(STATE_LAST_APP_PORT);
       const picked = await vscode.window.showQuickPick(
-        result.candidates.map((c) => ({ label: c.label, description: `${c.host}:${c.port}`, candidate: c })),
+        orderByLastAppPort(result.candidates, lastAppPort).map((c) => ({
+          label: c.label,
+          description: `${c.host}:${c.port}${c.lastUsed ? ' — last used' : ''}`,
+          candidate: c,
+        })),
         { title: 'EJS/NG: multiple Docker containers found — choose one', placeHolder: 'Pick a container' },
       );
       if (!picked) return;
+      const appPort = picked.candidate.appPorts?.[0];
+      if (appPort !== undefined) void extensionContext?.workspaceState.update(STATE_LAST_APP_PORT, appPort);
       // The chosen candidate's host:port is directly usable with the existing, unchanged
       // ejsng/connectRuntime — no extra request needed for this step.
       await connectToRuntime(picked.candidate.host, picked.candidate.port);
@@ -308,6 +349,76 @@ async function discoverDockerRuntime(appPort: number | undefined, fallback: () =
   } catch (err) {
     void vscode.window.showErrorMessage(`EJS/NG: Docker discovery failed — ${String(err)}`);
     await fallback();
+  }
+}
+
+/**
+ * Ticket 09: the big Connect button runs the whole chain — environment → Docker → target →
+ * mapping → connect — refreshing the checklist after each link so the panel shows where it
+ * stopped. Mapping needs no call of its own: the server infers it from the connected
+ * container's mounts. Only ever runs on a click (user story #38: opening a workspace never
+ * connects anything).
+ */
+async function runConnectChain(): Promise<void> {
+  try {
+    await client?.sendRequest('ejsng/detectRuntimeEnvironment');
+  } catch (err) {
+    void vscode.window.showErrorMessage(`EJS/NG: could not detect the environment — ${String(err)}`);
+  }
+  await refreshRuntimeStatus();
+  await discoverDockerRuntime(undefined, async () => {
+    // No Docker target: the pre-Docker flow, starting from whatever connected last time here.
+    const last = extensionContext?.workspaceState.get<{ host: string; port: number }>(STATE_LAST_TARGET);
+    if (last) {
+      await connectToRuntime(last.host, last.port);
+      return;
+    }
+    void vscode.window.showWarningMessage(
+      'EJS/NG: no Docker container with an inspector found — see the checklist, or enter host:port under Advanced.',
+    );
+  });
+  await refreshRuntimeStatus();
+}
+
+/** Ticket 09: a fix button on a checklist step. Each one acts only because the user clicked it. */
+async function applyChecklistFix(fix: RuntimeChecklistFix): Promise<void> {
+  switch (fix.kind) {
+    case 'save-mapping':
+      return saveMapping(fix.remote, fix.local);
+    case 'skip-frame':
+      return skipFramesIn(fix.path);
+    case 'add-folder':
+      return addFolderToWorkspace(fix.path);
+    case 'copy-compose':
+      // Decision #3: shown and copied, never applied — the extension does not edit compose files.
+      await vscode.env.clipboard.writeText(fix.snippet);
+      void vscode.window.showInformationMessage('EJS/NG: compose snippet copied. Merge it into your compose file, then recreate the container.');
+      return;
+    case 'open-mirrored-guide':
+      // Decision #2: the extension never edits .wslconfig itself.
+      await vscode.env.openExternal(vscode.Uri.parse(fix.url));
+      return;
+    case 'open-settings':
+      await vscode.commands.executeCommand('workbench.action.openSettings', fix.query);
+      return;
+  }
+}
+
+/**
+ * Ticket 09: "Copy report" — markdown built by the server, home directory already replaced by
+ * `~`. It goes to the clipboard and nowhere else (user story #37).
+ */
+async function copyRuntimeReport(): Promise<void> {
+  try {
+    const result = await client?.sendRequest<{ markdown: string }>('ejsng/runtimeReport', {
+      browser: extensionContext?.workspaceState.get<string>(STATE_BROWSER) ?? null,
+      version: extensionContext?.extension.packageJSON?.version as string | undefined,
+    });
+    if (!result) return;
+    await vscode.env.clipboard.writeText(result.markdown);
+    void vscode.window.showInformationMessage('EJS/NG: report copied to the clipboard. Nothing was sent anywhere.');
+  } catch (err) {
+    void vscode.window.showErrorMessage(`EJS/NG: could not build the report — ${String(err)}`);
   }
 }
 
@@ -361,6 +472,7 @@ function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): v
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extensionContext = context;
   // The server is already bundled into the extension (see build.js). Do not
   // point outside the extension directory: such a path is not part of the .vsix package.
   const serverModule = context.asAbsolutePath(path.join('dist', 'server.js'));
@@ -392,43 +504,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ejsDelimiter: cfg.get('ejsDelimiter'),
       customDirectives: cfg.get('customDirectives'),
       diagnostics: { enabled: cfg.get('diagnostics.enabled') },
-      runtimeLog: { pathMappings: cfg.get('runtimeLog.pathMappings'), skipFrames: cfg.get('runtimeLog.skipFrames') },
+      runtimeLog: {
+        pathMappings: cfg.get('runtimeLog.pathMappings'),
+        skipFrames: cfg.get('runtimeLog.skipFrames'),
+        // Ticket 09, decision #15: only the client knows where it runs; the server never guesses.
+        // The UI's own OS is only certain locally, and for WSL, which exists only on Windows.
+        environment: {
+          remoteName: vscode.env.remoteName ?? null,
+          clientPlatform: vscode.env.remoteName === undefined ? process.platform : vscode.env.remoteName === 'wsl' ? 'win32' : null,
+        },
+      },
     },
   };
 
   client = new LanguageClient('ejsng', 'EJS + AngularJS Navigator', serverOptions, clientOptions);
 
-  runtimeLogView = new RuntimeLogViewProvider(() => runtimeLogConnections.size, defaultChromeDebugPort, () => runtimeStatusSummary, {
-    // Ticket 04: blank field = "Connect with nothing typed" (Docker discovery only); a bare
-    // number with no colon = an app port (Docker discovery first, then the pre-Docker app-port
-    // flow via connectToRuntime if Docker doesn't find it); host:port = unchanged, direct connect.
-    connect: (hostPort) => {
-      const trimmed = hostPort.trim();
-      if (!trimmed) {
-        void discoverDockerRuntime(undefined, () => {
-          void vscode.window.showErrorMessage('EJS/NG: no Docker container found — type a host:port or an app port to connect.');
-        });
-        return;
-      }
-      const parsed = parseHostPort(trimmed);
-      if (parsed) {
-        void connectToRuntime(parsed.host, parsed.port);
-        return;
-      }
-      const appPort = Number(trimmed);
-      if (Number.isFinite(appPort)) {
-        void discoverDockerRuntime(appPort, () => connectToRuntime('127.0.0.1', appPort));
-        return;
-      }
-      void vscode.window.showErrorMessage(`EJS/NG: "${hostPort}" isn't host:port or a port number — try something like 127.0.0.1:5000 or just 5000.`);
+  runtimeLogView = new RuntimeLogViewProvider(
+    () => runtimeLogConnections.size,
+    defaultChromeDebugPort,
+    () => runtimeStatusSummary,
+    () => runtimeChecklistSteps,
+    {
+      connectAuto: () => void runConnectChain(),
+      // Ticket 04: blank field = "Connect with nothing typed" (Docker discovery only); a bare
+      // number with no colon = an app port (Docker discovery first, then the pre-Docker app-port
+      // flow via connectToRuntime if Docker doesn't find it); host:port = unchanged, direct connect.
+      connect: (hostPort) => {
+        const trimmed = hostPort.trim();
+        if (!trimmed) {
+          void discoverDockerRuntime(undefined, () => {
+            void vscode.window.showErrorMessage('EJS/NG: no Docker container found — type a host:port or an app port to connect.');
+          });
+          return;
+        }
+        const parsed = parseHostPort(trimmed);
+        if (parsed) {
+          void connectToRuntime(parsed.host, parsed.port);
+          return;
+        }
+        const appPort = Number(trimmed);
+        if (Number.isFinite(appPort)) {
+          void discoverDockerRuntime(appPort, () => connectToRuntime('127.0.0.1', appPort));
+          return;
+        }
+        void vscode.window.showErrorMessage(`EJS/NG: "${hostPort}" isn't host:port or a port number — try something like 127.0.0.1:5000 or just 5000.`);
+      },
+      disconnect: () => void disconnectRuntime(),
+      launchChromeDebug: (port) => launchChromeDebug(context, port),
+      openSettings: () => void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog'),
+      applyFix: (fix) => void applyChecklistFix(fix),
+      copyReport: () => void copyRuntimeReport(),
     },
-    disconnect: () => void disconnectRuntime(),
-    launchChromeDebug: (port) => launchChromeDebug(context, port),
-    openSettings: () => void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog'),
-    acceptWrapperSuggestion: (path) => void acceptWrapperSuggestion(path),
-    addFolderToWorkspace: (path) => addFolderToWorkspace(path),
-    saveUrlMapping: (remote, local) => void saveUrlMapping(remote, local),
-  });
+  );
 
   runtimeLogDecorationType = vscode.window.createTextEditorDecorationType({
     after: { margin: '0 0 0 1.5em', fontWeight: 'bold' },
@@ -488,6 +615,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   await client.start();
+  // Shows the checklist's "not checked yet" state. A plain request to the server — nothing is
+  // probed and nothing connects until the user presses Connect (user story #38).
+  void refreshRuntimeStatus();
 
   client.onNotification('ejsng/runtimeLog', (params: RuntimeLogNotification) => {
     const entries = runtimeLogState.record(params.uri, {

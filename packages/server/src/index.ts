@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, statSync } from 'node:fs';
+import { homedir, platform as osPlatform, release as osRelease } from 'node:os';
 import { dirname } from 'node:path';
 import {
   createConnection,
@@ -46,7 +47,13 @@ import {
   isLikelyMinified,
   stripAnsi,
   suggestWrapperFile,
+  buildRuntimeChecklist,
+  buildRuntimeReport,
   type CallFrame,
+  type ChecklistConnection,
+  type ChecklistContainer,
+  type RuntimeChecklistInput,
+  type RuntimeEnvironment,
   type FrameDiagnosticEntry,
   type RuntimeLogFrameDiagnostic,
 } from '@ejsng/core';
@@ -63,6 +70,7 @@ import {
   type ScriptMetadata,
 } from './runtime-log';
 import { listDockerRuntimeCandidates } from './docker';
+import { detectRuntimeEnvironment, type ClientEnvironmentInfo } from './environment';
 import type WebSocket from 'ws';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -139,6 +147,25 @@ interface RuntimeLogConnectionInfo {
   urlMappings: PathMapping[];
   /** Ticket 07 — every URL already matched against the index, so the scan runs once per URL rather than once per log. */
   urlResolutions: Map<string, UrlResolution>;
+  /** Ticket 09 — who this connection is, for the panel's checklist and the copied report. */
+  meta: RuntimeLogConnectionMeta;
+  /**
+   * Ticket 09 — the mount-inferred mappings at least one DRAWN log actually went through. Only
+   * these are offered for saving: a container usually has config/log/single-file mounts too, and
+   * offering every one of them would bury the one that matters.
+   */
+  usedMountMappings: Map<string, PathMapping>;
+}
+
+/** Ticket 09 — identity of a connection's target, as shown in the checklist. */
+interface RuntimeLogConnectionMeta {
+  /** `host:port` the debug endpoint was reached at. */
+  endpoint: string;
+  /** CDP target type: `node`, or `page` and the like for a browser. */
+  targetType: string;
+  title: string;
+  /** The Docker container the endpoint was discovered through, if any. */
+  containerName: string | null;
 }
 
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
@@ -154,7 +181,18 @@ let runtimeLogPathMappings: PathMapping[] = [];
  * `'choose-container'`, `ejsng/connectRuntimeTarget` after `'choose'`), neither of which carries
  * any container identity of its own.
  */
-const dockerMountsByEndpoint = new Map<string, DockerMount[]>();
+const dockerContainersByEndpoint = new Map<string, { containerName: string; mounts: DockerMount[] }>();
+/**
+ * Ticket 09 — what the client told `initialize` about where it runs (spec decision #15: the
+ * server never guesses this itself), what the last Connect found about the environment, and every
+ * container the last Docker discovery saw. `null` until Connect has run, so the checklist can say
+ * "not checked yet" rather than report a probe that never happened.
+ */
+let runtimeLogClientEnvironment: ClientEnvironmentInfo = { remoteName: null, clientPlatform: null };
+let lastRuntimeEnvironment: RuntimeEnvironment | null = null;
+let lastDockerContainers: ChecklistContainer[] | null = null;
+/** `ejsng.runtimeLog.pathMappings` exactly as declared — `${workspaceFolder}` unexpanded — as the checklist lists them. */
+let runtimeLogDeclaredPathMappings: PathMapping[] = [];
 /** `ejsng.runtimeLog.skipFrames` — user-added patterns, ON TOP OF `DEFAULT_SKIP_FRAME_PATTERNS` (ticket 03). */
 let runtimeLogSkipFramePatterns: string[] = [];
 /**
@@ -170,7 +208,11 @@ connection.onInitialize((params): InitializeResult => {
 
   const settings = (params.initializationOptions ?? {}) as Partial<Config> & {
     diagnostics?: { enabled?: boolean };
-    runtimeLog?: { pathMappings?: PathMapping[]; skipFrames?: string[] };
+    runtimeLog?: {
+      pathMappings?: PathMapping[];
+      skipFrames?: string[];
+      environment?: { remoteName?: string | null; clientPlatform?: string | null };
+    };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
   // `${workspaceFolder}` is expanded once, here, where the root is known — a mapping's `local` can
@@ -178,6 +220,11 @@ connection.onInitialize((params): InitializeResult => {
   // (ticket 05, item 3). An absolute `local` contains no variable and comes back unchanged.
   runtimeLogPathMappings = resolvePathMappings(settings.runtimeLog?.pathMappings ?? [], root);
   runtimeLogSkipFramePatterns = settings.runtimeLog?.skipFrames ?? [];
+  runtimeLogDeclaredPathMappings = settings.runtimeLog?.pathMappings ?? [];
+  runtimeLogClientEnvironment = {
+    remoteName: settings.runtimeLog?.environment?.remoteName ?? null,
+    clientPlatform: settings.runtimeLog?.environment?.clientPlatform ?? null,
+  };
   // LSP 3.17: RenameOptions is only sent when the client declares prepareSupport.
   const prepareSupport = params.capabilities.textDocument?.rename?.prepareSupport === true;
   const watched = params.capabilities.workspace?.didChangeWatchedFiles;
@@ -519,7 +566,17 @@ function runtimeLogConnectionKey(host: string, port: number, targetId: string): 
 
 /** Mount-inferred mappings for whatever container publishes its inspector at `host:port`, or `[]` for a non-Docker target (ticket 05). */
 function inferredMappingsFor(host: string, port: number): PathMapping[] {
-  return mappingsFromMounts(dockerMountsByEndpoint.get(`${host}:${port}`) ?? []);
+  return mappingsFromMounts(dockerContainersByEndpoint.get(`${host}:${port}`)?.mounts ?? []);
+}
+
+/** Ticket 09 — the checklist's identity for a target reached at `host:port`. */
+function connectionMeta(host: string, port: number, target: DiscoveredTarget): RuntimeLogConnectionMeta {
+  return {
+    endpoint: `${host}:${port}`,
+    targetType: target.type,
+    title: target.title,
+    containerName: dockerContainersByEndpoint.get(`${host}:${port}`)?.containerName ?? null,
+  };
 }
 
 /** Count one dropped log under `reason` — see RuntimeLogConnectionInfo.droppedByReason. */
@@ -891,6 +948,10 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
   record(label);
   const offset = offsetForLocation(source, frame.lineNumber, frame.columnNumber);
   info.drawn++;
+  // Ticket 09: remember which container mount carried a drawn log — the same first-match-wins
+  // lookup `mapContainerPath` did — so the checklist offers exactly that mapping for saving.
+  const via = mappings.find((m) => chosen.rawPath === m.remote || chosen.rawPath.startsWith(`${m.remote}/`));
+  if (via && info.inferredPathMappings.includes(via)) info.usedMountMappings.set(`${via.remote}\u0000${via.local}`, via);
   pushBounded(info.recentChosenPaths, label, MAX_RECENT_CHOSEN_PATHS);
   if (!inWorkspace && info.outsideWorkspaceDirs.size < MAX_OUTSIDE_WORKSPACE_DIRS) {
     info.outsideWorkspaceDirs.add(dirname(hostPath));
@@ -908,7 +969,12 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
  * to a line as an `ejsng/runtimeLog` notification — shared by every target this server connects
  * to, server-side (Node) or browser-side (a Chrome tab), regardless of how many are live at once.
  */
-function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, inferredPathMappings: PathMapping[]): void {
+function startRuntimeLogConnection(
+  key: string,
+  webSocketDebuggerUrl: string,
+  inferredPathMappings: PathMapping[],
+  meta: RuntimeLogConnectionMeta,
+): void {
   // `terminate()`, not `close()`: a reconnect to the SAME key supersedes it, doesn't shut it
   // down gracefully — don't wait on a close handshake before starting the replacement.
   runtimeLogConnections.get(key)?.socket.terminate();
@@ -930,6 +996,8 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, in
     outsideWorkspaceDirs: new Set(),
     urlMappings: [],
     urlResolutions: new Map(),
+    meta,
+    usedMountMappings: new Map(),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -1048,7 +1116,7 @@ connection.onRequest('ejsng/connectRuntime', async (params: { host: string; port
   const [target] = targets;
   if (!target) return { status: 'not-found' as const };
   const key = runtimeLogConnectionKey(params.host, port, target.id);
-  startRuntimeLogConnection(key, target.webSocketDebuggerUrl, inferredMappingsFor(params.host, port));
+  startRuntimeLogConnection(key, target.webSocketDebuggerUrl, inferredMappingsFor(params.host, port), connectionMeta(params.host, port, target));
   return { status: 'connected' as const, key, port };
 });
 
@@ -1063,7 +1131,12 @@ connection.onRequest('ejsng/connectRuntimeTarget', async (params: { host: string
   const target = targets.find((t) => t.id === params.targetId);
   if (!target) return { status: 'error' as const, message: `target ${params.targetId} not found` };
   const key = runtimeLogConnectionKey(params.host, params.port, target.id);
-  startRuntimeLogConnection(key, target.webSocketDebuggerUrl, inferredMappingsFor(params.host, params.port));
+  startRuntimeLogConnection(
+    key,
+    target.webSocketDebuggerUrl,
+    inferredMappingsFor(params.host, params.port),
+    connectionMeta(params.host, params.port, target),
+  );
   return { status: 'connected' as const, key };
 });
 
@@ -1123,6 +1196,8 @@ interface DockerCandidateSummary {
   host: string;
   port: number;
   label: string;
+  /** Ticket 09 — so the client can remember the app port the user picked. */
+  appPorts: number[];
 }
 
 type DiscoverRuntimeTargetsResult =
@@ -1171,10 +1246,20 @@ connection.onRequest(
     // at, for whichever connect path runs next. Cleared first so a container that was rebuilt
     // with different mounts — or removed entirely — can never leave a stale entry behind: these
     // mappings are recomputed on every Connect and never written to settings (checklist item 4).
-    dockerMountsByEndpoint.clear();
+    dockerContainersByEndpoint.clear();
     for (const c of connectable) {
-      dockerMountsByEndpoint.set(`${DOCKER_DISCOVERY_HOST}:${c.hostInspectorPort as number}`, c.mounts);
+      dockerContainersByEndpoint.set(`${DOCKER_DISCOVERY_HOST}:${c.hostInspectorPort as number}`, {
+        containerName: c.containerName,
+        mounts: c.mounts,
+      });
     }
+    // Ticket 09: every container seen, filtered or not — the checklist reports the whole picture.
+    lastDockerContainers = containers.map((c) => ({
+      name: c.containerName,
+      appPorts: c.appPorts,
+      hostInspectorPort: c.hostInspectorPort,
+      inspectorContainerPort: c.inspectorContainerPort,
+    }));
 
     if (connectable.length === 0) {
       if (unreachableNames.length > 0) {
@@ -1190,6 +1275,7 @@ connection.onRequest(
           host: DOCKER_DISCOVERY_HOST,
           port: c.hostInspectorPort as number, // non-null: filtered into `connectable` on exactly that
           label: formatDockerCandidateLabel(c),
+          appPorts: c.appPorts,
         })),
         unreachable: unreachableNames,
       };
@@ -1230,10 +1316,63 @@ connection.onRequest(
       };
     }
     const key = runtimeLogConnectionKey(DOCKER_DISCOVERY_HOST, port, target.id);
-    startRuntimeLogConnection(key, target.webSocketDebuggerUrl, mappingsFromMounts(only.mounts));
+    startRuntimeLogConnection(key, target.webSocketDebuggerUrl, mappingsFromMounts(only.mounts), connectionMeta(DOCKER_DISCOVERY_HOST, port, target));
     return { status: 'connected', key, host: DOCKER_DISCOVERY_HOST, port, unreachable: unreachableNames };
   },
 );
+
+// ---------------------------------------------------------------------------------------------
+// Ticket 09 (.scratch/runtime-remote-env/issues/09-panel-danh-sach-kiem-tra.md): the panel's
+// step-by-step checklist and the "Copy report" markdown. Additive requests only, same convention
+// as tickets 02 and 04. What the steps SAY is decided in packages/core; this only gathers the
+// snapshot, so another client renders the very same checklist.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Run the first link of the Connect chain: environment and Docker CLI. Only ever on request —
+ * the client sends this when the user presses Connect, never on activation (user story #38).
+ */
+connection.onRequest('ejsng/detectRuntimeEnvironment', async (): Promise<RuntimeEnvironment> => {
+  lastRuntimeEnvironment = await detectRuntimeEnvironment(runtimeLogClientEnvironment);
+  return lastRuntimeEnvironment;
+});
+
+function checklistInput(browser: string | null): RuntimeChecklistInput {
+  const connections: ChecklistConnection[] = [...runtimeLogConnections.entries()].map(([key, info]) => ({
+    key,
+    ...info.meta,
+    state: info.state,
+    reason: info.reason,
+    received: info.received,
+    drawn: info.drawn,
+    droppedByReason: info.droppedByReason,
+    usedMountMappings: [...info.usedMountMappings.values()],
+    urlMappings: info.urlMappings,
+    outsideWorkspaceDirs: [...info.outsideWorkspaceDirs],
+    wrapperSuggestion: suggestWrapperFile(info.recentChosenPaths),
+  }));
+  return {
+    environment: lastRuntimeEnvironment,
+    containers: lastDockerContainers,
+    connections,
+    userMappings: runtimeLogDeclaredPathMappings,
+    workspaceFolder: workspace?.config.root ?? null,
+    browser,
+  };
+}
+
+connection.onRequest('ejsng/runtimeChecklist', (params: { browser?: string | null } | undefined) => ({
+  steps: buildRuntimeChecklist(checklistInput(params?.browser ?? null)),
+}));
+
+/** Markdown only — building it sends nothing anywhere; the client puts it on the clipboard. */
+connection.onRequest('ejsng/runtimeReport', (params: { browser?: string | null; version?: string } | undefined) => ({
+  markdown: buildRuntimeReport(checklistInput(params?.browser ?? null), {
+    homeDirectory: homedir(),
+    os: `${osPlatform()} ${osRelease()}`,
+    version: params?.version,
+  }),
+}));
 
 documents.listen(connection);
 connection.listen();

@@ -44,6 +44,10 @@ if (cmd === 'ps' && rest.includes('-q')) {
   process.stdout.write(ids.join('\\n') + '\\n');
   process.exit(0);
 }
+if (cmd === 'version') {
+  process.stdout.write('27.1.1-fake\\n');
+  process.exit(0);
+}
 if (cmd === 'inspect') {
   const ids = rest.filter((a) => !a.startsWith('-'));
   const matched = containers.filter((c) => ids.some((id) => c.Id === id || c.Id.startsWith(id)));

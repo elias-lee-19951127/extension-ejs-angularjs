@@ -57,6 +57,8 @@ export interface DockerRuntimeCandidate {
    * still a candidate worth reporting by name, just not one this extension can connect to.
    */
   hostInspectorPort: number | null;
+  /** The port Node's inspector listens on INSIDE the container — what a compose fix has to publish when `hostInspectorPort` is `null` (ticket 09). */
+  inspectorContainerPort: number;
   /** Every published host port OTHER than the inspector's — what a user recognizes as "the app port" (`cityos-web: 5000`), sorted ascending and de-duplicated. */
   appPorts: number[];
 }
@@ -175,7 +177,14 @@ export function resolveDockerCandidates(containers: DockerContainerInfo[]): Dock
     const appPorts = [...new Set(c.ports.filter((p) => p.containerPort !== c.inspectorContainerPort).map((p) => p.hostPort))].sort(
       (a, b) => a - b,
     );
-    candidates.push({ containerId: c.id, containerName: c.name, mounts: c.mounts, hostInspectorPort, appPorts });
+    candidates.push({
+      containerId: c.id,
+      containerName: c.name,
+      mounts: c.mounts,
+      hostInspectorPort,
+      inspectorContainerPort: c.inspectorContainerPort,
+      appPorts,
+    });
   }
   return candidates;
 }

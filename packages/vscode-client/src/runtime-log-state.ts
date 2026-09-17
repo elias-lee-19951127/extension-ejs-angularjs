@@ -222,3 +222,83 @@ export class RuntimeLogState {
     this.byUri.delete(uri);
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Ticket 09 (.scratch/runtime-remote-env/issues/09-panel-danh-sach-kiem-tra.md): the checklist
+// panel. The steps themselves are built by the server (packages/core/src/runtime-log-checklist.ts)
+// and only mirrored here, so the client stays a thin renderer.
+// ---------------------------------------------------------------------------------------------
+
+/** A fix the panel can apply in place — mirrors `ChecklistFix` in packages/core. */
+export type RuntimeChecklistFix =
+  | { kind: 'save-mapping'; label: string; remote: string; local: string }
+  | { kind: 'skip-frame'; label: string; path: string }
+  | { kind: 'add-folder'; label: string; path: string }
+  | { kind: 'copy-compose'; label: string; snippet: string }
+  | { kind: 'open-mirrored-guide'; label: string; url: string }
+  | { kind: 'open-settings'; label: string; query: string };
+
+/** One checklist step, as returned by `ejsng/runtimeChecklist` — mirrors `ChecklistStep` in packages/core. */
+export interface RuntimeChecklistStep {
+  id: string;
+  title: string;
+  status: 'ok' | 'warn' | 'fail' | 'pending' | 'skipped';
+  detail: string;
+  notes: string[];
+  fixes: RuntimeChecklistFix[];
+  dropGroups?: Array<{ reason: string; label: string; count: number }>;
+  counts?: { received: number; drawn: number; dropped: number };
+}
+
+const FIX_STRING_FIELDS: Record<RuntimeChecklistFix['kind'], string[]> = {
+  'save-mapping': ['remote', 'local'],
+  'skip-frame': ['path'],
+  'add-folder': ['path'],
+  'copy-compose': ['snippet'],
+  'open-mirrored-guide': ['url'],
+  'open-settings': ['query'],
+};
+
+/**
+ * A fix posted back from the webview, checked before anything acts on it: a known kind with
+ * every field that kind needs. The guide URL is additionally pinned to https, since it is opened
+ * in the user's browser.
+ */
+export function isRuntimeChecklistFix(value: unknown): value is RuntimeChecklistFix {
+  if (typeof value !== 'object' || value === null) return false;
+  const kind = (value as { kind?: unknown }).kind;
+  if (typeof kind !== 'string' || !Object.prototype.hasOwnProperty.call(FIX_STRING_FIELDS, kind)) return false;
+  const fields = FIX_STRING_FIELDS[kind as RuntimeChecklistFix['kind']];
+  if (!fields.every((f) => typeof (value as Record<string, unknown>)[f] === 'string' && (value as Record<string, string>)[f] !== '')) return false;
+  if (kind === 'open-mirrored-guide') return (value as { url: string }).url.startsWith('https://');
+  return true;
+}
+
+/**
+ * Where a mapping the user clicked Save on is written (spec decisions #12, user story #40): a
+ * `local` inside the workspace folder becomes `${workspaceFolder}/…` in Workspace settings, so the
+ * mapping can be committed and works for everyone who clones the repo; anything else stays an
+ * absolute path in User settings, since it names a directory on this machine only.
+ */
+export function mappingForSettings(
+  remote: string,
+  local: string,
+  workspaceFolder: string | undefined,
+): { mapping: RuntimePathMapping; target: 'workspace' | 'user' } {
+  const inside = workspaceFolder !== undefined && (local === workspaceFolder || local.startsWith(`${workspaceFolder}/`));
+  if (!inside) return { mapping: { remote, local }, target: 'user' };
+  return { mapping: { remote, local: `\${workspaceFolder}${local.slice(workspaceFolder.length)}` }, target: 'workspace' };
+}
+
+/**
+ * Order the Docker containers offered in the Quick Pick so the one whose app port the user picked
+ * last time comes first (user story #41: remembered per machine in `workspaceState`, never in the
+ * repo). Order is otherwise preserved.
+ */
+export function orderByLastAppPort<T extends { appPorts?: number[] }>(
+  candidates: T[],
+  lastAppPort: number | undefined,
+): Array<T & { lastUsed: boolean }> {
+  const marked = candidates.map((c) => ({ ...c, lastUsed: lastAppPort !== undefined && (c.appPorts ?? []).includes(lastAppPort) }));
+  return [...marked.filter((c) => c.lastUsed), ...marked.filter((c) => !c.lastUsed)];
+}

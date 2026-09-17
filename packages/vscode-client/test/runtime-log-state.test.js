@@ -332,3 +332,66 @@ test('formatSkipReason: an ambiguous URL match names the files it was torn betwe
   assert.ok(text.includes('public/a/index.js'));
   assert.ok(text.includes('public/b/index.js'));
 });
+
+/**
+ * Ticket 09 (.scratch/runtime-remote-env/issues/09-panel-danh-sach-kiem-tra.md): the pure pieces
+ * of the checklist panel — validating a fix posted back from the webview, where a saved mapping is
+ * written, and which container the Quick Pick puts first.
+ */
+const { isRuntimeChecklistFix, mappingForSettings, orderByLastAppPort } = require('../out/runtime-log-state');
+
+test('isRuntimeChecklistFix: accepts every fix kind with its required fields', () => {
+  for (const fix of [
+    { kind: 'save-mapping', label: 'x', remote: '/app', local: '/ws' },
+    { kind: 'skip-frame', label: 'x', path: 'lib/log.js' },
+    { kind: 'add-folder', label: 'x', path: '/home/me/aocs' },
+    { kind: 'copy-compose', label: 'x', snippet: 'services:' },
+    { kind: 'open-mirrored-guide', label: 'x', url: 'https://learn.microsoft.com/windows/wsl/networking' },
+    { kind: 'open-settings', label: 'x', query: 'ejsng.runtimeLog.pathMappings' },
+  ]) {
+    assert.strictEqual(isRuntimeChecklistFix(fix), true, fix.kind);
+  }
+});
+
+test('isRuntimeChecklistFix: rejects unknown kinds, missing fields, and a non-https guide URL', () => {
+  assert.strictEqual(isRuntimeChecklistFix(null), false);
+  assert.strictEqual(isRuntimeChecklistFix({ kind: 'run-shell', label: 'x', command: 'rm -rf /' }), false);
+  assert.strictEqual(isRuntimeChecklistFix({ kind: 'save-mapping', label: 'x', remote: '/app' }), false);
+  assert.strictEqual(isRuntimeChecklistFix({ kind: 'add-folder', label: 'x', path: '' }), false);
+  assert.strictEqual(isRuntimeChecklistFix({ kind: 'open-mirrored-guide', label: 'x', url: 'file:///etc/passwd' }), false);
+  assert.strictEqual(isRuntimeChecklistFix({ kind: 'toString', label: 'x' }), false);
+});
+
+test('mappingForSettings: a local path inside the workspace is saved as ${workspaceFolder}/… in Workspace settings', () => {
+  assert.deepStrictEqual(mappingForSettings('/home/cityos/aocs', '/home/me/ws/aocs', '/home/me/ws'), {
+    mapping: { remote: '/home/cityos/aocs', local: '${workspaceFolder}/aocs' },
+    target: 'workspace',
+  });
+  assert.deepStrictEqual(mappingForSettings('/app', '/home/me/ws', '/home/me/ws').mapping.local, '${workspaceFolder}');
+});
+
+test('mappingForSettings: a local path outside the workspace (or no workspace) stays absolute, in User settings', () => {
+  assert.deepStrictEqual(mappingForSettings('/app', '/home/me/other', '/home/me/ws'), {
+    mapping: { remote: '/app', local: '/home/me/other' },
+    target: 'user',
+  });
+  assert.strictEqual(mappingForSettings('/app', '/home/me/wsx/a', '/home/me/ws').target, 'user');
+  assert.strictEqual(mappingForSettings('/app', '/home/me/ws/a', undefined).target, 'user');
+});
+
+test('orderByLastAppPort: the container publishing the last-picked app port comes first, marked; others keep their order', () => {
+  const candidates = [
+    { label: 'cityos-app: 5001', appPorts: [5001] },
+    { label: 'cityos-api: 5002', appPorts: [5002] },
+    { label: 'cityos-web: 5000', appPorts: [5000] },
+  ];
+  assert.deepStrictEqual(
+    orderByLastAppPort(candidates, 5000).map((c) => [c.label, c.lastUsed]),
+    [
+      ['cityos-web: 5000', true],
+      ['cityos-app: 5001', false],
+      ['cityos-api: 5002', false],
+    ],
+  );
+  assert.deepStrictEqual(orderByLastAppPort(candidates, undefined).map((c) => c.label), candidates.map((c) => c.label));
+});
