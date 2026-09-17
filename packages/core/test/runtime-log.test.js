@@ -22,6 +22,10 @@ const {
   suggestWrapperFile,
   sourceMatchesScript,
   candidateHostPaths,
+  isHttpUrl,
+  normalizeRuntimePath,
+  matchUrlPathSuffix,
+  urlSuffixMapping,
 } = require('../dist');
 
 test('offsetForLocation: mid-file location maps to the correct character offset', () => {
@@ -559,4 +563,110 @@ test('candidateHostPaths: two mappings resolving to the same host path yield it 
     { remote: '/app', local: '/host' },
   ];
   assert.deepStrictEqual(candidateHostPaths('/app/x.js', mappings), ['/host/x.js']);
+});
+
+// ============================================================================================
+// Ticket 07 — suffix-matching a browser URL to a workspace file.
+// ============================================================================================
+
+test('isHttpUrl: only http(s) URLs qualify — a Node file path never takes this route', () => {
+  assert.strictEqual(isHttpUrl('http://localhost:5000/js/app.js'), true);
+  assert.strictEqual(isHttpUrl('https://example.test/js/app.js'), true);
+  assert.strictEqual(isHttpUrl('/home/cityos/aocs-cityos/aocs/app.js'), false);
+  assert.strictEqual(isHttpUrl('file:///app/app.js'), false);
+  assert.strictEqual(isHttpUrl('C:\\app\\app.js'), false);
+});
+
+test('normalizeRuntimePath: a URL loses its query and fragment; a file path keeps every character', () => {
+  assert.strictEqual(normalizeRuntimePath('http://localhost:5000/js/app.js?v=3'), 'http://localhost:5000/js/app.js');
+  assert.strictEqual(normalizeRuntimePath('http://localhost:5000/js/app.js#L4'), 'http://localhost:5000/js/app.js');
+  // `?` and `#` are legal in a filesystem path — stripping them there would corrupt it.
+  assert.strictEqual(normalizeRuntimePath('/home/me/weird#name?.js'), '/home/me/weird#name?.js');
+});
+
+test('matchUrlPathSuffix: picks the file sharing the longest run of trailing segments', () => {
+  const indexed = ['public/javascripts/index.js', 'src/index.js', 'vendor/other.js'];
+  assert.deepStrictEqual(matchUrlPathSuffix('/javascripts/index.js', indexed), {
+    kind: 'unique',
+    candidates: ['public/javascripts/index.js'],
+    segments: 2,
+  });
+});
+
+test('matchUrlPathSuffix: a tie is ambiguous, never resolved by a tiebreak', () => {
+  // Both share exactly `index.js` and nothing more — answering either one would be a confident
+  // wrong answer half the time, which is the failure this ticket exists to avoid.
+  const indexed = ['public/a/index.js', 'public/b/index.js'];
+  assert.deepStrictEqual(matchUrlPathSuffix('/index.js', indexed), {
+    kind: 'ambiguous',
+    candidates: ['public/a/index.js', 'public/b/index.js'],
+    segments: 1,
+  });
+});
+
+test('matchUrlPathSuffix: a longer match beats a tie at a shorter length', () => {
+  const indexed = ['public/a/index.js', 'public/b/index.js', 'public/js/a/index.js'];
+  assert.deepStrictEqual(matchUrlPathSuffix('/js/a/index.js', indexed), {
+    kind: 'unique',
+    candidates: ['public/js/a/index.js'],
+    segments: 3,
+  });
+});
+
+test('matchUrlPathSuffix: nothing sharing even the filename is no match at all', () => {
+  assert.deepStrictEqual(matchUrlPathSuffix('/javascripts/index.js', ['src/app.js']), {
+    kind: 'none',
+    candidates: [],
+    segments: 0,
+  });
+});
+
+test('matchUrlPathSuffix: an empty index matches nothing instead of throwing', () => {
+  assert.strictEqual(matchUrlPathSuffix('/js/app.js', []).kind, 'none');
+});
+
+test('urlSuffixMapping: strips the matched tail from both sides to get a directory mapping', () => {
+  assert.deepStrictEqual(urlSuffixMapping('http://localhost:5000/javascripts/index.js', 'public/javascripts/index.js', 2, '/ws'), {
+    remote: 'http://localhost:5000',
+    local: '/ws/public',
+  });
+});
+
+test('urlSuffixMapping: a URL served from a sub-path keeps that sub-path on the remote side', () => {
+  assert.deepStrictEqual(urlSuffixMapping('http://localhost:5000/static/js/app.js', 'public/js/app.js', 2, '/ws'), {
+    remote: 'http://localhost:5000/static',
+    local: '/ws/public',
+  });
+});
+
+test('urlSuffixMapping: when the whole path matched, the mapping is origin -> workspace root', () => {
+  assert.deepStrictEqual(urlSuffixMapping('http://localhost:5000/js/app.js', 'js/app.js', 2, '/ws'), {
+    remote: 'http://localhost:5000',
+    local: '/ws',
+  });
+});
+
+test('urlSuffixMapping: the derived mapping resolves the original URL back to the original file', () => {
+  // The round-trip is the point: the mapping is what every OTHER script from that directory goes
+  // through, with no further index scanning.
+  const url = 'http://localhost:5000/javascripts/index.js';
+  const mapping = urlSuffixMapping(url, 'public/javascripts/index.js', 2, '/ws');
+  assert.deepStrictEqual(mapContainerPath(url, [mapping]), { path: '/ws/public/javascripts/index.js', matched: true });
+  // And a sibling in the same directory now resolves with no matching at all.
+  assert.deepStrictEqual(mapContainerPath('http://localhost:5000/javascripts/other.js', [mapping]), {
+    path: '/ws/public/javascripts/other.js',
+    matched: true,
+  });
+});
+
+test('urlSuffixMapping: a query string on the URL does not leak into the mapping', () => {
+  assert.deepStrictEqual(urlSuffixMapping('http://localhost:5000/js/app.js?v=3', 'public/js/app.js', 2, '/ws'), {
+    remote: 'http://localhost:5000',
+    local: '/ws/public',
+  });
+});
+
+test('urlSuffixMapping: a non-URL, or more segments than either side has, yields null instead of throwing', () => {
+  assert.strictEqual(urlSuffixMapping('/not/a/url.js', 'a/url.js', 2, '/ws'), null);
+  assert.strictEqual(urlSuffixMapping('http://localhost:5000/app.js', 'app.js', 5, '/ws'), null);
 });

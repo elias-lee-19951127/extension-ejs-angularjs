@@ -25,10 +25,13 @@ export interface RuntimeFrameDiagnosticEntry {
     | 'stale-file'
     | 'shadowed-file'
     | 'content-mismatch'
+    | 'ambiguous-url-match'
     | null;
   matchedPattern?: string;
   /** Only set for `'shadowed-file'` — the file the runtime IS running (ticket 06). */
   runtimePath?: string;
+  /** Only set for `'ambiguous-url-match'` — the files that tied for the longest matching tail (ticket 07). */
+  candidates?: string[];
 }
 
 /** One recent log's full frame-selection story — mirrors `RuntimeLogFrameDiagnostic` in packages/core. */
@@ -59,6 +62,14 @@ export interface RuntimeStatusConnection {
   wrapperSuggestion: WrapperSuggestion | null;
   /** Ticket 08, item 4 — directories outside the workspace that logs were drawn in. Suggestions only. */
   outsideWorkspaceDirs?: string[];
+  /** Ticket 07, item 4 — URL prefix -> local directory, discovered by suffix matching. Session-only until the user saves one. */
+  urlMappings?: RuntimePathMapping[];
+}
+
+/** A container/URL path prefix and the local directory it stands for — mirrors `PathMapping` in packages/core. */
+export interface RuntimePathMapping {
+  remote: string;
+  local: string;
 }
 
 /** Totals across every live connection — what the status bar and panel actually show. */
@@ -75,6 +86,8 @@ export interface RuntimeStatusSummary {
   wrapperSuggestion: WrapperSuggestion | null;
   /** Ticket 08, item 4 — every connection's outside-the-workspace directories, de-duplicated. */
   outsideWorkspaceDirs: string[];
+  /** Ticket 07, item 4 — every connection's discovered URL mappings, de-duplicated by remote+local. */
+  urlMappings: RuntimePathMapping[];
 }
 
 /** Keep the panel's "recent logs" list to a reasonable size even with several live connections. */
@@ -96,8 +109,10 @@ export function summarizeRuntimeStatus(connections: RuntimeStatusConnection[]): 
     recentLogs: [],
     wrapperSuggestion: null,
     outsideWorkspaceDirs: [],
+    urlMappings: [],
   };
   const outsideDirs = new Set<string>();
+  const urlMappings = new Map<string, RuntimePathMapping>();
   for (const c of connections) {
     summary.received += c.received;
     summary.drawn += c.drawn;
@@ -108,8 +123,10 @@ export function summarizeRuntimeStatus(connections: RuntimeStatusConnection[]): 
       summary.wrapperSuggestion = c.wrapperSuggestion;
     }
     for (const dir of c.outsideWorkspaceDirs ?? []) outsideDirs.add(dir);
+    for (const m of c.urlMappings ?? []) urlMappings.set(`${m.remote}\u0000${m.local}`, m);
   }
   summary.outsideWorkspaceDirs = [...outsideDirs];
+  summary.urlMappings = [...urlMappings.values()];
   // Sort by TRUE recency (`at`) before capping — with several live connections, concatenation
   // order is connection-iteration order, not chronological, so slicing from the end without
   // sorting first could drop a genuinely more-recent entry in favor of an older one from a
@@ -142,6 +159,8 @@ export function formatSkipReason(entry: RuntimeFrameDiagnosticEntry): string {
       return `not drawn — the runtime is running ${entry.runtimePath ?? 'another copy of this file'}`;
     case 'content-mismatch':
       return 'not drawn — this file is not what the runtime is running; check the path mapping, or restart the app';
+    case 'ambiguous-url-match':
+      return `not drawn — this URL could be any of: ${(entry.candidates ?? []).join(', ')}`;
   }
 }
 

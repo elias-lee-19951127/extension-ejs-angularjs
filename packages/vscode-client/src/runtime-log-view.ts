@@ -20,6 +20,11 @@ export interface RuntimeLogViewCallbacks {
    * never adds a folder on its own.
    */
   addFolderToWorkspace(path: string): void;
+  /**
+   * Ticket 07, item 4 — user clicked "Save" on a URL mapping discovered by suffix matching.
+   * Until then the mapping lives only for the duration of the connection.
+   */
+  saveUrlMapping(remote: string, local: string): void;
 }
 
 /**
@@ -48,7 +53,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
     this.view = webviewView;
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = this.html();
-    webviewView.webview.onDidReceiveMessage((msg: { type: string; hostPort?: string; port?: number; path?: string }) => {
+    webviewView.webview.onDidReceiveMessage((msg: { type: string; hostPort?: string; port?: number; path?: string; remote?: string; local?: string }) => {
       // Ticket 04: an empty `hostPort` is a valid Connect click too — "leave blank to
       // auto-detect via Docker" — so this must NOT require a truthy value like it used to.
       if (msg.type === 'connect') this.callbacks.connect(msg.hostPort ?? '');
@@ -57,6 +62,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       else if (msg.type === 'openSettings') this.callbacks.openSettings();
       else if (msg.type === 'acceptWrapperSuggestion' && msg.path) this.callbacks.acceptWrapperSuggestion(msg.path);
       else if (msg.type === 'addFolderToWorkspace' && msg.path) this.callbacks.addFolderToWorkspace(msg.path);
+      else if (msg.type === 'saveUrlMapping' && msg.remote && msg.local) this.callbacks.saveUrlMapping(msg.remote, msg.local);
     });
     this.postStatus();
   }
@@ -88,6 +94,8 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       // Ticket 08, item 4 — suggested, never applied: adding a folder reloads the workspace, so
       // it has to be the user's own decision.
       outsideWorkspaceDirs: summary.outsideWorkspaceDirs,
+      // Ticket 07, item 4 — discovered this session; offered for saving, never saved here.
+      urlMappings: summary.urlMappings,
     });
   }
 
@@ -151,6 +159,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   </div>
 
   <div id="outsideDirs"></div>
+  <div id="urlMappings"></div>
 
   <h4>Recent logs — frames tried</h4>
   <div id="recentLogs"><div id="recentLogsEmpty">No logs yet.</div></div>
@@ -166,6 +175,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   const recentLogsEl = document.getElementById('recentLogs');
   const wrapperEl = document.getElementById('wrapperSuggestion');
   const outsideDirsEl = document.getElementById('outsideDirs');
+  const urlMappingsEl = document.getElementById('urlMappings');
   const wrapperTextEl = document.getElementById('wrapperSuggestionText');
   let wrapperSuggestionPath = null;
 
@@ -203,6 +213,24 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
       card.appendChild(text);
       card.appendChild(btn);
       outsideDirsEl.appendChild(card);
+    }
+  }
+
+  // Ticket 07, item 4 — a URL mapping worked out by matching the tail of a browser URL against
+  // the indexed files. It disappears when the connection does unless the user saves it.
+  function renderUrlMappings(mappings) {
+    urlMappingsEl.textContent = '';
+    for (const m of mappings || []) {
+      const card = document.createElement('div');
+      card.className = 'outsideDir';
+      const text = document.createElement('p');
+      text.textContent = 'Matched ' + m.remote + ' to ' + m.local + ' for this session.';
+      const btn = document.createElement('button');
+      btn.textContent = 'Save mapping';
+      btn.addEventListener('click', () => vscode.postMessage({ type: 'saveUrlMapping', remote: m.remote, local: m.local }));
+      card.appendChild(text);
+      card.appendChild(btn);
+      urlMappingsEl.appendChild(card);
     }
   }
 
@@ -250,6 +278,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
 
     renderRecentLogs(msg.recentLogs);
     renderOutsideDirs(msg.outsideWorkspaceDirs);
+    renderUrlMappings(msg.urlMappings);
 
     if (msg.wrapperSuggestion) {
       wrapperSuggestionPath = msg.wrapperSuggestion.path;

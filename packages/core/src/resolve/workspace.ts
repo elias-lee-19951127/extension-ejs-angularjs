@@ -512,6 +512,16 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
+   * Every indexed file's workspace-relative path. Ticket 07
+   * (.scratch/runtime-remote-env/issues/07-khop-duoi-url-trinh-duyet.md) matches the tail of a
+   * browser URL against these, since a URL carries no filesystem path and no mount can say what
+   * file it is.
+   */
+  indexedPaths(): string[] {
+    return this.store.indexedPaths();
+  }
+
+  /**
    * The position of every identifier at a reference site in a .js file.
    * Used by the `sweep` command to measure coverage.
    */

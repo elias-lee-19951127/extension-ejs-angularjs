@@ -80,6 +80,7 @@ test('summarizeRuntimeStatus: an empty connection list summarizes to all zeros',
     recentLogs: [],
     wrapperSuggestion: null,
     outsideWorkspaceDirs: [],
+    urlMappings: [],
   });
 });
 
@@ -98,6 +99,7 @@ test('summarizeRuntimeStatus: sums received/drawn across connections, and droppe
     recentLogs: [],
     wrapperSuggestion: null,
     outsideWorkspaceDirs: [],
+    urlMappings: [],
   });
 });
 
@@ -293,4 +295,40 @@ test('summarizeRuntimeStatus: outside-the-workspace directories are merged and d
 test('summarizeRuntimeStatus: a connection from an older server with no outsideWorkspaceDirs field is fine', () => {
   const connections = [{ key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {} }];
   assert.deepStrictEqual(summarizeRuntimeStatus(connections).outsideWorkspaceDirs, []);
+});
+
+/**
+ * Ticket 07, item 4 (.scratch/runtime-remote-env/issues/07-khop-duoi-url-trinh-duyet.md): URL
+ * mappings the server worked out by suffix matching, offered to the panel for saving. Merged
+ * across connections so the same discovery isn't offered twice.
+ */
+test('summarizeRuntimeStatus: URL mappings are merged and de-duplicated across connections', () => {
+  const mapping = { remote: 'http://localhost:5000', local: '/ws/public' };
+  const connections = [
+    { key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, urlMappings: [mapping] },
+    {
+      key: 'b',
+      state: 'connected',
+      received: 1,
+      drawn: 1,
+      droppedByReason: {},
+      urlMappings: [mapping, { remote: 'http://localhost:5001', local: '/ws/admin' }],
+    },
+  ];
+  assert.deepStrictEqual(summarizeRuntimeStatus(connections).urlMappings, [
+    mapping,
+    { remote: 'http://localhost:5001', local: '/ws/admin' },
+  ]);
+});
+
+test('formatSkipReason: an ambiguous URL match names the files it was torn between', () => {
+  const text = formatSkipReason({
+    url: 'http://localhost:5000/index.js',
+    lineNumber: 0,
+    columnNumber: 0,
+    skipReason: 'ambiguous-url-match',
+    candidates: ['public/a/index.js', 'public/b/index.js'],
+  });
+  assert.ok(text.includes('public/a/index.js'));
+  assert.ok(text.includes('public/b/index.js'));
 });

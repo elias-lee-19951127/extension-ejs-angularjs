@@ -424,11 +424,14 @@ export interface FrameDiagnosticEntry {
     | 'stale-file'
     | 'shadowed-file'
     | 'content-mismatch'
+    | 'ambiguous-url-match'
     | null;
   /** Only set when `skipReason` is `'skip-pattern'`. */
   matchedPattern?: string;
   /** Only set when `skipReason` is `'shadowed-file'` — the file the runtime IS running, proven by content. */
   runtimePath?: string;
+  /** Only set when `skipReason` is `'ambiguous-url-match'` (ticket 07) — the files that tied for the longest matching tail. */
+  candidates?: string[];
 }
 
 /**
@@ -580,4 +583,105 @@ export function candidateHostPaths(fsPath: string, mappings: PathMapping[]): str
  */
 export function isUnderMappingLocal(hostPath: string, mappings: PathMapping[]): boolean {
   return mappings.some(({ local }) => hostPath === local || hostPath.startsWith(`${local}/`));
+}
+
+// ============================================================================================
+// Ticket 07 — suffix-matching a browser URL to a workspace file
+// (.scratch/runtime-remote-env/issues/07-khop-duoi-url-trinh-duyet.md). A log from Chrome carries
+// a URL (`http://localhost:5000/javascripts/index.js`), not a filesystem path, and no mount can
+// say which file it is. Matching the tail of the URL against indexed files is the last resort,
+// AFTER every Path Mapping has had its say — and it is confined to URLs on purpose: for a Node
+// file path with nested mounts, this kind of match is wrong in a way that looks convincing.
+// ============================================================================================
+
+/** Is `runtimePath` an `http(s)://` URL — the only shape suffix matching is ever allowed on? */
+export function isHttpUrl(runtimePath: string): boolean {
+  return /^https?:\/\//i.test(runtimePath);
+}
+
+/**
+ * Drop a URL's query string and fragment, so `…/app.js?v=3` maps like `…/app.js`. Applied only to
+ * http(s) URLs: `?` and `#` are legal characters in a filesystem path, and stripping them there
+ * would corrupt a perfectly good Node path.
+ */
+export function normalizeRuntimePath(runtimePath: string): string {
+  if (!isHttpUrl(runtimePath)) return runtimePath;
+  return runtimePath.replace(/[?#].*$/, '');
+}
+
+/** The result of matching a URL's tail against the indexed files — see `matchUrlPathSuffix`. */
+export interface UrlSuffixMatch {
+  /** `'unique'` carries exactly one candidate; `'ambiguous'` carries every file that tied. */
+  kind: 'unique' | 'ambiguous' | 'none';
+  candidates: string[];
+  /** How many trailing path segments matched. 0 when nothing matched at all. */
+  segments: number;
+}
+
+function segmentsOf(path: string): string[] {
+  return path.split('/').filter(Boolean);
+}
+
+function trailingSegmentsInCommon(a: string[], b: string[]): number {
+  let n = 0;
+  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+  return n;
+}
+
+/**
+ * Find the indexed file whose path shares the LONGEST trailing run of segments with `urlPath`
+ * (checklist item 2). Longest rather than merely "same filename", because a project with several
+ * `index.js` files only becomes decidable once more of the path agrees.
+ *
+ * A tie is reported as `'ambiguous'` rather than resolved by any tiebreak: the whole point of this
+ * ticket is to avoid a confident wrong answer, so several equally good candidates means the log is
+ * not drawn and the panel says which files it was torn between (checklist item 3).
+ */
+export function matchUrlPathSuffix(urlPath: string, indexedRelPaths: string[]): UrlSuffixMatch {
+  const urlSegments = segmentsOf(urlPath);
+  let best = 0;
+  let candidates: string[] = [];
+  for (const relPath of indexedRelPaths) {
+    const shared = trailingSegmentsInCommon(urlSegments, segmentsOf(relPath));
+    if (shared === 0 || shared < best) continue;
+    if (shared > best) {
+      best = shared;
+      candidates = [relPath];
+    } else {
+      candidates.push(relPath);
+    }
+  }
+  if (best === 0) return { kind: 'none', candidates: [], segments: 0 };
+  return { kind: candidates.length === 1 ? 'unique' : 'ambiguous', candidates, segments: best };
+}
+
+/**
+ * Turn one resolved URL -> file match into a DIRECTORY-level Path Mapping, by stripping the
+ * matched tail from both sides: `http://localhost:5000/javascripts/index.js` matched against
+ * `public/javascripts/index.js` (2 segments) yields
+ * `{remote: 'http://localhost:5000', local: '<root>/public'}`.
+ *
+ * Producing a mapping rather than a single file's location is what makes one index scan serve
+ * every other script from the same directory — `mapContainerPath` handles them with no further
+ * matching — and it is also the thing the panel can offer to save (checklist item 4).
+ *
+ * Returns `null` if the match doesn't actually line up (more matched segments than either side
+ * has), which the callers can't produce but which keeps this total rather than throwing.
+ */
+export function urlSuffixMapping(url: string, relPath: string, segments: number, workspaceRoot: string): PathMapping | null {
+  const withoutQuery = normalizeRuntimePath(url);
+  const schemeEnd = withoutQuery.indexOf('://');
+  if (schemeEnd === -1) return null;
+  const pathStart = withoutQuery.indexOf('/', schemeEnd + 3);
+  const origin = pathStart === -1 ? withoutQuery : withoutQuery.slice(0, pathStart);
+  const urlSegments = pathStart === -1 ? [] : segmentsOf(withoutQuery.slice(pathStart));
+  const relSegments = segmentsOf(relPath);
+  if (segments > urlSegments.length || segments > relSegments.length) return null;
+
+  const remoteRest = urlSegments.slice(0, urlSegments.length - segments);
+  const localRest = relSegments.slice(0, relSegments.length - segments);
+  return {
+    remote: remoteRest.length > 0 ? `${origin}/${remoteRest.join('/')}` : origin,
+    local: localRest.length > 0 ? `${workspaceRoot}/${localRest.join('/')}` : workspaceRoot,
+  };
 }

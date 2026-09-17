@@ -39,6 +39,10 @@ import {
   sourceMatchesScript,
   candidateHostPaths,
   classifyFrameCandidates,
+  isHttpUrl,
+  normalizeRuntimePath,
+  matchUrlPathSuffix,
+  urlSuffixMapping,
   isLikelyMinified,
   stripAnsi,
   suggestWrapperFile,
@@ -125,6 +129,16 @@ interface RuntimeLogConnectionInfo {
    * workspace on its own. De-duplicated and capped, since a mount can hold a whole repo.
    */
   outsideWorkspaceDirs: Set<string>;
+  /**
+   * Ticket 07 — directory-level mappings discovered by matching a browser URL's tail against the
+   * indexed files. Session-only (checklist item 4): they are recomputed on every connect and never
+   * written to settings, which only the panel's explicit Save does. Applied LAST, after the user's
+   * own mappings and the container's mounts, so suffix matching stays the last resort it is
+   * meant to be.
+   */
+  urlMappings: PathMapping[];
+  /** Ticket 07 — every URL already matched against the index, so the scan runs once per URL rather than once per log. */
+  urlResolutions: Map<string, UrlResolution>;
 }
 
 /** Every live runtime-log connection, keyed by `host:port:targetId` — see ejsng/connectRuntime. */
@@ -556,6 +570,8 @@ function selectRuntimeLogFrame(
   callFrames: CallFrame[],
   skipPatterns: string[],
   pathMappings: PathMapping[],
+  /** Ticket 07 — resolve a browser URL no mapping covered. See `urlResolverFor`. */
+  resolveUrl: UrlResolver,
 ): {
   chosen: { frame: CallFrame; rawPath: string; hostPath: string; relPath: string; source: string; inWorkspace: boolean } | null;
   dropReason: string;
@@ -563,7 +579,13 @@ function selectRuntimeLogFrame(
 } {
   const classified = classifyFrameCandidates(callFrames, skipPatterns);
   const tried: FrameDiagnosticEntry[] = [];
-  let lastAttemptReason: 'outside-workspace' | 'unreadable-file' | 'obfuscated' | 'no-path-mapping' | null = null;
+  let lastAttemptReason:
+    | 'outside-workspace'
+    | 'unreadable-file'
+    | 'obfuscated'
+    | 'no-path-mapping'
+    | 'ambiguous-url-match'
+    | null = null;
 
   for (const { frame, skippedByPattern } of classified) {
     if (skippedByPattern !== null) {
@@ -571,8 +593,33 @@ function selectRuntimeLogFrame(
       continue;
     }
 
-    const rawPath = frame.url.startsWith('file://') ? URI.parse(frame.url).fsPath : frame.url;
-    const { path: fsPath, matched } = mapContainerPath(rawPath, pathMappings);
+    const rawPath = frame.url.startsWith('file://') ? URI.parse(frame.url).fsPath : normalizeRuntimePath(frame.url);
+    const mapped = mapContainerPath(rawPath, pathMappings);
+    let fsPath = mapped.path;
+    let matched = mapped.matched;
+
+    // Ticket 07: a browser reports a URL, which no mount can translate. Once every Path Mapping
+    // has failed to cover it, match the tail of the URL against the indexed files. Confined to
+    // http(s) URLs on purpose — for a Node file path under nested mounts, this kind of match is
+    // wrong in a way that looks convincing.
+    if (!matched && isHttpUrl(rawPath)) {
+      const resolved = resolveUrl(rawPath);
+      if (resolved.kind === 'ambiguous') {
+        tried.push({
+          url: frame.url,
+          lineNumber: frame.lineNumber,
+          columnNumber: frame.columnNumber,
+          skipReason: 'ambiguous-url-match',
+          candidates: resolved.candidates,
+        });
+        lastAttemptReason = 'ambiguous-url-match';
+        continue;
+      }
+      if (resolved.kind === 'unique') {
+        fsPath = resolved.hostPath;
+        matched = true;
+      }
+    }
     const relPath = ws.toRelative(fsPath);
     const inWorkspace = isWithinRoot(relPath);
 
@@ -614,9 +661,7 @@ function selectRuntimeLogFrame(
   }
 
   const dropReason =
-    lastAttemptReason === 'outside-workspace' || lastAttemptReason === 'unreadable-file' || lastAttemptReason === 'no-path-mapping'
-      ? lastAttemptReason
-      : 'all-frames-skipped';
+    lastAttemptReason !== null && lastAttemptReason !== 'obfuscated' ? lastAttemptReason : 'all-frames-skipped';
   return { chosen: null, dropReason, tried };
 }
 
@@ -743,6 +788,49 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
   void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason });
 }
 
+// ---------------------------------------------------------------------------------------------
+// Ticket 07 (.scratch/runtime-remote-env/issues/07-khop-duoi-url-trinh-duyet.md): resolve a
+// browser URL to a workspace file by matching the tail of its path, once every Path Mapping has
+// failed to cover it.
+// ---------------------------------------------------------------------------------------------
+
+type UrlResolution = { kind: 'unique'; hostPath: string } | { kind: 'ambiguous'; candidates: string[] } | { kind: 'none' };
+type UrlResolver = (url: string) => UrlResolution;
+
+/**
+ * A resolver bound to one connection. Each distinct URL is matched against the index ONCE — the
+ * answer is remembered, and, when it is unique, recorded as a directory-level mapping on the
+ * connection so every other script from the same directory is handled by `mapContainerPath` with
+ * no further matching at all.
+ *
+ * Those mappings live only as long as the connection (checklist item 4). Nothing here writes to
+ * settings: the panel offers them, and only a click saves one.
+ */
+function urlResolverFor(ws: Workspace, info: RuntimeLogConnectionInfo): UrlResolver {
+  return (url) => {
+    const cached = info.urlResolutions.get(url);
+    if (cached) return cached;
+
+    const pathStart = url.indexOf('/', url.indexOf('://') + 3);
+    const urlPath = pathStart === -1 ? '' : url.slice(pathStart);
+    const match = matchUrlPathSuffix(urlPath, ws.indexedPaths());
+
+    let resolution: UrlResolution = { kind: 'none' };
+    if (match.kind === 'ambiguous') {
+      resolution = { kind: 'ambiguous', candidates: match.candidates };
+    } else if (match.kind === 'unique' && match.candidates[0]) {
+      const relPath = match.candidates[0];
+      const mapping = urlSuffixMapping(url, relPath, match.segments, ws.config.root);
+      if (mapping) {
+        info.urlMappings.push(mapping);
+        resolution = { kind: 'unique', hostPath: `${ws.config.root}/${relPath}` };
+      }
+    }
+    info.urlResolutions.set(url, resolution);
+    return resolution;
+  };
+}
+
 /**
  * Handle one console call: pick a frame, verify the file on disk is what the runtime is really
  * running (ticket 06), and either draw it or count exactly why it wasn't drawn. Runs serialized
@@ -761,8 +849,14 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
   // User-declared mappings first: `mapContainerPath` is first-match-wins, so listing them
   // ahead of the container's own mounts is what makes a user's declaration beat an inferred
   // one for the same path (ticket 05, item 2).
-  const mappings = [...runtimeLogPathMappings, ...info.inferredPathMappings];
-  const { chosen, dropReason, tried } = selectRuntimeLogFrame(workspace, log.callFrames, runtimeLogSkipFramePatterns, mappings);
+  const mappings = [...runtimeLogPathMappings, ...info.inferredPathMappings, ...info.urlMappings];
+  const { chosen, dropReason, tried } = selectRuntimeLogFrame(
+    workspace,
+    log.callFrames,
+    runtimeLogSkipFramePatterns,
+    mappings,
+    urlResolverFor(workspace, info),
+  );
   const record = (chosenPath: string | null): void => {
     pushBounded(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath }, MAX_RECENT_FRAME_DIAGNOSTICS);
   };
@@ -834,6 +928,8 @@ function startRuntimeLogConnection(key: string, webSocketDebuggerUrl: string, in
     getScriptSource: () => Promise.resolve(null), // replaced right below, before any callback fires
     queue: Promise.resolve(),
     outsideWorkspaceDirs: new Set(),
+    urlMappings: [],
+    urlResolutions: new Map(),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -1005,6 +1101,8 @@ connection.onRequest('ejsng/runtimeStatus', () => ({
     recentLogs: info.recentFrameDiagnostics,
     wrapperSuggestion: suggestWrapperFile(info.recentChosenPaths),
     outsideWorkspaceDirs: [...info.outsideWorkspaceDirs],
+    // Ticket 07, item 4 — offered for saving, never saved here.
+    urlMappings: info.urlMappings,
   })),
 }));
 

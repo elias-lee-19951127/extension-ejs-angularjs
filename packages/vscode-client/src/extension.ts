@@ -153,6 +153,31 @@ async function acceptWrapperSuggestion(path: string): Promise<void> {
 }
 
 /**
+ * Ticket 07, item 4: the panel worked out that `remote` (a browser URL prefix) is `local` on this
+ * machine, by matching the tail of a URL against the indexed files, and the user clicked Save.
+ * Until this click the mapping lives only for the duration of the connection.
+ *
+ * Written per ticket 05's convention: a `local` inside the workspace is stored as
+ * `${workspaceFolder}/…` in Workspace settings, so the mapping can be committed and works for
+ * everyone who clones the repo. With no workspace folder open there is nowhere to commit it to,
+ * so it goes to User settings as an absolute path.
+ */
+async function saveUrlMapping(remote: string, local: string): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  const insideFolder = folder && (local === folder.uri.fsPath || local.startsWith(`${folder.uri.fsPath}/`));
+  const mapping = insideFolder
+    ? { remote, local: `\${workspaceFolder}${local.slice(folder.uri.fsPath.length)}` }
+    : { remote, local };
+  const target = insideFolder ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+
+  const cfg = vscode.workspace.getConfiguration('ejsng');
+  const current = cfg.get<Array<{ remote: string; local: string }>>('runtimeLog.pathMappings') ?? [];
+  if (current.some((m) => m.remote === mapping.remote && m.local === mapping.local)) return;
+  await cfg.update('runtimeLog.pathMappings', [...current, mapping], target);
+  void vscode.window.showInformationMessage(`EJS/NG: saved "${mapping.remote}" -> "${mapping.local}" to ejsng.runtimeLog.pathMappings.`);
+}
+
+/**
  * Ticket 08, item 4: the panel found logs being drawn in `path`, a directory outside the
  * workspace (with nested mounts, the repo the runtime is really running often isn't the one that
  * is open), and the user clicked "Add to workspace". This is the ONLY place a folder is added —
@@ -402,6 +427,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     openSettings: () => void vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog'),
     acceptWrapperSuggestion: (path) => void acceptWrapperSuggestion(path),
     addFolderToWorkspace: (path) => addFolderToWorkspace(path),
+    saveUrlMapping: (remote, local) => void saveUrlMapping(remote, local),
   });
 
   runtimeLogDecorationType = vscode.window.createTextEditorDecorationType({
