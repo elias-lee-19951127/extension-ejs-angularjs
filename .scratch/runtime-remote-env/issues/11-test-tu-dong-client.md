@@ -6,19 +6,19 @@ chưa từng được test — đó là lý do mỗi lần publish lại tích t
 
 **Blocked by:** 09 — hình dạng UI chốt ở đó; làm sớm hơn sẽ phải viết lại test.
 
-**Status:** done — chỉ còn chờ lần chạy CI đầu tiên (xem Comments)
+**Status:** done
 
 - [x] Dựng seam chạy VS Code thật (`@vscode/test-electron`) cho `packages/vscode-client`
 - [x] Test: connect → decoration hiện đúng dòng trong file thật, với server giả hoặc runtime giả
 - [x] Test: nhiều kết nối cùng lúc → panel và status bar đếm đúng, disconnect đúng cái đã chọn
 - [x] Test: danh sách kiểm tra phản ánh đúng các bước hỏng (mapping thiếu, Stale File, bỏ hết frame)
-- [ ] Chạy được trên CI macOS và Linux; thời gian chạy được ghi lại để biết CI nặng thêm bao nhiêu
+- [x] Chạy được trên CI macOS và Linux; thời gian chạy được ghi lại để biết CI nặng thêm bao nhiêu
 - [x] Cập nhật ticket 09 của feature cũ: mục nào đã chuyển thành test tự động thì đánh dấu, phần
       còn lại (mở trình duyệt, nhìn tận mắt) giữ nguyên là việc tay
 
 ## Comments
 
-**2026-09-17, agent:** Xong 5/6 mục; mục CI đã có workflow nhưng **chưa chạy lần nào** (cần push).
+**2026-09-17, agent:** Xong cả 6 mục.
 
 - **Seam:** `npm run test:e2e -w packages/vscode-client` → build → `test-e2e/run.js` gọi
   `@vscode/test-electron` (devDependency mới, `3.1.0`), mở **VS Code stable thật** (tải về
@@ -64,6 +64,16 @@ chưa từng được test — đó là lý do mỗi lần publish lại tích t
 - **CI:** `.github/workflows/ci.yml` — ma trận `ubuntu-latest` + `macos-latest`, Node 20:
   `npm ci` → `npm test` → cache `.vscode-test` → `test:e2e` (Linux bọc `xvfb-run -a`).
 
-- [ ] Push lên GitHub, xác nhận workflow xanh trên cả hai OS và ghi lại thời gian job thật (chưa chạy
-      được từ phiên này). Điểm có thể vấp: `lsof` trên runner Ubuntu (test auto-enable của server),
-      và Electron cần `xvfb` — `ubuntu-latest` có sẵn cả hai theo tài liệu runner, nhưng chưa kiểm.
+**CI lần đầu** ([run 35243359731](https://github.com/elias-lee-19951127/extension-ejs-angularjs/actions/runs/35243359731),
+commit `0eeeba9`, không có cache): **xanh trên cả hai OS**.
+
+| Runner | Cả job | `npm test` | Tải VS Code 1.138.0 | Lượt VS Code (e2e) | 5 ca e2e |
+| --- | --- | --- | --- | --- | --- |
+| `macos-latest` (arm64) | 38 s | 341 test, 336 pass, 5 skip | 302 MB, ~8 s | 16.7 s | 1.4 s |
+| `ubuntu-latest` (x64, `xvfb-run`) | 1 m 21 s | 341 test, 336 pass, 5 skip | 329 MB, ~9 s | 24.8 s | 3.7 s |
+
+UI test làm mỗi job nặng thêm khoảng **25 s (macOS) / 35 s (Linux)** khi chưa có cache, gồm cả tải
+VS Code. 5 test skip là các test `smart-city` (repo đó không có trên runner). Trên máy dev, `npm test`
+báo 355 thay vì 341 vì cụm test `smart-city` chạy thật và có thêm subtest. Cả hai lo ngại trước đó
+(`lsof` trên Ubuntu, `xvfb`) đều không thành vấn đề. Có một cảnh báo không chặn: các action `@v4`
+đang nhắm Node 20, GitHub ép chạy trên Node 24.
