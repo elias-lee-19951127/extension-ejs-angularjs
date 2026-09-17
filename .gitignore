@@ -6,3 +6,4 @@ dist/
 packages/vscode-client/out/
 .kotlin/
 .DS_Store
+.vscode-test/

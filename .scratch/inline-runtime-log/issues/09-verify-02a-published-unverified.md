@@ -12,11 +12,11 @@ thuộc đúng hành vi client của 02a).
 
 **Status:** debt — chờ người dùng tự check
 
-- [ ] Kết nối đơn: `EJS/NG: Connect to Runtime`, gõ `host:port` (không còn dán URL), status bar
+- [x] Kết nối đơn: `EJS/NG: Connect to Runtime`, gõ `host:port` (không còn dán URL), status bar
       hiện `1 connected`, log hiện inline đúng dòng
-- [ ] Nhiều kết nối đồng thời: kết nối 2 tiến trình Node khác cổng, status bar hiện `2 connected`
+- [x] Nhiều kết nối đồng thời: kết nối 2 tiến trình Node khác cổng, status bar hiện `2 connected`
       (không phải kết nối sau thay thế kết nối trước)
-- [ ] `EJS/NG: Disconnect Runtime` — Quick Pick liệt kê đúng các kết nối đang mở, ngắt đúng cái đã
+- [x] `EJS/NG: Disconnect Runtime` — Quick Pick liệt kê đúng các kết nối đang mở, ngắt đúng cái đã
       chọn, status bar giảm đúng số
 - [ ] (Chưa thể tự test bằng Node) Nhánh discovery tìm thấy **nhiều target trên cùng port** → Quick
       Pick chọn target — cần Chrome thật (ticket 02b) mới tạo được tình huống này; ghi chú lại ở
@@ -45,3 +45,18 @@ TDD đầy đủ, nhưng chưa qua UI thật trong Extension Development Host.
 2026-09-16: phần lớn checklist này sẽ được trả bằng test tự động ở ticket
 `.scratch/runtime-remote-env/issues/11-test-tu-dong-client.md` (`@vscode/test-electron`), thay vì
 bấm tay. Phần còn lại cần mắt người (mở trình duyệt, nhìn decoration) vẫn giữ nguyên ở đây.
+
+2026-09-17: ticket `.scratch/runtime-remote-env/issues/11-test-tu-dong-client.md` chuyển các mục sau
+thành test tự động trong VS Code thật (`npm run test:e2e -w packages/vscode-client`):
+
+- **Kết nối đơn** — qua đúng lệnh Connect, log vẽ đúng dòng. Lưu ý: status bar không còn hiện
+  `1 connected` từ ticket 02 (runtime-remote-env) mà là `received / drawn / dropped`; test khẳng định
+  dạng mới.
+- **Nhiều kết nối đồng thời** — hai runtime, status bar và panel đếm cả hai.
+- **Disconnect** — chọn đúng kết nối trong Quick Pick, chỉ kết nối đó đóng, số đếm giảm.
+- **Một phần của mục Docker mapping** — `pathMappings` đọc từ `.vscode/settings.json` thật của
+  workspace, log vẽ đúng dòng. Phần **container thật** và gõ qua Settings UI vẫn là việc tay, nên mục
+  đó giữ nguyên chưa đánh dấu.
+
+Còn lại là việc tay: nhiều target trên cùng port (cần Chrome thật), auto-enable qua port app thật
+(ticket 10), container thật.

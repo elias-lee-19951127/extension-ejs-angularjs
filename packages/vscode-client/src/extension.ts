@@ -640,9 +640,46 @@ function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): v
     };
   });
   editor.setDecorations(runtimeLogDecorationType, options);
+  renderedDecorations.set(
+    uri,
+    options.map((o) => ({ line: o.range.start.line, text: o.renderOptions?.after?.contentText ?? '' })),
+  );
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+/**
+ * What was last handed to `setDecorations`, per file — VS Code offers no API to read decorations
+ * back, so this is the only way an automated test can see them (ticket 11).
+ */
+const renderedDecorations = new Map<string, Array<{ line: number; text: string }>>();
+
+/**
+ * Ticket 11 (.scratch/runtime-remote-env/issues/11-test-tu-dong-client.md): read-only views of
+ * UI state that VS Code's API cannot report — decorations, the status bar text, what the panel
+ * was last sent. Returned from `activate` only when `EJSNG_EXTENSION_TEST=1`, which the
+ * `@vscode/test-electron` runner sets; the published extension exports nothing.
+ */
+export interface EjsngTestApi {
+  decorations(uri: string): Array<{ line: number; text: string }>;
+  statusBarText(): string;
+  /** The last `status` message posted to the panel's webview, or `undefined` if it never resolved. */
+  panelState(): unknown;
+  checklist(): RuntimeChecklistStep[];
+  /** Connection keys this window holds, as the Disconnect picker lists them. */
+  connectionKeys(): string[];
+  /** Fetch status and checklist now instead of waiting for the next poll. */
+  refreshRuntimeStatus(): Promise<void>;
+}
+
+const testApi: EjsngTestApi = {
+  decorations: (uri) => renderedDecorations.get(uri) ?? [],
+  statusBarText: () => runtimeLogStatusBar?.text ?? '',
+  panelState: () => runtimeLogView.lastPostedStatus,
+  checklist: () => runtimeChecklistSteps,
+  connectionKeys: () => [...runtimeLogConnections.keys()],
+  refreshRuntimeStatus: () => refreshRuntimeStatus(),
+};
+
+export async function activate(context: vscode.ExtensionContext): Promise<EjsngTestApi | undefined> {
   extensionContext = context;
   // The server is already bundled into the extension (see build.js). Do not
   // point outside the extension directory: such a path is not part of the .vsix package.
@@ -805,6 +842,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // status bar/panel don't have to wait for the next poll tick to stop lying about a connection
   // that's still `connecting` or has already `failed`.
   client.onNotification('ejsng/runtimeStatusChanged', () => void refreshRuntimeStatus());
+
+  return process.env.EJSNG_EXTENSION_TEST === '1' ? testApi : undefined;
 }
 
 export function deactivate(): Thenable<void> | undefined {

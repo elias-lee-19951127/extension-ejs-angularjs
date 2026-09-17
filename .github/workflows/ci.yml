@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Unit and LSP tests
+        run: npm test
+
+      # The VS Code build @vscode/test-electron downloads (~150 MB). It still checks for a newer
+      # stable on every run and downloads only when one exists.
+      - uses: actions/cache@v4
+        with:
+          path: packages/vscode-client/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: vscode-test-${{ runner.os }}-
+
+      - name: UI tests in VS Code (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:e2e -w packages/vscode-client
+
+      - name: UI tests in VS Code (macOS)
+        if: runner.os == 'macOS'
+        run: npm run test:e2e -w packages/vscode-client

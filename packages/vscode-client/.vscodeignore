@@ -7,3 +7,5 @@ tsconfig.json
 **/*.ts
 **/*.tsbuildinfo
 node_modules/**
+test-e2e/**
+.vscode-test/**

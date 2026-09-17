@@ -38,6 +38,8 @@ export interface RuntimeLogViewCallbacks {
  */
 export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
+  /** The last `status` message actually posted to a resolved webview — read by the ticket 11 UI tests. */
+  lastPostedStatus: unknown;
 
   constructor(
     private readonly connectionCount: () => number,
@@ -70,8 +72,9 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
   }
 
   private postStatus(): void {
+    if (!this.view) return;
     const summary = this.statusSummary();
-    void this.view?.webview.postMessage({
+    const message = {
       type: 'status',
       count: this.connectionCount(),
       chromePort: this.defaultChromePort(),
@@ -84,7 +87,9 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
           chosenLabel: log.chosenPath ?? '(no frame drawn — panel only)',
           frames: log.frames.map((f) => ({ url: f.url, label: formatSkipReason(f) })),
         })),
-    });
+    };
+    this.lastPostedStatus = message;
+    void this.view.webview.postMessage(message);
   }
 
   private html(): string {

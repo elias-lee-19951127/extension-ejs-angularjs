@@ -154,11 +154,13 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0"
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^3.1.0"
   },
   "scripts": {
     "compile": "tsc --build && node build.js",
     "watch": "tsc --build --watch & node build.js --watch",
-    "package": "tsc --build && node build.js --production && npx --yes @vscode/vsce package --no-dependencies"
+    "package": "tsc --build && node build.js --production && npx --yes @vscode/vsce package --no-dependencies",
+    "test:e2e": "tsc --build && node build.js && node test-e2e/run.js"
   }
 }
