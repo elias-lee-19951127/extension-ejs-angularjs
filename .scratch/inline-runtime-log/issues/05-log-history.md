@@ -6,7 +6,7 @@ rõ đây là "cải tiến sau nếu thấy thiếu", không phải hành vi t�
 
 **Blocked by:** 01 — Hoàn thiện client VSCode v1
 
-**Status:** done — 2026-09-19, chưa publish
+**Status:** done — published 0.4.2, hover verify trên WSL thật 2026-09-19
 
 - [x] Giữ N log gần nhất (10) + bộ đếm cho mỗi dòng — ở **client** (`RuntimeLogState`), không ở
       server; xem Comments
