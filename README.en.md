@@ -49,8 +49,11 @@ assigned in a callback (nearly all async-loaded data), in JS files, or for EJS l
 `ejsng.typeHints.nullable`.
 
 **Types seen at runtime.** Where the index can't tell (`$scope.rows = res.data`), let the runtime show
-it: while Runtime Log is connected, set a logpoint `rows = {vm.rows}` (or already have a
-`console.log($scope.rows)`) — next time that line runs, hovering `vm.rows` in the template shows the real
+it: click **Log at runtime** right in the hover (beside "Could not be inferred — assigned from
+`res.data`") — VS Code sets an ordinary logpoint right after that assignment, even inside a one-line
+callback; clicking again never adds a second one, and it's removed through the usual breakpoint UI. A
+logpoint `{vm.rows}` of your own, or an existing `console.log($scope.rows)`, works too. While Runtime Log
+is connected, next time that line runs, hovering `vm.rows` in the template shows the real
 type, with a *Seen at runtime* line (how often, when, from which connection). Only the type is kept,
 never the value; disconnecting drops it. The status bar counts `N types seen`. Inline hints never change
 because of the runtime. Details: `docs/architecture.md` section 5.3.2.

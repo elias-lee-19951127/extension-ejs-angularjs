@@ -46,9 +46,11 @@ có lần gán tường minh `null`/`undefined`/`void 0`. Không inline cho bi�
 (gần như mọi dữ liệu tải async), không inline ở file JS hay EJS local. Tắt bằng
 `ejsng.typeHints.nullable`.
 
-**Kiểu thấy lúc chạy.** Chỗ index bó tay (`$scope.rows = res.data`) thì cho runtime xem: khi đang nối
-Runtime Log, đặt một logpoint `rows = {vm.rows}` (hoặc có sẵn `console.log($scope.rows)`) — lần sau dòng
-đó chạy, hover trên `vm.rows` trong template có kiểu thật, kèm dòng *Seen at runtime* (bao nhiêu lần, lúc
+**Kiểu thấy lúc chạy.** Chỗ index bó tay (`$scope.rows = res.data`) thì cho runtime xem: bấm
+**Log at runtime** ngay trong hover (cạnh dòng "Could not be inferred — assigned from `res.data`") — VS Code
+đặt một logpoint bình thường ngay sau câu gán đó, kể cả khi nó nằm trong callback viết một dòng; bấm lại
+không sinh logpoint thứ hai, xoá bằng giao diện breakpoint sẵn có. Cũng có thể tự đặt logpoint `{vm.rows}`
+hoặc có sẵn `console.log($scope.rows)`. Khi đang nối Runtime Log, lần sau dòng đó chạy, hover trên `vm.rows` trong template có kiểu thật, kèm dòng *Seen at runtime* (bao nhiêu lần, lúc
 nào, từ kết nối nào). Chỉ giữ kiểu, không giữ giá trị; ngắt kết nối là mất. Thanh trạng thái đếm
 `N types seen`. Chú thích inline không đổi theo runtime. Chi tiết: `docs/kien-truc.md` mục 5.3.2.
 

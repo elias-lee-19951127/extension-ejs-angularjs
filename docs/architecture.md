@@ -463,7 +463,49 @@ whether a runtime is connected.
 **none of which logs a scope variable** — all log strings or locals (`error`, `event`). So on real code
 R1 does nothing through existing logs; it pays off when the developer **deliberately sets a logpoint**
 `{vm.rows}`. A next step worth weighing: a "log this variable" command from the hover that sets that
-logpoint for them.
+logpoint for them — **done**, see 5.3.3.
+
+#### 5.3.3 "Log at runtime" — setting a logpoint from the hover (2026-09-20)
+
+Spec: `.scratch/log-variable/spec.md`. Beside each assignment the hover calls "could not be inferred" sits a
+**Log at runtime** link; clicking it adds an ordinary `vscode.SourceBreakpoint` with `logMessage`
+`$scope.rows = {$scope.rows}`, **right after the assignment**. The value it logs goes the R1 way (5.3.2) and
+becomes the hover's type.
+
+**Why a column, not a line** (measured on `node --inspect`):
+
+| Code shape | At a column, right after `;` | At a line (column 0 of the next line) |
+|---|---|---|
+| Assignment, another statement on the next line | runs after the assignment | works |
+| Last assignment, `}` on the next line | works | works |
+| One-line function `function (res) { $scope.b = res.data; }` | works | **no** — the next line is outside the function |
+| One-line `if (res) { $scope.d = res.data; } return 1;` | works | **no** |
+
+So the logpoint pipeline now carries a **column**: the client sends `character`, the server sends
+`columnNumber` to `setBreakpointByUrl` and resolves the expressions at that column — the start of a one-line
+function's line lies *outside* the callback, where `this`/`vm` would resolve wrong. A gutter logpoint has
+column 0 and behaves as before. `setBreakpointByUrl` answers `locations: []` for a function not compiled yet
+(V8 compiles lazily) — not a failure; the breakpoint binds when the function runs.
+
+The index records, for each assignment that **is a whole statement**, the position right after it
+(`ScopeWrite.after`, through chains like `a = b = x;`) and its left side as written (`lhsText`). An assignment
+inside another expression (`return $scope.x = y`, a concise arrow body) gets no link: there is no "right after"
+to put it.
+
+**Only where static inference gave up**, like the inline hint: a variable with a fully known static type gets
+no link. **Not a code action:** the link sits on the very line where the developer reads the problem, whereas a
+code action would also show in IntelliJ — which has no Runtime Log yet. **Only a client that declares it runs
+the command** (`initializationOptions.commands`) gets the link, and the hover markdown is trusted for that one
+command only (`markdown.isTrusted: { enabledCommands: ['ejsng.logVariable'] }` in `vscode-languageclient`) —
+hovers never get blanket `command:` trust.
+
+**The logpoint is never removed automatically.** It's an ordinary breakpoint: in the gutter, in the Breakpoints
+view, kept across reloads, removed through the usual UI. Removing something the developer can see would
+surprise them, and would miss a type that changes later (an object, then `null`). Clicking again never adds a
+second one (same file, line and column; a disabled one is turned back on).
+
+Covered end to end in a real VS Code: the link taken from the hover, the trusted markdown, the logpoint at the
+right column, and the `columnNumber` reaching the runtime.
 
 ---
 

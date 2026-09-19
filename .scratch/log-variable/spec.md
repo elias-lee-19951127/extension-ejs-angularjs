@@ -1,6 +1,6 @@
 # Spec: "Log biến này" — đặt logpoint từ hover
 
-**Ngày viết:** 2026-09-20 · **Trạng thái:** đã chốt 2026-09-20 (người dùng đồng ý mọi đề xuất) — ticket 01–04, chưa triển khai
+**Ngày viết:** 2026-09-20 · **Trạng thái:** đã triển khai 2026-09-20 — ticket 01–04 done; còn verify tay trong VS Code thật với `smart-city` (ticket 04)
 **Nối tiếp:** `.scratch/observed-types-r1/spec.md` (R1 — kiểu từ giá trị đã log, đã làm) và
 `.scratch/inline-logpoints/spec.md` (logpoint do server tự đặt qua CDP, đã làm).
 

@@ -436,7 +436,44 @@ không phải lúc render, và hint không được hiện/mất theo việc đa
 **Thực tế trên `smart-city` (đo 2026-09-20):** 288 lời gọi `console.*`, 8 cái nằm trong controller,
 **không cái nào log biến scope** — đều log chuỗi hoặc biến cục bộ (`error`, `event`). Nên trên code thật,
 R1 không tự có tác dụng nhờ log sẵn có; nó có tác dụng khi dev **chủ động đặt logpoint** `{vm.rows}`.
-Hướng tiếp theo đáng cân nhắc: một lệnh "log biến này" từ hover để đặt logpoint đó hộ dev.
+Hướng tiếp theo đáng cân nhắc: một lệnh "log biến này" từ hover để đặt logpoint đó hộ dev — **đã làm**, xem 5.3.3.
+
+#### 5.3.3 "Log at runtime" — đặt logpoint từ hover (2026-09-20)
+
+Spec: `.scratch/log-variable/spec.md`. Cạnh mỗi lần gán mà hover ghi "không suy ra được" có link **Log at
+runtime**; bấm → một `vscode.SourceBreakpoint` bình thường, `logMessage` = `$scope.rows = {$scope.rows}`, đặt
+**ngay sau câu gán**. Giá trị nó log đi đường R1 (5.3.2) thành kiểu trong hover.
+
+**Vì sao đặt theo cột, không theo dòng** (đo trên `node --inspect`):
+
+| Dạng code | Theo cột, ngay sau `;` | Theo dòng (cột 0 dòng kế) |
+|---|---|---|
+| Câu gán, câu lệnh khác ở dòng sau | chạy sau câu gán | được |
+| Câu gán cuối, `}` ở dòng sau | được | được |
+| Hàm một dòng `function (res) { $scope.b = res.data; }` | được | **không** — dòng kế nằm ngoài hàm |
+| `if` một dòng `if (res) { $scope.d = res.data; } return 1;` | được | **không** |
+
+Nên pipeline logpoint giờ mang **cột**: client gửi `character`, server gửi `columnNumber` cho
+`setBreakpointByUrl` và resolve biểu thức tại cột đó — đầu dòng của hàm một dòng nằm *ngoài* callback, resolve
+ở đó thì `this`/`vm` sai chỗ. Logpoint đặt ở lề có cột 0, hành vi như cũ. `setBreakpointByUrl` trả
+`locations: []` khi hàm chưa compile (V8 compile lười) — không phải lỗi, breakpoint bind khi hàm chạy.
+
+Index ghi sẵn cho mỗi lần gán **là cả một câu lệnh** vị trí ngay sau nó (`ScopeWrite.after`, qua cả chuỗi
+`a = b = x;`) và vế trái như viết (`lhsText`). Gán nằm trong biểu thức khác (`return $scope.x = y`, thân arrow
+rút gọn) → không có link: không có "ngay sau" để đặt.
+
+**Chỉ ở chỗ tĩnh bó tay**, như inline hint: biến có kiểu tĩnh đầy đủ không có link. **Không phải code action:**
+link nằm đúng dòng dev đọc ra vấn đề, còn code action sẽ hiện cả ở IntelliJ — nơi chưa có Runtime Log.
+**Chỉ client khai báo chạy được lệnh** (`initializationOptions.commands`) mới có link, và markdown của hover chỉ
+được tin cậy cho đúng lệnh đó (`markdown.isTrusted: { enabledCommands: ['ejsng.logVariable'] }` của
+`vscode-languageclient`) — không mở toàn quyền `command:` cho hover.
+
+**Không tự gỡ logpoint.** Nó là breakpoint bình thường: hiện ở lề, trong Breakpoints view, còn qua reload, dev
+xoá bằng UI sẵn có. Tự gỡ thứ dev nhìn thấy là bất ngờ, và bỏ lỡ lúc kiểu đổi về sau (object rồi `null`).
+Bấm lại không sinh cái thứ hai (đúng `(file, dòng, cột)`; đang tắt thì bật lại).
+
+Có test e2e trong VS Code thật: link lấy từ hover, markdown được tin cậy, logpoint ở đúng cột, `columnNumber`
+tới runtime.
 
 ---
 
