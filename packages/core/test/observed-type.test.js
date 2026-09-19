@@ -156,6 +156,32 @@ test('nothing assigns it, or the cursor is not on a variable -> null', (t) => {
   assert.strictEqual(typeAt(ws, 'page.html', 'b }}'), null);
 });
 
+test('in a JS file: the assigned property under the cursor gets the type merged over all its assignments', (t) => {
+  const ws = workspace(t, {
+    'app.js': `
+angular.module('app', []).controller('C', function ($scope) {
+  $scope.form = { name: '' };
+  $scope.reset = function () { $scope.form = null; $scope.form.extra = 1; };
+  this.other = 2;
+});
+`,
+  });
+  const form = typeAt(ws, 'app.js', 'form = {', { offset: 1 });
+  assert.strictEqual(form.expression, 'form');
+  assert.strictEqual(form.text, '{ name: string, extra?: number } | null');
+  assert.strictEqual(form.sites.length, 2); // the nested `form.extra = 1` is a site of `form.extra`, not of `form`
+
+  const extra = typeAt(ws, 'app.js', 'extra');
+  assert.strictEqual(extra.expression, 'form.extra');
+  assert.strictEqual(extra.text, 'number');
+
+  assert.strictEqual(typeAt(ws, 'app.js', 'other').text, 'number');
+
+  // `$scope` itself, or the object part of a nested assignment: not the assigned property -> null.
+  assert.strictEqual(typeAt(ws, 'app.js', '$scope.form = {'), null);
+  assert.strictEqual(typeAt(ws, 'app.js', 'form.extra'), null);
+});
+
 test('formatType: 8 keys per object, 2 levels of nesting', () => {
   const props = Object.fromEntries('abcdefghij'.split('').map((k) => [k, { kind: 'primitive', primitive: 'number' }]));
   assert.strictEqual(

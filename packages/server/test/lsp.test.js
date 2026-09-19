@@ -351,3 +351,58 @@ test('LSP: hover renders paths as links, and points to a copy in a farther direc
   assert.match(value, /1 more match\(es\) in a farther directory/, value);
   assert.match(value, /\[js\/app\.js\]\(file:\/\/\S*js\/app\.js\)/, value);
 });
+
+// observed-types ticket 03: the Observed Type section appended to the hover.
+test('LSP: hover on a template variable adds its observed type, what could not be inferred, and where it is assigned', async (t) => {
+  const { conn, open } = await startServer(t);
+  const tpl = open('views/page.ejs', 'html');
+  const hover = await conn.sendRequest('textDocument/hover', {
+    textDocument: { uri: tpl.uri },
+    position: positionOf(tpl.text, 'row in rows', 7),
+  });
+  const value = hover.contents.value;
+
+  // The existing hover is still there, above the new section.
+  assert.match(value, /^\*\*rows\*\*/, value);
+  assert.match(value, /Scope chain: /, value);
+  assert.match(value, /\n---\n\n\*\*Observed type\*\* of `rows`\n```ts\n\{ id: number, label: string, tags: string\[\] \}\[\]\n```/, value);
+  // `s.rows = Api.list()` can't be inferred: named with its source, never a bare "unknown".
+  assert.match(value, /could not be inferred and are left out:_ `Api\.list\(\)` \(\[js\/app\.js:8\]\(file:\/\/\S*#L8\)\)/, value);
+  assert.match(value, /Assigned at: \[js\/app\.js:2\]\(\S*#L2\), \[js\/app\.js:8\]\(\S*#L8\)/, value);
+  assert.doesNotMatch(value, /Can be empty|Only assigned in a callback/, value);
+});
+
+test('LSP: hover on a variable only assigned from a response: the reason with its source, empty-at-first-render; the same type on the JS side', async (t) => {
+  const { conn, root, open } = await startServer(t);
+  mkdirSync(join(root, 'stats'), { recursive: true });
+  writeFileSync(
+    join(root, 'stats', 'ctrl.js'),
+    "myApp.controller('StatsCtrl', function ($scope, $http) {\n" +
+      "  $scope.user = null;\n" +
+      "  $http.get('/stats').then(function (res) { $scope.stats = res.data; $scope.user = { name: 'a' }; });\n" +
+      '});\n',
+  );
+  writeFileSync(join(root, 'stats', 'page.html'), '<p ng-controller="StatsCtrl">{{ stats }} {{ user.name }}</p>\n');
+  notifyWatched(conn, root, ['stats', CREATED]);
+
+  const tpl = open('stats/page.html', 'html');
+  const hoverAt = (doc, needle, offset = 0) =>
+    conn
+      .sendRequest('textDocument/hover', { textDocument: { uri: doc.uri }, position: positionOf(doc.text, needle, offset) })
+      .then((h) => h.contents.value);
+
+  const stats = await hoverAt(tpl, 'stats }}');
+  assert.match(stats, /\*\*Observed type\*\* of `stats`\n- _Could not be inferred — assigned from_ `res\.data` \(\[stats\/ctrl\.js:3\]\(\S*#L3\)\)/, stats);
+  assert.match(stats, /_Only assigned in a callback_ \(\[stats\/ctrl\.js:3\]\(\S*#L3\)\) — no value at the first render\./, stats);
+  assert.doesNotMatch(stats, /```ts/, stats);
+
+  const user = await hoverAt(tpl, 'user.name');
+  assert.match(user, /```ts\n\{ name: string \} \| null\n```/, user);
+  assert.match(user, /_Can be empty when rendered_/, user);
+  assert.doesNotMatch(user, /Only assigned in a callback/, user); // `$scope.user = null` runs at construction
+
+  // JS side: hovering the assigned property shows the same merged type.
+  const js = open('stats/ctrl.js', 'javascript');
+  const fromJs = await hoverAt(js, 'user = {', 1);
+  assert.match(fromJs, /\*\*Observed type\*\* of `user`\n```ts\n\{ name: string \} \| null\n```/, fromJs);
+});

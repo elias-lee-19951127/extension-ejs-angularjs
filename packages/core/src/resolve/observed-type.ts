@@ -313,10 +313,16 @@ export function observedTypeOf(
 /**
  * The observed type of the template variable at `offset`: a scope member (`rows`, `vm.rows`), a
  * key inside one (`vm.form.name` — up to the segment under the cursor), or an `ng-repeat` item
- * (`row`, `row.id`). `null` when the cursor isn't on one, or nothing assigns it.
+ * (`row`, `row.id`). In a JS file: the property assigned by a `$scope.x = …` / `this.x = …` under
+ * the cursor (`x`, or `extra` in `$scope.form.extra = …`), merged over every assignment to it.
+ * `null` when the cursor isn't on one, or nothing assigns it.
  */
 export function observedTypeAt(src: ObservedTypeSource, relPath: string, offset: number): ObservedTypeResult | null {
   const facts = src.facts(relPath);
+  if (facts?.kind === 'js') {
+    const write = facts.scopeWrites?.find((w) => inSpan(w.span, offset));
+    return write ? observedTypeOf(src, relPath, write.owner, write.path, write.path.join('.')) : null;
+  }
   if (facts?.kind !== 'template') return null;
   const hit = expressionAt(facts, offset);
   if (!hit) return null;

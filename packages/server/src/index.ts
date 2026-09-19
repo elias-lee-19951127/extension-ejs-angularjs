@@ -31,6 +31,7 @@ import {
   offsetForLocation,
   Workspace,
   type Config,
+  type ObservedTypeResult,
   type Span,
   formatDockerCandidateLabel,
   type DockerRuntimeCandidate,
@@ -468,8 +469,44 @@ connection.onHover((params) => {
     if (desc.length) lines.push('', `Scope chain: ${desc.join(' ← ')}`);
   }
 
+  const observed = workspace.observedTypeAt(r, offset);
+  if (observed) {
+    if (lines.length) lines.push('', '---', '');
+    lines.push(...observedTypeLines(observed));
+  }
+
   return lines.length ? { contents: { kind: 'markdown' as const, value: lines.join('\n') } } : null;
 });
+
+const MAX_UNKNOWN_SOURCES = 5;
+
+/**
+ * The Observed Type section of a hover (.scratch/observed-types/spec.md decisions #1, #3, #7):
+ * the merged type, whether it can be empty or is only set in a callback, and where it's assigned.
+ * Never a bare "unknown" — what couldn't be inferred is named with its source.
+ */
+function observedTypeLines(t: ObservedTypeResult): string[] {
+  const lines = [`**Observed type** of \`${t.expression}\``];
+  const sources = t.unknownFrom
+    .slice(0, MAX_UNKNOWN_SOURCES)
+    .map((u) => `\`${u.rhsText || '…'}\` (${fileLink(u.path, u.span)})`)
+    .join(', ');
+
+  if (t.text) {
+    lines.push('```ts', t.text, '```');
+    if (t.partial && sources) lines.push(`- _Some assignments could not be inferred and are left out:_ ${sources}`);
+  } else if (sources) {
+    lines.push(`- _Could not be inferred — assigned from_ ${sources}`);
+  } else {
+    lines.push('- _No type could be inferred from its assignments_ (a key none of them sets, or not an array).');
+  }
+  if (t.nullable) lines.push('- _Can be empty when rendered_ — explicitly assigned `null`/`undefined` somewhere.');
+  if (t.onlyInCallback && t.sites[0]) {
+    lines.push(`- _Only assigned in a callback_ (${fileLink(t.sites[0].path, t.sites[0].span)}) — no value at the first render.`);
+  }
+  if (t.sites.length) lines.push(`- Assigned at: ${t.sites.map((s) => fileLink(s.path, s.span)).join(', ')}`);
+  return lines;
+}
 
 connection.onCompletion((params): CompletionItem[] => {
   const doc = documents.get(params.textDocument.uri);
