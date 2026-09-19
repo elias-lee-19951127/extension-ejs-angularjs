@@ -1468,9 +1468,10 @@ response confirms the initial index has already finished.
   means the file gets skipped until restart.
 - **`index()` runs synchronously:** a checkout that changes thousands of files will block the
   server while scanning, just like at startup.
-- **Out of scope, noted so it isn't forgotten:** the LSP server never calls `workspace.close()`,
-  so the NDJSON cache is only ever written by the CLI — inside the IDE, every startup is a cold
-  index. And `didChangeConfiguration` is still registered dynamically without checking the
+- ~~The LSP server never calls `workspace.close()`, so the NDJSON cache is only ever written by the
+  CLI.~~ **Fixed 2026-09-19:** the server writes the cache on LSP `shutdown`, so the next IDE start
+  is warm (a killed server still starts cold); `.ejsng-cache/` holds its own `.gitignore` (`*`) so
+  it never shows up in the user's `git status`. Still open: `didChangeConfiguration` is still registered dynamically without checking the
   client's capability, the same class of bug as `prepareSupport` in I.7.
 
 ## J.7 Running for real in both IDEs (2026-09-12)
@@ -1516,9 +1517,9 @@ same as on IntelliJ: 0:00.22 flat for the whole 24-second idle period, +70ms aft
 +40ms after reverting it.
 
 The second line is notable for a different reason: this is a **warm** start — 147 files
-unchanged, 158ms — thanks to the NDJSON cache the CLI's `ejsng sweep` had written earlier. The
-server itself still doesn't write the cache (J.6), so inside the IDE it can only warm-start if
-someone ran the CLI first.
+unchanged, 158ms — thanks to the NDJSON cache the CLI's `ejsng sweep` had written earlier. At the
+time the server itself didn't write the cache (J.6), so inside the IDE it could only warm-start if
+someone had run the CLI first — since fixed, the server now writes it on `shutdown`.
 
 And one more thing Appendix D's fix pays off again: the server runs under VSCode's own
 **Electron** (`Code Helper (Plugin)`) and under **Node v24.13.1** in IntelliJ — two completely

@@ -1375,9 +1375,10 @@ sau `initialized`: server xử lý tuần tự, nên khi có phản hồi thì i
   lúc quét làm cache đó sai, và sai thì file bị bỏ qua tới khi khởi động lại.
 - **`index()` chạy đồng bộ:** checkout đổi hàng nghìn file sẽ chặn server trong lúc quét, như lúc
   khởi động.
-- **Ngoài phạm vi, ghi lại để khỏi quên:** server LSP không bao giờ gọi `workspace.close()`, nên
-  cache NDJSON chỉ do CLI ghi — trong IDE mọi lần khởi động đều là index lạnh. Và
-  `didChangeConfiguration` vẫn được đăng ký động mà không kiểm capability của client, cùng loại lỗi
+- ~~Server LSP không bao giờ gọi `workspace.close()`, nên cache NDJSON chỉ do CLI ghi.~~ **Đã sửa
+  2026-09-19:** server ghi cache khi nhận `shutdown` của LSP, lần mở IDE sau là khởi động ấm (server
+  bị kill thì lần sau vẫn lạnh); `.ejsng-cache/` tự chứa `.gitignore` (`*`) nên không lọt vào
+  `git status` của người dùng. Vẫn còn: `didChangeConfiguration` vẫn được đăng ký động mà không kiểm capability của client, cùng loại lỗi
   với `prepareSupport` ở I.7.
 
 ## J.7 Chạy thật trong hai IDE (2026-09-12)
@@ -1420,8 +1421,8 @@ Hai dòng cuối là hai lần sửa từ ngoài editor (đổi, rồi trả l�
 nghỉ, +70ms sau lần đổi, +40ms sau lần trả lại.
 
 Dòng thứ hai đáng chú ý vì lý do khác: đây là khởi động **ấm** — 147 file không đổi, 158ms — nhờ
-cache NDJSON mà `ejsng sweep` của CLI ghi ra trước đó. Server tự nó vẫn không ghi cache (J.6), nên
-trong IDE chỉ ấm được khi có ai đó chạy CLI trước.
+cache NDJSON mà `ejsng sweep` của CLI ghi ra trước đó. Lúc đó server tự nó chưa ghi cache (J.6), nên
+trong IDE chỉ ấm được khi có ai đó chạy CLI trước — nay đã sửa, server ghi cache khi `shutdown`.
 
 Và một điều phụ lục D đã đổi giá để học: server chạy bằng **Electron của VSCode** (`Code Helper
 (Plugin)`) và bằng **Node v24.13.1** trong IntelliJ — hai ABI khác hẳn nhau, cùng một bundle, không

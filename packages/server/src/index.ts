@@ -1331,8 +1331,8 @@ connection.onRequest('ejsng/disconnectRuntime', (params: { key: string }) => {
 });
 
 /**
- * LSP `shutdown`: close every runtime-log connection explicitly rather than leaving the debug
- * sockets for process exit to tear down. `close()`, not `terminate()`: this really is the end, so
+ * LSP `shutdown`: write the index cache, and close every runtime-log connection explicitly rather
+ * than leaving the debug sockets for process exit to tear down. `close()`, not `terminate()`: this really is the end, so
  * send a proper close frame the inspector sees as a clean disconnect. Same delete-first rule as
  * ejsng/disconnectRuntime, so no close handler reports the connection as failed.
  */
@@ -1340,6 +1340,9 @@ connection.onShutdown(() => {
   const sockets = [...runtimeLogConnections.values()].map((info) => info.socket);
   runtimeLogConnections.clear();
   for (const socket of sockets) socket.close(1000, 'language server shutdown');
+  // Persist the index so the next start is warm — `index()` skips every file whose stamp still
+  // matches. Only on a clean shutdown: a killed server just starts cold next time, as before.
+  workspace?.close();
 });
 
 /**
