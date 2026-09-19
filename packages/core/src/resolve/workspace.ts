@@ -12,6 +12,7 @@ import { nearestRows, preferNearest } from './rename';
 import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
+import { observedTypeAt, observedTypeOf, type ObservedTypeResult } from './observed-type';
 import { linkDefinition, linkTemplates, withBinding, type TemplateLinkIndex, type TemplateLinkIssue } from './template-links';
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
@@ -677,6 +678,19 @@ export class Workspace implements FactSource, RenameSource {
   bindTemplate(relPath: string, facts: TemplateFacts): TemplateFacts {
     const binding = this.templateLinks?.bindings.get(relPath);
     return binding ? withBinding(facts, binding) : facts;
+  }
+
+  /**
+   * Observed Type of the template variable at a position — .scratch/observed-types/spec.md.
+   * Reads templates through `facts()`, so a controller bound by `templateUrl` counts too.
+   */
+  observedTypeAt(relPath: string, offset: number): ObservedTypeResult | null {
+    return observedTypeAt(this, relPath, offset);
+  }
+
+  /** Observed Type of `memberPath` (`['form', 'name']`) on a controller's scope, as seen from `from`. */
+  observedTypeOf(from: string, controller: string, memberPath: string[]): ObservedTypeResult | null {
+    return observedTypeOf(this, from, controller, memberPath, memberPath.join('.'));
   }
 
   /** Symbols nobody uses — dead-code candidates. */

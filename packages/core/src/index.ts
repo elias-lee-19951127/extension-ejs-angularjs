@@ -14,6 +14,7 @@ export * from './resolve/rows';
 export * from './resolve/workspace';
 export * from './resolve/linker';
 export * from './resolve/template-links';
+export * from './resolve/observed-type';
 export * from './extract/bindings';
 export * from './resolve/rename';
 export * from './runtime-log';
