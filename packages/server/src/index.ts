@@ -1231,6 +1231,8 @@ interface Logpoint {
   hostPaths: string[];
   /** 0-based, as both LSP and CDP count lines. */
   line: number;
+  /** 0-based column, for a logpoint placed inside a line (log-variable spec #5); absent = the line itself. */
+  character?: number;
   logMessage: string;
   condition?: string;
   /** The file, workspace-relative — `null` outside the workspace, where no index can say what the expressions read. */
@@ -1266,7 +1268,15 @@ function logpointMappings(info: RuntimeLogConnectionInfo): PathMapping[] {
  */
 function setLogpointBreakpoint(info: RuntimeLogConnectionInfo, lp: Logpoint, target: { url: string } | { urlRegex: string }): void {
   const generation = info.logpoints.generation;
-  const params = { ...target, lineNumber: lp.line, condition: buildLogpointCondition(lp) };
+  // With a column, V8 binds to the first breakable position at or after it — measured: right after
+  // `$scope.rows = res.data;` runs after the assignment, one-line functions included. An answer with
+  // `locations: []` is not a failure: V8 compiles functions lazily and binds when they run.
+  const params = {
+    ...target,
+    lineNumber: lp.line,
+    ...(lp.character !== undefined ? { columnNumber: lp.character } : {}),
+    condition: buildLogpointCondition(lp),
+  };
   void info.request('Debugger.setBreakpointByUrl', params).then((result) => {
     const breakpointId = (result as { breakpointId?: unknown } | null)?.breakpointId;
     if (typeof breakpointId !== 'string') return;
@@ -1335,19 +1345,22 @@ function bindScriptLogpoints(info: RuntimeLogConnectionInfo, script: ScriptMetad
 interface LogpointParams {
   uri: string;
   line: number;
+  character?: number;
   logMessage: string;
   condition?: string;
 }
 
 /**
- * What each part of a logpoint's message reads, evaluated where the logpoint runs: the first
- * non-blank character of its line. `undefined` when no expression reads a scope variable.
+ * What each part of a logpoint's message reads, evaluated where the logpoint runs: its column when
+ * it has one, else the first non-blank character of its line. The column matters: in a one-line
+ * `function (res) { $scope.rows = res.data; }`, the line starts OUTSIDE the callback. `undefined`
+ * when no expression reads a scope variable.
  */
-function logpointTargets(relPath: string, line: number, logMessage: string): Array<ScopeTarget | null> | undefined {
+function logpointTargets(relPath: string, line: number, character: number | undefined, logMessage: string): Array<ScopeTarget | null> | undefined {
   const source = workspace?.source(relPath);
   if (!workspace || source == null || !relPath.endsWith('.js')) return undefined;
   const lineStart = offsetForLocation(source, line, 0);
-  const offset = lineStart + (/^\s*/.exec(source.slice(lineStart))?.[0].length ?? 0);
+  const offset = character !== undefined ? lineStart + character : lineStart + (/^\s*/.exec(source.slice(lineStart))?.[0].length ?? 0);
   const targets = parseLogMessage(logMessage).map((part) => (part.kind === 'expr' ? workspace!.scopeTargetAt(relPath, offset, part.expr) : null));
   return targets.some((t) => t) ? targets : undefined;
 }
@@ -1363,11 +1376,13 @@ connection.onNotification('ejsng/setLogpoints', (params: { logpoints?: LogpointP
       const fsPath = URI.parse(lp.uri).fsPath;
       const real = realpathOr(fsPath);
       const relPath = rel(lp.uri);
-      const targets = relPath ? logpointTargets(relPath, lp.line, lp.logMessage) : undefined;
+      const character = Number.isInteger(lp.character) && lp.character! > 0 ? lp.character : undefined;
+      const targets = relPath ? logpointTargets(relPath, lp.line, character, lp.logMessage) : undefined;
       return {
         id: nextLogpointId++,
         hostPaths: real === fsPath ? [fsPath] : [fsPath, real],
         line: lp.line,
+        ...(character !== undefined ? { character } : {}),
         logMessage: lp.logMessage,
         ...(typeof lp.condition === 'string' && lp.condition.trim() ? { condition: lp.condition } : {}),
         relPath,

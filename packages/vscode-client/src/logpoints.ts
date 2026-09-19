@@ -8,13 +8,18 @@ export interface BreakpointLike {
   enabled: boolean;
   condition?: string;
   logMessage?: string;
-  location?: { uri: { scheme: string; toString(): string }; range: { start: { line: number } } };
+  location?: { uri: { scheme: string; toString(): string }; range: { start: { line: number; character?: number } } };
 }
 
 /** One entry of the `ejsng/setLogpoints` notification. */
 export interface LogpointParams {
   uri: string;
   line: number;
+  /**
+   * The column, when not 0: a logpoint placed inside a line (log-variable spec #5) — e.g. right
+   * after `$scope.rows = res.data;` in a one-line function. A gutter logpoint has none.
+   */
+  character?: number;
   logMessage: string;
   condition?: string;
 }
@@ -33,6 +38,7 @@ export function logpointsFrom(breakpoints: readonly BreakpointLike[], enabled: b
     result.push({
       uri: bp.location.uri.toString(),
       line: bp.location.range.start.line,
+      ...(bp.location.range.start.character ? { character: bp.location.range.start.character } : {}),
       logMessage: bp.logMessage,
       ...(bp.condition?.trim() ? { condition: bp.condition } : {}),
     });

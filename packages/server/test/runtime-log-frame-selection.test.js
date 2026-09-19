@@ -417,7 +417,9 @@ test('LSP: ejsng/runtimeStatus reports a wrapper-file suggestion once one file d
   }
 
   let status;
-  const deadline = Date.now() + 3000;
+  // An upper bound only — the loop leaves as soon as all 20 are drawn. 3 s was too tight once the
+  // suite also ran real `node --inspect` tests in parallel (each log waits on a verification round-trip).
+  const deadline = Date.now() + 10000;
   for (;;) {
     status = await statusFor(conn, result.key);
     if (status?.drawn === 20) break;

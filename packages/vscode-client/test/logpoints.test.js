@@ -31,3 +31,12 @@ test('logpointsFrom: plain breakpoints, disabled ones, non-file documents and fu
 test('logpointsFrom: the setting turned off sends an empty list, clearing every logpoint', () => {
   assert.deepStrictEqual(logpointsFrom([sourceBreakpoint('file:///app/a.js', 4, { logMessage: 'x' })], false), []);
 });
+
+test('logpointsFrom: a logpoint inside a line carries its column; a gutter one (column 0) does not', () => {
+  const inLine = { enabled: true, logMessage: 'rows = {$scope.rows}', location: { uri: { scheme: 'file', toString: () => 'file:///app/a.js' }, range: { start: { line: 6, character: 61 } } } };
+  const gutter = { ...inLine, location: { ...inLine.location, range: { start: { line: 6, character: 0 } } } };
+  assert.deepStrictEqual(logpointsFrom([inLine, gutter], true), [
+    { uri: 'file:///app/a.js', line: 6, character: 61, logMessage: 'rows = {$scope.rows}' },
+    { uri: 'file:///app/a.js', line: 6, logMessage: 'rows = {$scope.rows}' },
+  ]);
+});

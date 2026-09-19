@@ -187,3 +187,41 @@ test('LSP + real node --inspect: hover merges what the runtime logged, says wher
   await waitForStatus(conn, (s) => s.connections[0]?.state === 'failed');
   assert.strictEqual(await hover('rows">'), before);
 });
+
+// log-variable ticket 02: the assignment lives in a one-line callback — the line starts OUTSIDE it.
+const ONE_LINER = [
+  'var angular = { module: function () { return { controller: function (n, f) { f.call({}, {}); return this; } }; } };',
+  'function load(n, cb) { cb({ data: [{ id: n }] }); }',
+  "angular.module('app', []).controller('ListCtrl', function ($scope) {",
+  '  var n = 0;',
+  '  setInterval(function () { n++; load(n, function (res) { $scope.rows = res.data; }); }, 40);',
+  '});',
+  '',
+].join('\n');
+
+test('LSP + real node --inspect: a logpoint at a column right after an assignment in a one-line function logs the new value', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-column-logpoint-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'list.controller.js'), ONE_LINER);
+
+  const { port } = await startInspectedNode(t, root, 'list.controller.js');
+  const { conn, runtimeLogs } = await startServer(t, root);
+  const at = positionOf(ONE_LINER, 'res.data;', 'res.data;'.length);
+  conn.sendNotification('ejsng/setLogpoints', {
+    logpoints: [{ uri: pathToFileURL(join(root, 'list.controller.js')).href, line: at.line, character: at.character, logMessage: 'rows = {$scope.rows}' }],
+  });
+  assert.strictEqual((await conn.sendRequest('ejsng/connectRuntime', { host: '127.0.0.1', port })).status, 'connected');
+
+  await waitForStatus(conn, (s) => s.connections[0]?.typeEvidence === 1);
+  await waitForStatus(conn, () => runtimeLogs.filter((l) => l.value.startsWith('rows = ')).length >= 3);
+  const values = runtimeLogs.filter((l) => l.value.startsWith('rows = ')).map((l) => l.value);
+  // Before the assignment it would be `undefined` on the first run; after it, always the array.
+  assert.ok(values.every((v) => v !== 'rows = undefined'), values.join(' | '));
+  assert.strictEqual(runtimeLogs.find((l) => l.value.startsWith('rows = ')).range.start.line, at.line);
+
+  // `$scope` resolved at the column (inside the callback), so it became evidence for `rows`.
+  const uri = pathToFileURL(join(root, 'list.controller.js')).href;
+  conn.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: 'javascript', version: 1, text: ONE_LINER } });
+  const hover = await conn.sendRequest('textDocument/hover', { textDocument: { uri }, position: positionOf(ONE_LINER, 'rows = res', 1) });
+  assert.match(hover.contents.value, /```ts\n\{ id: number \}\[\]\n```/, hover.contents.value);
+});
