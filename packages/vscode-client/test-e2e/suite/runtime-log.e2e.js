@@ -84,7 +84,11 @@ test('a later log on the same line replaces the value; a file opened afterwards 
     () => api.decorations(workerUri.toString()).length > 0 && api.decorations(workerUri.toString()),
     'worker.js to be decorated once opened',
   );
-  assert.deepStrictEqual(drawn, [{ line: 1, text: '  » second' }]);
+  assert.deepStrictEqual(drawn, [{ line: 1, text: '  » second (×2)' }]);
+  // Ticket 05: the earlier value is kept for the hover, with its own source.
+  const [hover] = api.hovers(workerUri.toString());
+  assert.strictEqual(hover.history.length, 1);
+  assert.match(hover.history[0], /^node 127\.0\.0\.1:\d+ · log · \d\d:\d\d:\d\d — first$/);
 });
 
 test('two connections at once: status bar and panel count both; Disconnect closes only the one picked', async () => {
@@ -159,4 +163,28 @@ test('the checklist names what broke: a missing mapping, a Stale File, every fra
 
   assert.deepStrictEqual(api.decorations(staleUri.toString()), [], 'a Stale File is never drawn');
   await waitFor(() => stepById(api.panelState().steps, 'logs').counts.dropped === 3, 'the panel to show the same checklist');
+});
+
+test('a line hit several times shows its count; reconnecting to the same runtime (an app restart) resets it', async () => {
+  const api = await extensionApi();
+  const historyUri = workspaceUri('history.js');
+  await vscode.window.showTextDocument(historyUri, { preview: false });
+  const runtime = await startFakeRuntime({ id: 'restarting', title: 'restarting app' });
+  const key = await connectThroughCommand(api, runtime);
+
+  for (const i of [0, 1, 2]) runtime.sendLog(String(i), { url: '/srv/app/history.js', line: 1 });
+  const drawn = await waitFor(
+    () => api.decorations(historyUri.toString()).find((d) => d.text === '  » 2 (×3)'),
+    'the loop line drawn with its count',
+  );
+  assert.strictEqual(drawn.line, 1);
+  assert.strictEqual(api.hovers(historyUri.toString())[0].history.length, 2);
+
+  await disconnect(api, key);
+  await connectThroughCommand(api, runtime);
+  await waitFor(() => api.decorations(historyUri.toString()).length === 0, 'the previous run’s values to be cleared');
+
+  runtime.sendLog('fresh', { url: '/srv/app/history.js', line: 1 });
+  const fresh = await waitFor(() => api.decorations(historyUri.toString())[0], 'the new run’s value');
+  assert.strictEqual(fresh.text, '  » fresh');
 });

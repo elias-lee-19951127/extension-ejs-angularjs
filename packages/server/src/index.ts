@@ -865,7 +865,7 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
   if (info.state === state && info.reason === reason) return;
   info.state = state;
   info.reason = reason;
-  void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason });
+  void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason, endpoint: info.meta.endpoint });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -987,6 +987,8 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     // Which connection this came from — with two containers running the same code, the same
     // line can be hit by either, and the hover is where the user tells them apart.
     source: runtimeSourceLabel(info.meta),
+    // Ticket 05 (log history): a reconnect to this endpoint resets what it logged before.
+    endpoint: info.meta.endpoint,
   });
 }
 

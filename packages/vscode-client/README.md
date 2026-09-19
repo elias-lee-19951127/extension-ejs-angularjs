@@ -18,7 +18,7 @@ to every template that reads it, rename across both, and dead-code detection.
 | Shape-based completion | `busy.` → the keys actually assigned on that object |
 | Dead code | controller / directive / filter / property nobody uses |
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
-| Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity; hover the line to see which container or tab it came from, when, and the full value |
+| Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity; a line hit many times shows its count (`» 42 (×3)`); hover the line to see which container or tab it came from, when, the full value, and the last few values before it |
 | Inline logpoints | VS Code logpoints (right-click the gutter → **Add Logpoint…**, e.g. `user = {user.name}`) show inline while connected — no code change, no restart, no debug session, and the app never pauses |
 | Runtime Log panel | One **Connect** button finds your Node container through Docker, maps container paths from its mounts, and shows a step-by-step checklist of what works and why not — with fixes right on the failing step |
 

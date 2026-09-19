@@ -418,3 +418,70 @@ test('formatRuntimeLogHoverTitle: source, severity and local time; an old server
   );
   assert.strictEqual(formatRuntimeLogHoverTitle({ line: 1, character: 0, value: 'x', severity: 'log' }), 'unknown runtime · log');
 });
+
+// ---- Ticket 05 (.scratch/inline-runtime-log/issues/05-log-history.md): per-line history and count ----
+
+const { RUNTIME_LOG_HISTORY_PER_LINE, formatRuntimeLogInline, formatRuntimeLogHistory } = require('../out/runtime-log-state');
+
+const hit = (value, extra = {}) => ({ line: 4, character: 0, value, severity: 'log', ...extra });
+
+test('RuntimeLogState history: a line keeps its last values, most recent first, capped — and counts every hit', () => {
+  const state = new RuntimeLogState();
+  for (let i = 1; i <= 25; i++) state.record('file:///a.js', hit(`v${i}`));
+  const [line] = state.linesFor('file:///a.js');
+  assert.strictEqual(line.count, 25);
+  assert.strictEqual(line.history.length, RUNTIME_LOG_HISTORY_PER_LINE);
+  assert.deepStrictEqual(line.history.slice(0, 3).map((e) => e.value), ['v25', 'v24', 'v23']);
+  assert.deepStrictEqual(state.entriesFor('file:///a.js').map((e) => e.value), ['v25'], 'the latest value is still what entriesFor gives');
+});
+
+test('formatRuntimeLogInline: the count appears only once a line has been hit more than once', () => {
+  assert.strictEqual(formatRuntimeLogInline({ line: 4, count: 1, history: [hit('"tổng: 42"')] }), '  » "tổng: 42"');
+  assert.strictEqual(formatRuntimeLogInline({ line: 4, count: 3, history: [hit('"tổng: 42"')] }), '  » "tổng: 42" (×3)');
+});
+
+test('formatRuntimeLogHistory: earlier values with their own source, one line each, and what is no longer kept', () => {
+  const at = new Date(2026, 8, 19, 9, 5, 7).getTime();
+  const line = {
+    line: 4,
+    count: 14,
+    history: [hit('latest', { source: 'cityos-web', at }), hit('{a: 1,\n b: 2}', { source: 'cityos-app', at }), hit('x'.repeat(300), { source: 'cityos-web', at })],
+  };
+  const items = formatRuntimeLogHistory(line);
+  assert.strictEqual(items[0], 'cityos-app · log · 09:05:07 — {a: 1, b: 2}');
+  assert.ok(items[1].endsWith('…') && items[1].length < 200);
+  assert.strictEqual(items[2], '…and 11 earlier not kept');
+  assert.deepStrictEqual(formatRuntimeLogHistory({ line: 4, count: 1, history: [hit('only')] }), []);
+});
+
+test('RuntimeLogState.resetEndpoint: a reconnected endpoint loses its own values and hits; another runtime’s stay', () => {
+  const state = new RuntimeLogState();
+  state.record('file:///a.js', hit('web 1', { endpoint: '127.0.0.1:9229' }));
+  state.record('file:///a.js', hit('app 1', { endpoint: '127.0.0.1:9228' }));
+  state.record('file:///a.js', hit('web 2', { endpoint: '127.0.0.1:9229' }));
+  state.record('file:///b.js', hit('web only', { endpoint: '127.0.0.1:9229' }));
+
+  assert.deepStrictEqual(state.resetEndpoint('127.0.0.1:9229').sort(), ['file:///a.js', 'file:///b.js']);
+  const [line] = state.linesFor('file:///a.js');
+  assert.strictEqual(line.count, 1);
+  assert.deepStrictEqual(line.history.map((e) => e.value), ['app 1']);
+  assert.deepStrictEqual(state.linesFor('file:///b.js'), []);
+  assert.deepStrictEqual(state.resetEndpoint('127.0.0.1:9999'), []);
+});
+
+test('RuntimeLogState.applyEdit: lines below move with inserted/removed lines; lines inside a multi-line replacement go', () => {
+  const state = new RuntimeLogState();
+  for (const line of [1, 3, 5, 8]) state.record('file:///a.js', { line, character: 0, value: `L${line}`, severity: 'log' });
+  const at = () => state.linesFor('file:///a.js').map((l) => [l.line, l.history[0].value, l.history[0].line]).sort((x, y) => x[0] - y[0]);
+
+  // Two lines inserted by an edit on line 2 (text with two newlines): 3 -> 5, 5 -> 7, 8 -> 10.
+  assert.strictEqual(state.applyEdit('file:///a.js', 2, 2, 3), true);
+  assert.deepStrictEqual(at(), [[1, 'L1', 1], [5, 'L3', 5], [7, 'L5', 7], [10, 'L8', 10]]);
+
+  // Lines 4..7 replaced by one line: 5 and 7 are gone, 10 -> 7.
+  assert.strictEqual(state.applyEdit('file:///a.js', 4, 7, 1), true);
+  assert.deepStrictEqual(at(), [[1, 'L1', 1], [7, 'L8', 7]]);
+
+  // Typing within one line changes nothing.
+  assert.strictEqual(state.applyEdit('file:///a.js', 1, 1, 1), false);
+});

@@ -8,6 +8,8 @@ export interface RuntimeLogEntry {
   source?: string;
   /** `Date.now()` when the value arrived. */
   at?: number;
+  /** `host:port` of the connection it came from — what a reconnect resets. */
+  endpoint?: string;
 }
 
 /**
@@ -215,34 +217,142 @@ export function formatRuntimeStatusBarText(connectionCount: number, summary: Run
   return `EJS/NG Runtime: received ${summary.received} / drawn ${summary.drawn} / dropped ${summary.dropped}${note}`;
 }
 
+/** How many past values each line keeps for its hover (.scratch/inline-runtime-log/issues/05-log-history.md). */
+export const RUNTIME_LOG_HISTORY_PER_LINE = 10;
+
+/** One line's runtime log: the latest value, the last few before it, and how many hits in total. */
+export interface RuntimeLogLine {
+  line: number;
+  /** Most recent first; `history[0]` is the value drawn inline. At most `RUNTIME_LOG_HISTORY_PER_LINE`. */
+  history: RuntimeLogEntry[];
+  /** Every hit since the last reset — can exceed `history.length`, which is capped. */
+  count: number;
+}
+
+interface LineState {
+  history: RuntimeLogEntry[];
+  /** Hits per endpoint, so resetting one endpoint subtracts exactly its own hits from the total. */
+  countByEndpoint: Map<string, number>;
+}
+
+const total = (l: LineState): number => [...l.countByEndpoint.values()].reduce((a, b) => a + b, 0);
+
 /**
- * Per-file, per-line latest-value state (spec decision #6: no history, latest value per line
- * wins). No `vscode` import — pure state, so the extension's decoration-drawing code can stay a
- * thin layer on top of this.
+ * Per-file, per-line runtime log state: the latest value per line (spec decision #6), plus — ticket
+ * 05 — a short history and a hit count, for a line that runs many times in a loop. Memory is
+ * bounded per line (`RUNTIME_LOG_HISTORY_PER_LINE`), whatever the log rate.
+ *
+ * Kept here in the client, next to the decorations it feeds, rather than in the server as the
+ * ticket first suggested: the server has never held drawn state, and the latest-value state this
+ * extends was already client-side. No `vscode` import — pure state, tested without an Extension Host.
  */
 export class RuntimeLogState {
-  private readonly byUri = new Map<string, Map<number, RuntimeLogEntry>>();
+  private readonly byUri = new Map<string, Map<number, LineState>>();
 
-  /** Record a notification; returns every current entry for that file. */
+  /** Record a notification; returns every current (latest) entry for that file. */
   record(uri: string, entry: RuntimeLogEntry): RuntimeLogEntry[] {
     let lines = this.byUri.get(uri);
     if (!lines) {
       lines = new Map();
       this.byUri.set(uri, lines);
     }
-    lines.set(entry.line, entry);
-    return [...lines.values()];
+    let state = lines.get(entry.line);
+    if (!state) {
+      state = { history: [], countByEndpoint: new Map() };
+      lines.set(entry.line, state);
+    }
+    state.history.unshift(entry);
+    if (state.history.length > RUNTIME_LOG_HISTORY_PER_LINE) state.history.length = RUNTIME_LOG_HISTORY_PER_LINE;
+    const endpoint = entry.endpoint ?? '';
+    state.countByEndpoint.set(endpoint, (state.countByEndpoint.get(endpoint) ?? 0) + 1);
+    return this.entriesFor(uri);
   }
 
-  /** All current entries for a file — e.g. to redraw decorations after reopening a document. */
+  /** All current (latest) entries for a file — e.g. to redraw decorations after reopening a document. */
   entriesFor(uri: string): RuntimeLogEntry[] {
-    return [...(this.byUri.get(uri)?.values() ?? [])];
+    return this.linesFor(uri).map((l) => l.history[0]!);
   }
 
-  /** Drop all state for a file — e.g. its target process restarted. */
+  /** Every line of a file with its history and hit count — what decorations and hovers are drawn from. */
+  linesFor(uri: string): RuntimeLogLine[] {
+    return [...(this.byUri.get(uri)?.entries() ?? [])].map(([line, l]) => ({ line, history: [...l.history], count: total(l) }));
+  }
+
+  /** Drop all state for a file. */
   clear(uri: string): void {
     this.byUri.delete(uri);
   }
+
+  /**
+   * Forget everything one endpoint reported — it just (re)connected, so what it logged before
+   * came from a run that is over (the app restarted, or was redeployed). Other runtimes' values
+   * on the same lines stay. Returns the files that changed, to redraw.
+   */
+  resetEndpoint(endpoint: string): string[] {
+    const changed: string[] = [];
+    for (const [uri, lines] of this.byUri) {
+      let touched = false;
+      for (const [line, state] of lines) {
+        if (!state.countByEndpoint.has(endpoint)) continue;
+        touched = true;
+        state.countByEndpoint.delete(endpoint);
+        state.history = state.history.filter((e) => (e.endpoint ?? '') !== endpoint);
+        if (state.history.length === 0) lines.delete(line);
+      }
+      if (touched) changed.push(uri);
+      if (lines.size === 0) this.byUri.delete(uri);
+    }
+    return changed;
+  }
+
+  /**
+   * Keep lines attached to their code across an edit: lines `startLine..endLine` (0-based, as they
+   * were) were replaced by text spanning `newLineCount` lines. Lines above are untouched, lines
+   * below move by the difference, and lines strictly inside a multi-line replacement are dropped —
+   * their code is gone. The edited start line keeps its values. Returns whether anything changed.
+   */
+  applyEdit(uri: string, startLine: number, endLine: number, newLineCount: number): boolean {
+    const lines = this.byUri.get(uri);
+    if (!lines) return false;
+    const delta = newLineCount - 1 - (endLine - startLine);
+    if (delta === 0 && endLine === startLine) return false;
+    const moved = new Map<number, LineState>();
+    let changed = false;
+    for (const [line, state] of lines) {
+      if (line <= startLine) moved.set(line, state);
+      else if (line <= endLine) changed = true; // replaced
+      else {
+        moved.set(line + delta, { ...state, history: state.history.map((e) => ({ ...e, line: line + delta })) });
+        if (delta !== 0) changed = true;
+      }
+    }
+    this.byUri.set(uri, moved);
+    return changed;
+  }
+}
+
+/** The inline text for a line: its latest value, and how many hits when there were several. */
+export function formatRuntimeLogInline(line: RuntimeLogLine): string {
+  const value = line.history[0]?.value ?? '';
+  return line.count > 1 ? `  » ${value} (×${line.count})` : `  » ${value}`;
+}
+
+/** A value shortened to one line for the history list in a hover. */
+function oneLine(value: string, max = 120): string {
+  const flat = value.replace(/\s*\n\s*/g, ' ');
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/**
+ * The earlier values listed under the latest one in a hover, most recent first — each with its
+ * own source and time, since two containers can take turns on the same line. The last entry says
+ * how many hits are no longer kept, if any.
+ */
+export function formatRuntimeLogHistory(line: RuntimeLogLine): string[] {
+  const earlier = line.history.slice(1).map((e) => `${formatRuntimeLogHoverTitle(e)} — ${oneLine(e.value)}`);
+  const dropped = line.count - line.history.length;
+  if (dropped > 0) earlier.push(`…and ${dropped} earlier not kept`);
+  return earlier;
 }
 
 // ---------------------------------------------------------------------------------------------

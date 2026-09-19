@@ -9,7 +9,9 @@ import {
 } from 'vscode-languageclient/node';
 import {
   escapeGlobPath,
+  formatRuntimeLogHistory,
   formatRuntimeLogHoverTitle,
+  formatRuntimeLogInline,
   formatRuntimeStatusBarText,
   mappingForSettings,
   orderByLastAppPort,
@@ -18,6 +20,7 @@ import {
   type RuntimeChecklistFix,
   type RuntimeChecklistStep,
   type RuntimeLogEntry,
+  type RuntimeLogLine,
   type RuntimeStatusConnection,
   type RuntimeStatusSummary,
 } from './runtime-log-state';
@@ -618,6 +621,7 @@ interface RuntimeLogNotification {
   value: string;
   severity: 'log' | 'warning' | 'error';
   source?: string;
+  endpoint?: string;
 }
 
 /** ANSI theme colors so the decoration matches the severity at a glance, in any color theme. */
@@ -627,11 +631,25 @@ const SEVERITY_COLOR: Record<RuntimeLogEntry['severity'], string> = {
   error: 'terminal.ansiRed',
 };
 
-function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): void {
+/** The hover for one line: where the latest value came from, the value in full, then the earlier ones. */
+function runtimeLogHover(line: RuntimeLogLine): vscode.MarkdownString {
+  const latest = line.history[0]!;
+  const md = new vscode.MarkdownString().appendText(formatRuntimeLogHoverTitle(latest)).appendCodeblock(latest.value, 'text');
+  const earlier = formatRuntimeLogHistory(line);
+  if (earlier.length > 0) {
+    md.appendMarkdown(`\n\n**${line.count} hits** — earlier, most recent first:\n\n`);
+    for (const item of earlier) md.appendMarkdown('- ').appendText(item).appendMarkdown('\n');
+  }
+  return md;
+}
+
+function redrawRuntimeLogDecorations(uri: string): void {
   if (!runtimeLogDecorationType) return;
   const editor = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uri);
   if (!editor) return;
-  const options: vscode.DecorationOptions[] = entries.map((e) => {
+  const lines = runtimeLogState.linesFor(uri).filter((l) => l.line < editor.document.lineCount);
+  const options: vscode.DecorationOptions[] = lines.map((l) => {
+    const e = l.history[0]!;
     // Anchor at the END of the line, not the exact call-site column — the column can land
     // mid-expression (e.g. inside `console.log(...)`), which reads as broken, not inline.
     // The range spans the whole line so hovering anywhere on it shows where the value came from;
@@ -639,9 +657,9 @@ function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): v
     const line = editor.document.lineAt(e.line);
     return {
       range: new vscode.Range(line.range.start, line.range.end),
-      hoverMessage: new vscode.MarkdownString().appendText(formatRuntimeLogHoverTitle(e)).appendCodeblock(e.value, 'text'),
+      hoverMessage: runtimeLogHover(l),
       renderOptions: {
-        after: { contentText: `  » ${e.value}`, color: new vscode.ThemeColor(SEVERITY_COLOR[e.severity]) },
+        after: { contentText: formatRuntimeLogInline(l), color: new vscode.ThemeColor(SEVERITY_COLOR[e.severity]) },
       },
     };
   });
@@ -652,12 +670,12 @@ function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): v
   );
   renderedHovers.set(
     uri,
-    entries.map((e) => ({ line: e.line, title: formatRuntimeLogHoverTitle(e) })),
+    lines.map((l) => ({ line: l.line, title: formatRuntimeLogHoverTitle(l.history[0]!), history: formatRuntimeLogHistory(l) })),
   );
 }
 
-/** The hover title last drawn per line, per file — like `renderedDecorations`, for tests only. */
-const renderedHovers = new Map<string, Array<{ line: number; title: string }>>();
+/** The hover last drawn per line, per file — like `renderedDecorations`, for tests only. */
+const renderedHovers = new Map<string, Array<{ line: number; title: string; history: string[] }>>();
 
 /**
  * What was last handed to `setDecorations`, per file — VS Code offers no API to read decorations
@@ -674,7 +692,7 @@ const renderedDecorations = new Map<string, Array<{ line: number; text: string }
 export interface EjsngTestApi {
   decorations(uri: string): Array<{ line: number; text: string }>;
   /** The first line of each drawn log's hover — its source, severity and time. */
-  hovers(uri: string): Array<{ line: number; title: string }>;
+  hovers(uri: string): Array<{ line: number; title: string; history: string[] }>;
   statusBarText(): string;
   /** The last `status` message posted to the panel's webview, or `undefined` if it never resolved. */
   panelState(): unknown;
@@ -833,9 +851,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     vscode.window.onDidChangeVisibleTextEditors((editors) => {
       for (const editor of editors) {
         const uri = editor.document.uri.toString();
-        const entries = runtimeLogState.entriesFor(uri);
-        if (entries.length) redrawRuntimeLogDecorations(uri, entries);
+        if (runtimeLogState.linesFor(uri).length) redrawRuntimeLogDecorations(uri);
       }
+    }),
+    // Ticket 05: keep each line's history on its code while the file is edited. Changes are
+    // applied bottom-up so each range still refers to the text as it was before the edit.
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      const uri = e.document.uri.toString();
+      if (runtimeLogState.linesFor(uri).length === 0) return;
+      let changed = false;
+      const changes = [...e.contentChanges].sort((a, b) => b.range.start.line - a.range.start.line);
+      for (const c of changes) {
+        changed = runtimeLogState.applyEdit(uri, c.range.start.line, c.range.end.line, c.text.split('\n').length) || changed;
+      }
+      if (changed) redrawRuntimeLogDecorations(uri);
     }),
   );
 
@@ -845,21 +874,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
   void refreshRuntimeStatus();
 
   client.onNotification('ejsng/runtimeLog', (params: RuntimeLogNotification) => {
-    const entries = runtimeLogState.record(params.uri, {
+    runtimeLogState.record(params.uri, {
       line: params.range.start.line,
       character: params.range.start.character,
       value: params.value,
       severity: params.severity,
       source: params.source,
       at: Date.now(),
+      ...(params.endpoint ? { endpoint: params.endpoint } : {}),
     });
-    redrawRuntimeLogDecorations(params.uri, entries);
+    redrawRuntimeLogDecorations(params.uri);
   });
 
   // The REAL connecting -> connected/failed transition (ticket 02, item 4) — pushed so the
   // status bar/panel don't have to wait for the next poll tick to stop lying about a connection
   // that's still `connecting` or has already `failed`.
-  client.onNotification('ejsng/runtimeStatusChanged', () => void refreshRuntimeStatus());
+  client.onNotification('ejsng/runtimeStatusChanged', (params: { state?: string; endpoint?: string }) => {
+    // Ticket 05: an endpoint that (re)connects is a new run of the app — what it logged before no
+    // longer describes it. Reset on connect rather than on the drop, so the last values before a
+    // crash stay readable until the app is back.
+    if (params.state === 'connected' && params.endpoint) {
+      for (const uri of runtimeLogState.resetEndpoint(params.endpoint)) redrawRuntimeLogDecorations(uri);
+    }
+    void refreshRuntimeStatus();
+  });
 
   // Inline logpoints (.scratch/inline-logpoints/spec.md): the server sets VS Code's logpoints on the
   // runtime itself, so they work without a VS Code debug session. Always the whole list — the
