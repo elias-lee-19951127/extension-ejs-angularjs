@@ -332,12 +332,21 @@ function toRange(source: string, span: Span): Range {
   return { start: posOf(span.start), end: posOf(span.end) };
 }
 
+/**
+ * The URI of a workspace file, always addressed through the configured root — which is what keeps
+ * it matching the editor's own URI when the root sits behind a symlink. The one place every
+ * workspace-relative location in this server is turned into a URI.
+ */
+function workspaceUri(ws: Workspace, relPath: string): string {
+  return URI.file(`${ws.config.root}/${relPath}`).toString();
+}
+
 function toLocation(relPath: string, span: Span): Location | null {
   if (!workspace) return null;
   const source = workspace.source(relPath);
   if (source === null) return null;
   return {
-    uri: URI.file(`${workspace.config.root}/${relPath}`).toString(),
+    uri: workspaceUri(workspace, relPath),
     range: toRange(source, span),
   };
 }
@@ -351,7 +360,7 @@ function toLocation(relPath: string, span: Span): Location | null {
  */
 function fileLink(relPath: string, span?: Span): string {
   if (!workspace) return `\`${relPath}\``;
-  const uri = URI.file(`${workspace.config.root}/${relPath}`).toString();
+  const uri = workspaceUri(workspace, relPath);
   const source = span ? workspace.source(relPath) : null;
   if (!span || source === null) return `[${relPath}](${uri})`;
   const line = toRange(source, span).start.line + 1;
@@ -980,7 +989,7 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     info.outsideWorkspaceDirs.add(dirname(hostPath));
   }
   void connection.sendNotification('ejsng/runtimeLog', {
-    uri: URI.file(inWorkspace ? `${workspace.config.root}/${relPath}` : hostPath).toString(),
+    uri: inWorkspace ? workspaceUri(workspace, relPath) : URI.file(hostPath).toString(),
     range: toRange(source, { start: offset, end: offset }),
     value: stripAnsi(log.value),
     severity: log.severity,
