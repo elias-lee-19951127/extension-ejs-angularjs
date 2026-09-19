@@ -46,8 +46,14 @@ at `list.controller.js:30`) — never a bare `unknown`.
 **Inline** hints are deliberately rare: only `may be empty`, after a variable in an Angular expression
 that is explicitly assigned `null`/`undefined`/`void 0` somewhere. No inline hint for a variable only
 assigned in a callback (nearly all async-loaded data), in JS files, or for EJS locals. Turn it off with
-`ejsng.typeHints.nullable`. This version uses static sources only (the index); types seen at runtime
-come later — see `docs/architecture.md` section 5.3.
+`ejsng.typeHints.nullable`.
+
+**Types seen at runtime.** Where the index can't tell (`$scope.rows = res.data`), let the runtime show
+it: while Runtime Log is connected, set a logpoint `rows = {vm.rows}` (or already have a
+`console.log($scope.rows)`) — next time that line runs, hovering `vm.rows` in the template shows the real
+type, with a *Seen at runtime* line (how often, when, from which connection). Only the type is kept,
+never the value; disconnecting drops it. The status bar counts `N types seen`. Inline hints never change
+because of the runtime. Details: `docs/architecture.md` section 5.3.2.
 
 ## Getting started
 

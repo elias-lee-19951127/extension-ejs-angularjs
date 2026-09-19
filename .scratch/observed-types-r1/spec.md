@@ -1,6 +1,6 @@
 # Spec: Kiểu đã thấy từ runtime — R1 (giá trị của `console.log` / logpoint)
 
-**Ngày viết:** 2026-09-19 · **Trạng thái:** đã chốt 2026-09-19 (người dùng đồng ý mọi đề xuất) — ticket 01–05, chưa triển khai
+**Ngày viết:** 2026-09-19 · **Trạng thái:** đã triển khai 2026-09-20 — ticket 01–05 done; còn verify tay hover trong VS Code thật (ticket 05)
 **Nối tiếp:** `.scratch/observed-types/spec.md` (bản 1, nguồn tĩnh — xong). Đây là nguồn **R1** trong
 "Lộ trình nguồn runtime" của spec đó, cắm vào mô hình **Bằng chứng kiểu (Type Evidence)** (quyết định #8).
 
@@ -18,8 +18,9 @@ Không làm dev phải làm gì mới: không setting, không lệnh. Chỉ log 
 
 ## Số liệu đo (V8 của Node 20.20, 2026-09-19)
 
-Đo bằng `node:inspector` trong tiến trình (script ở scratchpad, không vào repo). Chrome dùng cùng
-V8 inspector nên kỳ vọng giống — **ticket verify phải đo lại trên Chrome thật**.
+Đo bằng `node:inspector` trong tiến trình (script ở scratchpad, không vào repo). **Đo lại trên Chrome
+153 headless (2026-09-20): giống hệt** mọi dòng dưới đây; `getProperties` của mảng 150 phần tử 3.8 ms.
+DOM node có `subtype: node` → hiện theo tên class (`HTMLBodyElement`), không đào.
 
 | | |
 |---|---|
@@ -57,6 +58,13 @@ V8 inspector nên kỳ vọng giống — **ticket verify phải đo lại trên
 - Log phía Node (Express) — không có `$scope`; EJS local là việc của **R4**.
 - Inline hint từ bằng chứng runtime (quyết định #9); hiển thị giá trị mẫu (quyết định #6).
 - IntelliJ: hover đi qua LSP nên có sẵn, nhưng Runtime Log chưa có client IntelliJ (`inline-runtime-log/03`) → thực tế chỉ VS Code.
+
+## Thực tế trên `smart-city` (đo 2026-09-20, sau khi làm)
+
+288 lời gọi `console.*`; 8 nằm trong thân khai báo Angular; **0** log biến scope (đều log chuỗi hoặc
+biến cục bộ như `error`, `event`; phần lớn còn lại ở test và code Node). Nhánh (b) của quyết định #1 —
+log sẵn có — không đóng góp gì trên repo này; giá trị của R1 đến từ **logpoint dev chủ động đặt**.
+Ứng viên tiếp theo: lệnh "log biến này" từ hover, đặt logpoint `{vm.rows}` hộ dev.
 
 ## Rủi ro / chưa biết
 

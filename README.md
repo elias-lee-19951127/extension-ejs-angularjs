@@ -44,8 +44,13 @@ ra được thì ghi lý do và nguồn (`res.data` ở `list.controller.js:30`)
 Chú thích **inline** thì cố ý hiếm: chỉ `may be empty` sau biến trong biểu thức Angular khi biến đó
 có lần gán tường minh `null`/`undefined`/`void 0`. Không inline cho biến chỉ gán trong callback
 (gần như mọi dữ liệu tải async), không inline ở file JS hay EJS local. Tắt bằng
-`ejsng.typeHints.nullable`. Bản này chỉ dùng nguồn tĩnh (index); kiểu thấy lúc chạy sẽ đến sau —
-xem `docs/kien-truc.md` mục 5.3.
+`ejsng.typeHints.nullable`.
+
+**Kiểu thấy lúc chạy.** Chỗ index bó tay (`$scope.rows = res.data`) thì cho runtime xem: khi đang nối
+Runtime Log, đặt một logpoint `rows = {vm.rows}` (hoặc có sẵn `console.log($scope.rows)`) — lần sau dòng
+đó chạy, hover trên `vm.rows` trong template có kiểu thật, kèm dòng *Seen at runtime* (bao nhiêu lần, lúc
+nào, từ kết nối nào). Chỉ giữ kiểu, không giữ giá trị; ngắt kết nối là mất. Thanh trạng thái đếm
+`N types seen`. Chú thích inline không đổi theo runtime. Chi tiết: `docs/kien-truc.md` mục 5.3.2.
 
 ## Bắt đầu
 

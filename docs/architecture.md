@@ -404,13 +404,66 @@ may contain personal data.
 
 | Version | Source | Notes |
 |---|---|---|
-| 2 | **R1** — values from `console.log`/logpoints the Runtime Log pipeline already receives (`type/subtype/preview` of a CDP `RemoteObject`) | Nearly free; only for expressions that are logged. |
+| 2 | **R1** — values from `console.log`/logpoints the Runtime Log pipeline already receives (`type/subtype/preview` of a CDP `RemoteObject`) | **Done** (2026-09-20, see below). Not free as assumed: the preview is too shallow, so `Runtime.getProperties` is needed on top. |
 | 2 | **R4** — an always-`false` conditional breakpoint at each `res.render(...)`, recording the shape of the locals through `Runtime.addBinding` | Targets exactly the EJS 500 error (`<%= user.name %>` with `user` undefined) — which static analysis barely knows about, since the type comes from `req`/the DB. |
 | 3 | **R3** — on hover, `Runtime.evaluate` `angular.element(el).scope()…` on a connected tab, with `throwOnSideEffect: true` | The real current value. Hard part: finding the DOM element for the template. Doesn't work if the app is built with `debugInfoEnabled(false)`. |
 
 **R2 dropped** (an automatic probe after every assignment): the probe runs every time that line
 runs — hot loops included — and leaves hundreds of hidden breakpoints that are hard to debug. R1 + R3
 cover the need without either cost.
+
+#### 5.3.2 R1 — types from logged values (2026-09-20)
+
+Spec: `.scratch/observed-types-r1/spec.md`. When Runtime Log draws a log whose argument is a scope
+variable — a `{vm.rows}` part of a logpoint, or an argument of a **direct** `console.<method>(…)` — the
+value's type becomes **Type Evidence** with `source: 'runtime'` and is merged into the hover.
+
+**Measured first (Node 20.20 and Chrome 153 gave identical results):**
+
+| | |
+|---|---|
+| Object preview in `consoleAPICalled` | at most **5 keys** (`overflow: true`) |
+| Array preview | at most **100 elements** |
+| Nested object / array element in a preview | **no keys at all** — just `{type: "object", value: "Object"}` |
+| Getter | `type: "accessor"`, **never run** (in the preview and in `getProperties`) |
+| `Runtime.getProperties({ownProperties, generatePreview})` | 0.2–0.4 ms for a small object; 2–4 ms for a 150-element array, each element with a 5-key preview |
+
+So for the main case, `console.log($scope.rows)` — an array of objects — the preview says nothing about
+the elements' keys. The server therefore **digs** with `getProperties`: level by level (calls within a
+level in parallel, shallow levels first), down to the hover's limits (2 levels, 8 keys), sampling 3
+array elements (first/middle/last), **≤ 12 requests per log**. The same place logging a value of the
+same preview type within 30 s is only counted, not dug again. Digging runs **after** the log is drawn and
+off the drawing queue, so it never slows logs down.
+
+**Open objects.** What isn't dug keeps its preview and is marked `open`: when merged, the keys it has
+are added, but the keys it lacks do **not** turn optional (otherwise every key past the 5th in a preview
+would become `id?` — systematically wrong). The hover ends an open object with `…`.
+
+**Tying a log to a variable.** Done at index time, not when a log arrives: the fact
+`JsFacts.consoleCalls` records every direct `console.*` call in an Angular declaration with the scope
+variable each argument reads (same rules as `scopeWrites`: `$scope`, `this`, `var vm = this`). It is
+looked up by the position of the **method name** — V8 was measured to put a console call's frame exactly
+there (even for `console . log (` split over lines). Logpoints: expressions are resolved once, at
+`ejsng/setLogpoints`. Logging through a wrapper, logging a local, `a[0]` → not tied (a wrong match is
+worse than none).
+
+**What is kept, and for how long.** Only the **type**, never the value. A dictionary object (> 50 keys,
+or keys that aren't identifiers — e.g. e-mails) becomes `Record<string, T>`, since its keys are data.
+`$$hashKey` is dropped. The store lives on the connection itself: reconnecting, disconnecting or the
+runtime dying drops it. At most 20 types per variable, 2000 in all. Runtime evidence carries an
+`ObservedType` directly instead of widening `ValueShape` — `ValueShape` is the cached index format and
+completion's input, and can't express the mixed-element unions real values often have.
+
+**Inline hints don't move.** A runtime seeing `null` makes the hover say "Seen `null`/`undefined` at
+runtime", but `nullable` (and the `may be empty` hint) is still computed from static assignments only: a
+log runs at an arbitrary moment, not at render time, and a hint must not appear and disappear depending on
+whether a runtime is connected.
+
+**In practice on `smart-city` (measured 2026-09-20):** 288 `console.*` calls, 8 inside controllers,
+**none of which logs a scope variable** — all log strings or locals (`error`, `event`). So on real code
+R1 does nothing through existing logs; it pays off when the developer **deliberately sets a logpoint**
+`{vm.rows}`. A next step worth weighing: a "log this variable" command from the hover that sets that
+logpoint for them.
 
 ---
 

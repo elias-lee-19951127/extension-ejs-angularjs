@@ -383,12 +383,60 @@ runtime **chỉ ở RAM, theo kết nối, không ghi cache**: giá trị cũ nh
 
 | Bản | Nguồn | Ghi chú |
 |---|---|---|
-| 2 | **R1** — giá trị `console.log`/logpoint mà pipeline Runtime Log đã nhận (`type/subtype/preview` của CDP `RemoteObject`) | Gần như miễn phí; chỉ có ở biểu thức được log. |
+| 2 | **R1** — giá trị `console.log`/logpoint mà pipeline Runtime Log đã nhận (`type/subtype/preview` của CDP `RemoteObject`) | **Đã làm** (2026-09-20, xem dưới). Không miễn phí như tưởng: preview quá nông, phải gọi thêm `Runtime.getProperties`. |
 | 2 | **R4** — breakpoint điều kiện luôn `false` tại mỗi `res.render(...)`, ghi shape của locals qua `Runtime.addBinding` | Giải đúng lỗi 500 của EJS (`<%= user.name %>` với `user` undefined) — thứ tĩnh gần như không biết vì kiểu đến từ `req`/DB. |
 | 3 | **R3** — lúc hover, `Runtime.evaluate` `angular.element(el).scope()…` trên tab đã kết nối, `throwOnSideEffect: true` | Giá trị hiện tại thật. Khó: tìm phần tử DOM ứng với template. Không chạy nếu app build với `debugInfoEnabled(false)`. |
 
 **Bỏ R2** (probe tự động sau mỗi lần gán): probe chạy ở mọi lần dòng đó chạy — cả vòng lặp nóng —
 và để lại hàng trăm breakpoint ngầm khó gỡ lỗi. R1 + R3 phủ đủ nhu cầu mà không có hai cái giá đó.
+
+#### 5.3.2 R1 — kiểu từ giá trị đã log (2026-09-20)
+
+Spec: `.scratch/observed-types-r1/spec.md`. Khi Runtime Log vẽ một log mà đối số là biến scope —
+một phần `{vm.rows}` của logpoint, hoặc đối số của `console.<method>(…)` **trực tiếp** — kiểu của giá trị
+thành một **Bằng chứng kiểu** `source: 'runtime'` và gộp vào hover.
+
+**Đo trước khi làm (Node 20.20 và Chrome 153 cho kết quả giống hệt):**
+
+| | |
+|---|---|
+| Preview của object trong `consoleAPICalled` | tối đa **5 key** (`overflow: true`) |
+| Preview của mảng | tối đa **100 phần tử** |
+| Object lồng / phần tử mảng trong preview | **không có key nào** — chỉ `{type: "object", value: "Object"}` |
+| Getter | `type: "accessor"`, **không bao giờ chạy** (cả preview lẫn `getProperties`) |
+| `Runtime.getProperties({ownProperties, generatePreview})` | 0.2–0.4 ms object nhỏ; 2–4 ms mảng 150 phần tử, mỗi phần tử kèm preview 5 key |
+
+Tức là với ca chính `console.log($scope.rows)` — mảng object — preview không cho biết phần tử có key
+gì. Nên server **đào** bằng `getProperties`: theo tầng (các lệnh cùng tầng chạy song song, tầng nông
+trước), tới đúng giới hạn hover (2 cấp, 8 key), mảng lấy mẫu 3 phần tử (đầu/giữa/cuối), **≤ 12 lệnh
+mỗi log**. Cùng chỗ log, cùng kiểu preview trong 30 giây → chỉ đếm, không đào lại. Việc đào chạy **sau**
+khi log đã vẽ và ngoài hàng đợi vẽ, nên không làm chậm log.
+
+**Object mở.** Phần không đào được giữ preview và bị đánh dấu `open`: gộp thì key nó có được thêm,
+key nó thiếu **không** thành optional (nếu không, mọi key thứ 6 trở đi của một preview sẽ thành `id?` —
+sai có hệ thống). Hover kết thúc object mở bằng `…`.
+
+**Nối log với biến.** Làm lúc đánh index, không lúc nhận log: fact `JsFacts.consoleCalls` ghi mỗi lời
+gọi `console.*` trực tiếp trong một khai báo Angular kèm biến scope của từng đối số (cùng luật với
+`scopeWrites`: `$scope`, `this`, `var vm = this`). Tra bằng vị trí **tên method** — đo được V8 đặt
+frame của lời gọi console đúng ở đó (kể cả `console . log (` xuống dòng). Logpoint: biểu thức resolve
+một lần lúc `ejsng/setLogpoints`. Log qua wrapper, log biến cục bộ, `a[0]` → không nối (ghép sai còn
+tệ hơn không ghép).
+
+**Giữ gì, bao lâu.** Chỉ **kiểu**, không bao giờ giá trị. Object từ điển (> 50 key, hoặc key không phải
+định danh — vd email) thành `Record<string, T>` vì key của nó là dữ liệu. `$$hashKey` bị bỏ. Kho gắn
+vào chính kết nối: nối lại, ngắt, hay runtime chết là mất. Tối đa 20 kiểu mỗi biến, 2000 tổng. Bằng
+chứng runtime mang thẳng `ObservedType` chứ không mở rộng `ValueShape` — `ValueShape` là định dạng ghi
+cache và là đầu vào của completion, không biểu diễn được union phần tử mà giá trị thật hay có.
+
+**Inline hint không đổi.** Runtime thấy `null` → hover ghi "Seen `null`/`undefined` at runtime", nhưng
+`nullable` (và chú thích `may be empty`) vẫn chỉ tính từ lần gán tĩnh: log chạy ở thời điểm bất kỳ,
+không phải lúc render, và hint không được hiện/mất theo việc đang nối runtime hay không.
+
+**Thực tế trên `smart-city` (đo 2026-09-20):** 288 lời gọi `console.*`, 8 cái nằm trong controller,
+**không cái nào log biến scope** — đều log chuỗi hoặc biến cục bộ (`error`, `event`). Nên trên code thật,
+R1 không tự có tác dụng nhờ log sẵn có; nó có tác dụng khi dev **chủ động đặt logpoint** `{vm.rows}`.
+Hướng tiếp theo đáng cân nhắc: một lệnh "log biến này" từ hover để đặt logpoint đó hộ dev.
 
 ---
 

@@ -113,8 +113,16 @@ _Avoid_: inferred type, declared type, a bare `unknown` (when nothing can be inf
 
 **Type Evidence**:
 One piece of evidence about a variable's type: `{ source: 'static' | 'runtime', path, shapes,
-nullable, site | connection, count, lastSeen }`. v1 has only `static` — every `ScopeWrite` (one
-`$scope.x = …` / `this.x = …` assignment) is one piece. `runtime` evidence (R1 logpoints, R4
-`res.render`, R3 `scope()` on hover) plugs into the same model later, **held in RAM per connection,
-never written to the cache**.
+nullable, site | connection, count, lastSeen }`. `static`: every `ScopeWrite` (one `$scope.x = …` /
+`this.x = …` assignment) is one piece. `runtime` (R1, since 2026-09-20): the value of a logpoint
+`{vm.rows}` or a direct `console.log($scope.rows)` that Runtime Log has drawn — the server digs it with
+`Runtime.getProperties` (on a budget) and keeps its **type**, never the value, **held in RAM per
+connection, never written to the cache**. Details: `.scratch/observed-types-r1/spec.md`.
 _Avoid_: type hint, sample
+
+**Open object**:
+An object only partly seen — a CDP preview cut short (5 keys, none at all for a nested object), or a
+dig that ran out of budget. Merged into a type, the keys it has are added, but the keys it **lacks do
+not turn optional**; the hover ends it with `…`. One complete side (`getProperties`) is enough to know
+every key.
+_Avoid_: partial object (`partial` is a different flag: some assignment could not be inferred)

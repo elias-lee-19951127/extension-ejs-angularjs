@@ -110,7 +110,15 @@ _Avoid_: inferred type, declared type, `unknown` tron (khong suy ra duoc thi ghi
 
 **Bang chung kieu (Type Evidence)**:
 Mot manh bang chung ve kieu cua mot bien: `{ source: 'static' | 'runtime', path, shapes, nullable,
-site | connection, count, lastSeen }`. Ban 1 chi co `static` — moi `ScopeWrite` (mot lan gan
-`$scope.x = …` / `this.x = …`) la mot bang chung. Bang chung `runtime` (R1 logpoint, R4 `res.render`,
-R3 `scope()` luc hover) cam vao cung mo hinh sau nay, **chi o RAM theo ket noi, khong ghi cache**.
+site | connection, count, lastSeen }`. `static`: moi `ScopeWrite` (mot lan gan `$scope.x = …` /
+`this.x = …`) la mot bang chung. `runtime` (R1, co tu 2026-09-20): gia tri cua mot logpoint `{vm.rows}`
+hoac mot `console.log($scope.rows)` truc tiep ma Runtime Log da ve — server dao bang
+`Runtime.getProperties` (co ngan sach) roi giu **kieu**, khong bao gio giu gia tri, **chi o RAM theo ket
+noi, khong ghi cache**. Chi tiet: `.scratch/observed-types-r1/spec.md`.
 _Avoid_: type hint, sample
+
+**Object mo (open object)**:
+Object ma chi thay mot phan key — preview cua CDP bi cat (5 key, object long khong co key nao), hoac
+het ngan sach dao. Gop vao kieu thi key no co duoc them vao, nhung key no **thieu khong bi coi la
+optional**; hover ket thuc no bang `…`. Mot ben day du (`getProperties`) la du de biet het key.
+_Avoid_: partial object (`partial` la co khac: co lan gan khong suy ra duoc)
