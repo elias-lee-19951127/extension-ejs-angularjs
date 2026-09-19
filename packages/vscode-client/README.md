@@ -35,7 +35,7 @@ No separate install step — the language server ships bundled inside the extens
 | `ejsng.ejsDelimiter` | `"%"` | Set to `"?"` for `<? ?>` delimiters |
 | `ejsng.customDirectives` | `{}` | e.g. `{"myOn": "statement"}` for your own custom directives |
 | `ejsng.diagnostics.enabled` | `false` | Off by default to avoid false warnings on legacy code |
-| `ejsng.runtimeLog.pathMappings` | `[]` | Container path → local path. Usually inferred from Docker mounts; declare one to override. `${workspaceFolder}` allowed |
+| `ejsng.runtimeLog.pathMappings` | `[]` | Container path → local path. Usually inferred from Docker mounts; declare one to override. `${workspaceFolder}` allowed. Under Remote-WSL use Linux paths (a pasted `\\wsl.localhost\…` path is converted); the most specific remote always applies first |
 | `ejsng.runtimeLog.skipFrames` | `[]` | Extra stack-frame globs never used as a log's anchor (e.g. your own log wrapper) |
 | `ejsng.runtimeLog.logpoints` | `true` | Show VS Code logpoints inline while connected. Turn off if you also debug the same app with VS Code's debugger and see each logpoint twice in the Debug Console |
 | `ejsng.runtimeLog.chromeExecutablePath` | `""` | Browser for **Launch browser**. Empty = Chrome, then Edge, then Brave |

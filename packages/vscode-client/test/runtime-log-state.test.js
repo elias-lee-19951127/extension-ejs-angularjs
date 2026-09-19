@@ -395,3 +395,16 @@ test('orderByLastAppPort: the container publishing the last-picked app port come
   );
   assert.deepStrictEqual(orderByLastAppPort(candidates, undefined).map((c) => c.label), candidates.map((c) => c.label));
 });
+
+test('formatSkipReason: an unreadable or outside-workspace frame names the path it was looked for at', () => {
+  const frame = { url: 'file:///srv/a.js', lineNumber: 0, columnNumber: 0 };
+  assert.strictEqual(
+    formatSkipReason({ ...frame, skipReason: 'unreadable-file', hostPath: '/home/me/aocs/a.js' }),
+    'skipped — file not readable at /home/me/aocs/a.js',
+  );
+  assert.strictEqual(
+    formatSkipReason({ ...frame, skipReason: 'outside-workspace', hostPath: '/tmp/a.js' }),
+    'skipped — outside the workspace (/tmp/a.js)',
+  );
+  assert.strictEqual(formatSkipReason({ ...frame, skipReason: 'unreadable-file' }), 'skipped — file not readable');
+});

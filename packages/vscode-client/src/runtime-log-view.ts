@@ -84,7 +84,7 @@ export class RuntimeLogViewProvider implements vscode.WebviewViewProvider {
         .slice()
         .reverse() // most recent first
         .map((log) => ({
-          chosenLabel: log.chosenPath ?? '(no frame drawn — panel only)',
+          chosenLabel: (log.chosenPath ?? '(no frame drawn — panel only)') + ((log.count ?? 1) > 1 ? ` ×${log.count}` : ''),
           frames: log.frames.map((f) => ({ url: f.url, label: formatSkipReason(f) })),
         })),
     };

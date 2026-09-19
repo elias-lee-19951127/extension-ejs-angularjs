@@ -8,7 +8,7 @@
  * `ejsng/runtimeReport`, so a future IntelliJ client renders the very same steps without
  * re-deriving any of this (spec decision #15).
  */
-import { resolvePathMappings, type PathMapping } from './runtime-log';
+import { resolvePathMappings, wslUncToLinuxPath, type PathMapping } from './runtime-log';
 
 // ---------------------------------------------------------------------------------------------
 // Environment
@@ -165,6 +165,11 @@ export interface RuntimeChecklistInput {
   workspaceFolder: string | null;
   /** The browser executable Launch last used, remembered by the client. */
   browser: string | null;
+  /**
+   * `process.platform` of the language server — where Path Mappings are read. A WSL UNC `local` is
+   * right on `win32` and unreadable everywhere else. Absent: treated as not Windows.
+   */
+  serverPlatform?: string;
 }
 
 export type ChecklistStatus = 'ok' | 'warn' | 'fail' | 'pending' | 'skipped';
@@ -384,7 +389,20 @@ function connectionStep(
 function pathMappingStep(input: RuntimeChecklistInput): ChecklistStep {
   const step: ChecklistStep = { id: 'path-mapping', title: 'Path Mapping', status: 'pending', detail: 'Not connected yet.', notes: [], fixes: [] };
   const conns = input.connections;
-  for (const m of input.userMappings) step.notes.push(`settings: ${m.remote} → ${m.local}`);
+  const warnings: string[] = [];
+  for (const m of input.userMappings) {
+    const linux = input.serverPlatform !== 'win32' ? wslUncToLinuxPath(m.local) : null;
+    if (linux) {
+      step.notes.push(`settings: ${m.remote} → ${m.local} — a Windows path, read as ${linux} (the extension runs inside WSL); write ${linux} in settings`);
+      warnings.push('a Path Mapping in settings uses a Windows (\\\\wsl.localhost) path');
+    } else {
+      step.notes.push(`settings: ${m.remote} → ${m.local}`);
+    }
+  }
+  const outOfOrder = input.userMappings.some((broad, i) =>
+    input.userMappings.slice(i + 1).some((specific) => specific.remote.startsWith(`${broad.remote}/`)),
+  );
+  if (outOfOrder) step.notes.push('settings list a broader mapping before a more specific one — applied most specific first');
   if (conns.length === 0) return step;
 
   const expanded = input.workspaceFolder ? resolvePathMappings(input.userMappings, input.workspaceFolder) : input.userMappings;
@@ -407,7 +425,9 @@ function pathMappingStep(input: RuntimeChecklistInput): ChecklistStep {
   const unmapped = dropped('no-path-mapping');
   const mismatched = dropped('content-mismatch');
   const ambiguous = dropped('ambiguous-url-match');
-  const problems: string[] = [];
+  const unreadable = dropped('unreadable-file');
+  const problems: string[] = [...warnings];
+  if (unreadable > 0) problems.push(`${unreadable} log(s) whose mapped file doesn't exist on this machine — check the mapping`);
   if (unmapped > 0) problems.push(`${unmapped} log(s) from paths no mapping covers`);
   if (mismatched > 0) problems.push(`${mismatched} log(s) whose file differs from what the runtime runs — check the mapping`);
   if (ambiguous > 0) problems.push(`${ambiguous} browser log(s) whose URL matches more than one file`);

@@ -36,7 +36,8 @@ import {
   partitionDockerCandidates,
   filterDockerCandidatesByAppPort,
   mappingsFromMounts,
-  resolvePathMappings,
+  prepareDeclaredMappings,
+  recordFrameDiagnostic,
   sourceMatchesScript,
   candidateHostPaths,
   classifyFrameCandidates,
@@ -237,7 +238,9 @@ connection.onInitialize((params): InitializeResult => {
   // `${workspaceFolder}` is expanded once, here, where the root is known — a mapping's `local` can
   // then be committed to a repo's settings instead of hardcoding one machine's absolute path
   // (ticket 05, item 3). An absolute `local` contains no variable and comes back unchanged.
-  runtimeLogPathMappings = resolvePathMappings(settings.runtimeLog?.pathMappings ?? [], root);
+  // Also: a WSL UNC `local` becomes its Linux path, and the most specific `remote` goes first
+  // whatever order the user wrote them in — see `prepareDeclaredMappings`.
+  runtimeLogPathMappings = prepareDeclaredMappings(settings.runtimeLog?.pathMappings ?? [], root, process.platform);
   runtimeLogSkipFramePatterns = settings.runtimeLog?.skipFrames ?? [];
   runtimeLogDeclaredPathMappings = settings.runtimeLog?.pathMappings ?? [];
   runtimeLogClientEnvironment = {
@@ -716,13 +719,13 @@ function selectRuntimeLogFrame(
       // the vaguer "outside the workspace" — the fix is a different one (add a mapping, or mount
       // the directory), and with mappings in play it is by far the likelier diagnosis.
       const reason = !matched && pathMappings.length > 0 ? 'no-path-mapping' : 'outside-workspace';
-      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: reason });
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: reason, hostPath: fsPath });
       lastAttemptReason = reason;
       continue;
     }
     const source = inWorkspace ? ws.source(relPath) : readMappedFile(fsPath);
     if (source == null) {
-      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'unreadable-file' });
+      tried.push({ url: frame.url, lineNumber: frame.lineNumber, columnNumber: frame.columnNumber, skipReason: 'unreadable-file', hostPath: fsPath });
       lastAttemptReason = 'unreadable-file';
       continue;
     }
@@ -934,7 +937,7 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     urlResolverFor(workspace, info),
   );
   const record = (chosenPath: string | null): void => {
-    pushBounded(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath }, MAX_RECENT_FRAME_DIAGNOSTICS);
+    recordFrameDiagnostic(info.recentFrameDiagnostics, { at: Date.now(), frames: tried, chosenPath }, MAX_RECENT_FRAME_DIAGNOSTICS);
   };
 
   if (!chosen) {
@@ -1519,6 +1522,7 @@ function checklistInput(browser: string | null): RuntimeChecklistInput {
     userMappings: runtimeLogDeclaredPathMappings,
     workspaceFolder: workspace?.config.root ?? null,
     browser,
+    serverPlatform: process.platform,
   };
 }
 

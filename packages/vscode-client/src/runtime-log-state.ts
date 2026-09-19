@@ -32,6 +32,8 @@ export interface RuntimeFrameDiagnosticEntry {
   runtimePath?: string;
   /** Only set for `'ambiguous-url-match'` — the files that tied for the longest matching tail (ticket 07). */
   candidates?: string[];
+  /** Set for `'unreadable-file'` and `'outside-workspace'` — the path on this machine the frame was looked for at. */
+  hostPath?: string;
 }
 
 /** One recent log's full frame-selection story — mirrors `RuntimeLogFrameDiagnostic` in packages/core. */
@@ -40,6 +42,8 @@ export interface RuntimeLogFrameDiagnostic {
   chosenPath: string | null;
   /** `Date.now()` when the server processed this log — used to merge multiple connections' recentLogs by TRUE recency, not connection iteration order. */
   at: number;
+  /** How many logs in a row told this exact story (the server keeps one entry for them). Absent means 1. */
+  count?: number;
 }
 
 /** A file that looks like a logging wrapper — see `formatWrapperSuggestionText`. */
@@ -148,9 +152,9 @@ export function formatSkipReason(entry: RuntimeFrameDiagnosticEntry): string {
     case 'obfuscated':
       return 'skipped — looks minified/obfuscated';
     case 'outside-workspace':
-      return 'skipped — outside the workspace';
+      return entry.hostPath ? `skipped — outside the workspace (${entry.hostPath})` : 'skipped — outside the workspace';
     case 'unreadable-file':
-      return 'skipped — file not readable';
+      return entry.hostPath ? `skipped — file not readable at ${entry.hostPath}` : 'skipped — file not readable';
     case 'no-path-mapping':
       return 'skipped — no path mapping covers this path';
     case 'stale-file':

@@ -316,6 +316,34 @@ export function resolvePathMappings(mappings: PathMapping[], workspaceFolder: st
   return mappings.map(({ remote, local }) => ({ remote, local: local.split('${workspaceFolder}').join(workspaceFolder) }));
 }
 
+/**
+ * The Linux path a Windows UNC path into a WSL distro names — `\\wsl.localhost\AlmaLinux-9\home\me`
+ * (or the older `\\wsl$\…`, or either with forward slashes) is `/home/me` inside that distro. `null`
+ * for anything else. Under Remote-WSL the language server runs INSIDE the distro, where the UNC form
+ * is not a readable path at all — yet it is exactly what Windows Explorer shows, so it is what a user
+ * copying a path from Windows pastes into `ejsng.runtimeLog.pathMappings`.
+ */
+export function wslUncToLinuxPath(path: string): string | null {
+  const m = /^[\\/]{2}wsl(?:\.localhost|\$)[\\/][^\\/]+([\\/].*)?$/i.exec(path);
+  if (!m) return null;
+  const rest = (m[1] ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return rest || '/';
+}
+
+/**
+ * `ejsng.runtimeLog.pathMappings` ready to apply: `${workspaceFolder}` expanded, a WSL UNC `local`
+ * turned into its Linux path when the server runs on Linux (on Windows the UNC path is the right
+ * one), and ordered most specific `remote` first. `mapContainerPath` is first-match-wins, so with
+ * nested mounts a broad mapping declared first (`/srv` before `/srv/lib`) would otherwise swallow
+ * every path of the specific one — sending each log to the copy the mount shadows. The sort is
+ * stable, so mappings of equal length keep the user's order.
+ */
+export function prepareDeclaredMappings(mappings: PathMapping[], workspaceFolder: string, serverPlatform: string): PathMapping[] {
+  return resolvePathMappings(mappings, workspaceFolder)
+    .map(({ remote, local }) => ({ remote, local: (serverPlatform !== 'win32' && wslUncToLinuxPath(local)) || local }))
+    .sort((a, b) => b.remote.length - a.remote.length);
+}
+
 // ============================================================================================
 // Ticket 03 — frame selection (.scratch/runtime-remote-env/issues/03-chon-frame.md): skip
 // library/logger frames by pattern, skip obfuscated/minified files by content, strip ANSI color
@@ -334,6 +362,9 @@ export function resolvePathMappings(mappings: PathMapping[], workspaceFolder: st
  */
 export const DEFAULT_SKIP_FRAME_PATTERNS: string[] = [
   'node:internal/**',
+  // Node's public built-in modules (`node:events`, `node:timers`, …) — the runtime's own code, and
+  // never a file on this machine to read.
+  'node:*',
   '**/node_modules/**',
   '**/log4js/**',
   '**/winston/**',
@@ -446,6 +477,12 @@ export interface FrameDiagnosticEntry {
   runtimePath?: string;
   /** Only set when `skipReason` is `'ambiguous-url-match'` (ticket 07) — the files that tied for the longest matching tail. */
   candidates?: string[];
+  /**
+   * The path on this machine the frame was looked for at — set for `'unreadable-file'` and
+   * `'outside-workspace'`, where it is the whole diagnosis: a wrong Path Mapping shows up here as a
+   * path that plainly doesn't exist.
+   */
+  hostPath?: string;
 }
 
 /**
@@ -466,6 +503,32 @@ export interface RuntimeLogFrameDiagnostic {
    * does exactly this when several runtime connections are live at once).
    */
   at: number;
+  /** How many logs in a row told this exact story — see `recordFrameDiagnostic`. Absent means 1. */
+  count?: number;
+}
+
+/** What makes two logs' frame-selection stories the same: every frame, where it is, and what happened to it. */
+function diagnosticSignature(d: RuntimeLogFrameDiagnostic): string {
+  const frames = d.frames.map((f) => `${f.url}:${f.lineNumber}:${f.columnNumber}:${f.skipReason}`).join('\n');
+  return `${d.chosenPath}\n${frames}`;
+}
+
+/**
+ * Add one log's story to a bounded buffer of recent ones, most recent last. A story identical to
+ * one already kept replaces it — moved to the end, `count` carried up — instead of taking a new
+ * slot: a framework that logs on every websocket message would otherwise fill the whole buffer
+ * with one stack and push out the one log the user is actually looking for.
+ */
+export function recordFrameDiagnostic(buffer: RuntimeLogFrameDiagnostic[], entry: RuntimeLogFrameDiagnostic, max: number): void {
+  const signature = diagnosticSignature(entry);
+  const i = buffer.findIndex((d) => diagnosticSignature(d) === signature);
+  let count = 1;
+  if (i !== -1) {
+    count = (buffer[i]!.count ?? 1) + 1;
+    buffer.splice(i, 1);
+  }
+  buffer.push(count > 1 ? { ...entry, count } : entry);
+  if (buffer.length > max) buffer.splice(0, buffer.length - max);
 }
 
 /** Default options for `suggestWrapperFile` — see there. */
