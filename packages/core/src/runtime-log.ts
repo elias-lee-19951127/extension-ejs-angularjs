@@ -271,6 +271,27 @@ export function rewriteWebSocketUrl(webSocketDebuggerUrl: string, host: string, 
   }
 }
 
+/** Who a Runtime Target is, as far as naming the source of a log goes. */
+export interface RuntimeSourceInfo {
+  containerName: string | null;
+  /** CDP target type: `node`, or `page` for a browser tab. */
+  targetType: string;
+  title: string;
+  /** `host:port` the debug endpoint was reached at. */
+  endpoint: string;
+}
+
+/**
+ * The short name an inline log's hover gives its source — which of several live connections
+ * produced the value. The container name when there is one (two containers running the same
+ * code is exactly when this matters), else the kind of target and where it was reached.
+ */
+export function runtimeSourceLabel({ containerName, targetType, title, endpoint }: RuntimeSourceInfo): string {
+  if (containerName) return containerName;
+  if (targetType === 'page') return `browser: ${title || endpoint}`;
+  return `node ${endpoint}`;
+}
+
 /** A user-configured container-path -> host-path pair (ticket 11, `ejsng.runtimeLog.pathMappings`). */
 export interface PathMapping {
   remote: string;

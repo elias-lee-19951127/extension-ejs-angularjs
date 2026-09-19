@@ -38,6 +38,7 @@ import {
   mappingsFromMounts,
   prepareDeclaredMappings,
   recordFrameDiagnostic,
+  runtimeSourceLabel,
   sourceMatchesScript,
   candidateHostPaths,
   classifyFrameCandidates,
@@ -983,6 +984,9 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     range: toRange(source, { start: offset, end: offset }),
     value: stripAnsi(log.value),
     severity: log.severity,
+    // Which connection this came from — with two containers running the same code, the same
+    // line can be hit by either, and the hover is where the user tells them apart.
+    source: runtimeSourceLabel(info.meta),
   });
 }
 

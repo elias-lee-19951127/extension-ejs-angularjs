@@ -408,3 +408,13 @@ test('formatSkipReason: an unreadable or outside-workspace frame names the path 
   );
   assert.strictEqual(formatSkipReason({ ...frame, skipReason: 'unreadable-file' }), 'skipped — file not readable');
 });
+
+test('formatRuntimeLogHoverTitle: source, severity and local time; an old server without a source still reads', () => {
+  const { formatRuntimeLogHoverTitle } = require('../out/runtime-log-state');
+  const at = new Date(2026, 8, 19, 9, 5, 7).getTime();
+  assert.strictEqual(
+    formatRuntimeLogHoverTitle({ line: 1, character: 0, value: 'x', severity: 'warning', source: 'cityos-app', at }),
+    'cityos-app · warning · 09:05:07',
+  );
+  assert.strictEqual(formatRuntimeLogHoverTitle({ line: 1, character: 0, value: 'x', severity: 'log' }), 'unknown runtime · log');
+});

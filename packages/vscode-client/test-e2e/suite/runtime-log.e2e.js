@@ -59,6 +59,9 @@ test('connect -> the log is drawn at the end of the right line of the real file,
 
   const drawn = await waitFor(() => api.decorations(appUri.toString()).length > 0 && api.decorations(appUri.toString()), 'a decoration in app.js');
   assert.deepStrictEqual(drawn, [{ line: 1, text: '  » hello' }]);
+  const [hover] = api.hovers(appUri.toString());
+  assert.strictEqual(hover.line, 1);
+  assert.match(hover.title, new RegExp(`^node 127\\.0\\.0\\.1:${runtime.port} · log · \\d\\d:\\d\\d:\\d\\d$`));
   await waitFor(
     () => refreshed(api, () => api.statusBarText() === 'EJS/NG Runtime: received 1 / drawn 1 / dropped 0'),
     'the status bar to count the drawn log',

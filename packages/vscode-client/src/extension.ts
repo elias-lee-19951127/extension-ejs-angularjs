@@ -9,6 +9,7 @@ import {
 } from 'vscode-languageclient/node';
 import {
   escapeGlobPath,
+  formatRuntimeLogHoverTitle,
   formatRuntimeStatusBarText,
   mappingForSettings,
   orderByLastAppPort,
@@ -616,6 +617,7 @@ interface RuntimeLogNotification {
   range: { start: { line: number; character: number } };
   value: string;
   severity: 'log' | 'warning' | 'error';
+  source?: string;
 }
 
 /** ANSI theme colors so the decoration matches the severity at a glance, in any color theme. */
@@ -632,9 +634,12 @@ function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): v
   const options: vscode.DecorationOptions[] = entries.map((e) => {
     // Anchor at the END of the line, not the exact call-site column — the column can land
     // mid-expression (e.g. inside `console.log(...)`), which reads as broken, not inline.
-    const lineEnd = editor.document.lineAt(e.line).range.end;
+    // The range spans the whole line so hovering anywhere on it shows where the value came from;
+    // the `after` text still renders at the range's end, i.e. the end of the line.
+    const line = editor.document.lineAt(e.line);
     return {
-      range: new vscode.Range(lineEnd, lineEnd),
+      range: new vscode.Range(line.range.start, line.range.end),
+      hoverMessage: new vscode.MarkdownString().appendText(formatRuntimeLogHoverTitle(e)).appendCodeblock(e.value, 'text'),
       renderOptions: {
         after: { contentText: `  » ${e.value}`, color: new vscode.ThemeColor(SEVERITY_COLOR[e.severity]) },
       },
@@ -645,7 +650,14 @@ function redrawRuntimeLogDecorations(uri: string, entries: RuntimeLogEntry[]): v
     uri,
     options.map((o) => ({ line: o.range.start.line, text: o.renderOptions?.after?.contentText ?? '' })),
   );
+  renderedHovers.set(
+    uri,
+    entries.map((e) => ({ line: e.line, title: formatRuntimeLogHoverTitle(e) })),
+  );
 }
+
+/** The hover title last drawn per line, per file — like `renderedDecorations`, for tests only. */
+const renderedHovers = new Map<string, Array<{ line: number; title: string }>>();
 
 /**
  * What was last handed to `setDecorations`, per file — VS Code offers no API to read decorations
@@ -661,6 +673,8 @@ const renderedDecorations = new Map<string, Array<{ line: number; text: string }
  */
 export interface EjsngTestApi {
   decorations(uri: string): Array<{ line: number; text: string }>;
+  /** The first line of each drawn log's hover — its source, severity and time. */
+  hovers(uri: string): Array<{ line: number; title: string }>;
   statusBarText(): string;
   /** The last `status` message posted to the panel's webview, or `undefined` if it never resolved. */
   panelState(): unknown;
@@ -673,6 +687,7 @@ export interface EjsngTestApi {
 
 const testApi: EjsngTestApi = {
   decorations: (uri) => renderedDecorations.get(uri) ?? [],
+  hovers: (uri) => renderedHovers.get(uri) ?? [],
   statusBarText: () => runtimeLogStatusBar?.text ?? '',
   panelState: () => runtimeLogView.lastPostedStatus,
   checklist: () => runtimeChecklistSteps,
@@ -835,6 +850,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       character: params.range.start.character,
       value: params.value,
       severity: params.severity,
+      source: params.source,
+      at: Date.now(),
     });
     redrawRuntimeLogDecorations(params.uri, entries);
   });

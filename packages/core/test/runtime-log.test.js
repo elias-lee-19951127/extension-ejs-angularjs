@@ -694,3 +694,11 @@ test('findAppTarget: localhost and 127.0.0.1 are the same app; another port or a
   assert.strictEqual(findAppTarget([page('a', 'http://localhost/')], 'http://localhost:80/').id, 'a');
   assert.strictEqual(findAppTarget([page('a', 'http://localhost:5000/')], 'not a url'), null);
 });
+
+test('runtimeSourceLabel: a container by name, else a node endpoint or a browser tab by title', () => {
+  const { runtimeSourceLabel } = require('../dist');
+  assert.strictEqual(runtimeSourceLabel({ containerName: 'cityos-app', targetType: 'node', title: 'bin/www', endpoint: '127.0.0.1:9228' }), 'cityos-app');
+  assert.strictEqual(runtimeSourceLabel({ containerName: null, targetType: 'node', title: 'app.js', endpoint: '127.0.0.1:9229' }), 'node 127.0.0.1:9229');
+  assert.strictEqual(runtimeSourceLabel({ containerName: null, targetType: 'page', title: 'Lusail', endpoint: '127.0.0.1:9222' }), 'browser: Lusail');
+  assert.strictEqual(runtimeSourceLabel({ containerName: null, targetType: 'page', title: '', endpoint: '127.0.0.1:9222' }), 'browser: 127.0.0.1:9222');
+});

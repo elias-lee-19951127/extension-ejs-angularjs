@@ -146,6 +146,7 @@ test('LSP: UNC paths + broad-mount-first settings still draw a log under the nes
   await waitUntil(() => runtimeLogs.length > 0);
   assert.strictEqual(runtimeLogs[0].uri, pathToFileURL(join(aocs, 'services', 'svc.js')).href);
   assert.strictEqual(runtimeLogs[0].range.start.line, 1);
+  assert.strictEqual(runtimeLogs[0].source, `node ${runtime.host}:${runtime.port}`);
 
   const status = await statusFor(conn, result.key);
   const events = status.recentLogs[0].frames.find((f) => f.url === 'node:events');

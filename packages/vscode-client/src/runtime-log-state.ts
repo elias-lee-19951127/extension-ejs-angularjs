@@ -4,6 +4,24 @@ export interface RuntimeLogEntry {
   character: number;
   value: string;
   severity: 'log' | 'warning' | 'error';
+  /** Which runtime connection produced the value (`cityos-app`, `node 127.0.0.1:9229`, `browser: …`). */
+  source?: string;
+  /** `Date.now()` when the value arrived. */
+  at?: number;
+}
+
+/**
+ * The first line of an inline log's hover: where the value came from and when, e.g.
+ * `cityos-app · warning · 11:42:03`. The value itself follows it in full, since the inline text
+ * is one line and a long object preview is easier to read there.
+ */
+export function formatRuntimeLogHoverTitle(entry: RuntimeLogEntry): string {
+  const parts = [entry.source ?? 'unknown runtime', entry.severity];
+  if (entry.at !== undefined) {
+    const d = new Date(entry.at);
+    parts.push([d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':'));
+  }
+  return parts.join(' · ');
 }
 
 /**

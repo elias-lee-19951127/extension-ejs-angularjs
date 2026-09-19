@@ -154,6 +154,7 @@ test('ejsng/discoverRuntimeTargets: an unpublished inspector answering at the co
   // The mount-inferred mapping followed the connection to its container-IP endpoint.
   await waitUntil(() => runtimeLogs.length > 0);
   assert.strictEqual(runtimeLogs[0].uri, pathToFileURL(join(root, 'service.js')).href);
+  assert.strictEqual(runtimeLogs[0].source, 'cityos-app', 'the hover names the container');
 
 });
 

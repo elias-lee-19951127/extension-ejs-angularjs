@@ -18,7 +18,7 @@ to every template that reads it, rename across both, and dead-code detection.
 | Shape-based completion | `busy.` → the keys actually assigned on that object |
 | Dead code | controller / directive / filter / property nobody uses |
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
-| Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity |
+| Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity; hover the line to see which container or tab it came from, when, and the full value |
 | Inline logpoints | VS Code logpoints (right-click the gutter → **Add Logpoint…**, e.g. `user = {user.name}`) show inline while connected — no code change, no restart, no debug session, and the app never pauses |
 | Runtime Log panel | One **Connect** button finds your Node container through Docker, maps container paths from its mounts, and shows a step-by-step checklist of what works and why not — with fixes right on the failing step |
 
@@ -69,6 +69,13 @@ files only (not `.ejs` templates, which compile without source maps), no hit cou
 Node older than 20.16 their output also goes to the app's own stdout.
 
 ## Release Notes
+
+### 0.4.1
+
+- Hovering a line with an inline log shows where the value came from — the container name
+  (`cityos-app`), `node <host:port>`, or `browser: <tab title>` — with its severity, the time it
+  arrived, and the full value. With two containers running the same code, this is how you tell
+  which one hit the line last.
 
 ### 0.4.0
 
