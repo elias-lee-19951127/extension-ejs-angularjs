@@ -1,9 +1,9 @@
 import { readFileSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import fg from 'fast-glob';
-import type { AttrCandidate, Config, FileFacts, ScopeFrame, Span, TemplateExpression, TemplateFacts } from '../types';
+import type { AttrCandidate, Config, ConsoleCall, FileFacts, ScopeFrame, ScopeTarget, Span, TemplateExpression, TemplateFacts } from '../types';
 import { DEFAULT_CONFIG } from '../types';
-import { extractJs } from '../extract/js';
+import { consoleCallAt, extractJs, scopeTargetAt } from '../extract/js';
 import { extractTemplate } from '../extract/template';
 import { hashContent, IndexStore, type SymbolRow } from '../index/store';
 import { INDEX_FILENAME, PARSER_VERSION } from '../index/schema';
@@ -691,6 +691,22 @@ export class Workspace implements FactSource, RenameSource {
   /** Variables in a template's Angular expressions that can be empty when rendered — for inlay hints. */
   nullableHints(relPath: string, range?: Span): NullableHint[] {
     return nullableHints(this, relPath, range);
+  }
+
+  /**
+   * The `console.*` call a runtime log's frame points at — `offset` is where V8 reports it, the
+   * method name — with the scope variable each argument reads (observed-types-r1).
+   */
+  consoleCallAt(relPath: string, offset: number): ConsoleCall | null {
+    const facts = this.facts(relPath);
+    return facts?.kind === 'js' ? consoleCallAt(facts, offset) : null;
+  }
+
+  /** The scope variable a logpoint expression reads when it runs at `offset` in a JS file (observed-types-r1). */
+  scopeTargetAt(relPath: string, offset: number, expression: string): ScopeTarget | null {
+    const facts = this.facts(relPath);
+    const source = this.source(relPath);
+    return facts?.kind === 'js' && source !== null ? scopeTargetAt(source, facts, offset, expression) : null;
   }
 
   /** Observed Type of `memberPath` (`['form', 'name']`) on a controller's scope, as seen from `from`. */

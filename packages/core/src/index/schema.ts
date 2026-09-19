@@ -12,8 +12,9 @@
  * 12: JsFacts.templateLinks, and view/key spans on renderCalls (template-roots-config ticket 01).
  * 13: JsFacts.scopeWrites, and ValueShape.primitive (observed-types ticket 01).
  * 14: `var vm = this` aliases count as the controller in scopeMembers and scopeWrites.
+ * 15: JsFacts.consoleCalls (observed-types-r1 ticket 02).
  */
-export const PARSER_VERSION = 14;
+export const PARSER_VERSION = 15;
 
 /** Cache file name inside the .ejsng-cache/ directory. */
 export const INDEX_FILENAME = 'index.ndjson';

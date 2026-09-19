@@ -3,11 +3,13 @@ import * as walkLib from 'acorn-walk';
 import type {
   Confidence,
   Config,
+  ConsoleCall,
   JsBinding,
   JsFacts,
   NgDeclaration,
   NgDeclKind,
   ScopeMember,
+  ScopeTarget,
   ScopeWrite,
   Span,
   TemplateLink,
@@ -32,6 +34,7 @@ export function extractJs(source: string, config: Config): JsFacts {
     declarations: [],
     scopeMembers: [],
     scopeWrites: [],
+    consoleCalls: [],
     moduleAliases: {},
     events: [],
     bindings: [],
@@ -63,6 +66,7 @@ export function extractJs(source: string, config: Config): JsFacts {
   for (const decl of facts.declarations) {
     extractScopeMembers(ast, decl, facts);
     extractScopeWrites(ast, decl, facts, source);
+    extractConsoleCalls(ast, decl, facts);
   }
 
   return facts;
@@ -576,6 +580,94 @@ function extractScopeWrites(ast: acorn.Program, decl: NgDeclaration, facts: JsFa
       });
     },
   });
+}
+
+/**
+ * Direct `console.<method>(…)` calls in a declaration's body whose arguments read the scope
+ * (observed-types-r1 decisions #1, #2): each argument that is a plain `$scope.a.b` / `this.a` /
+ * `vm.a` chain becomes a `ScopeTarget`, by the same rules as `extractScopeWrites` — `this` in a
+ * nested non-arrow function is not the controller. Not a console call: a `console` that is a
+ * local variable, `console['log']`, a wrapper (`logger.debug(x)` — it may add or drop arguments).
+ * Arguments after a spread (`...xs`) no longer line up with what the runtime receives: `null`.
+ */
+function extractConsoleCalls(ast: acorn.Program, decl: NgDeclaration, facts: JsFacts): void {
+  const fnNode = findFunctionFor(ast, decl);
+  if (!fnNode) return;
+  const scopeParam = scopeParamName(decl, fnNode);
+  const isThisAlias = thisAliasTest(fnNode, facts.bindings);
+
+  walkLib.ancestor(fnNode.body as acorn.Node, {
+    CallExpression(node, _state, ancestors) {
+      const callee = node.callee;
+      if (callee.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier') return;
+      if (callee.object.type !== 'Identifier' || callee.object.name !== 'console') return;
+      if (resolveBinding(facts.bindings, 'console', callee.object.start)) return; // a local `console`, not the global one
+      const method = { start: callee.property.start, end: callee.property.end };
+      // Nested declarations share a body: record each call once.
+      if (facts.consoleCalls.some((c) => c.method.start === method.start)) return;
+
+      const inOwnFunction = !(ancestors as acorn.Node[]).some(
+        (a) => a !== node && (a.type === 'FunctionExpression' || a.type === 'FunctionDeclaration'),
+      );
+      let spread = false;
+      const args = node.arguments.map((arg): ScopeTarget | null => {
+        if (arg.type === 'SpreadElement') spread = true;
+        if (spread) return null;
+        const target = scopePath(arg as acorn.Node, scopeParam, isThisAlias);
+        if (!target || (target.thisKeyword && !inOwnFunction)) return null;
+        return { owner: decl.name, path: target.path };
+      });
+      if (args.some((a) => a)) facts.consoleCalls.push({ method, args });
+    },
+  });
+}
+
+/** The `console.*` call whose method name starts at `offset` — where V8 puts the frame of a console call. */
+export function consoleCallAt(facts: JsFacts, offset: number): ConsoleCall | null {
+  return (facts.consoleCalls ?? []).find((c) => c.method.start === offset) ?? null;
+}
+
+/**
+ * The scope variable a logpoint expression (`vm.rows`, `$scope.form.owner`) reads when it runs at
+ * `offset` in a file — by the rules `extractConsoleCalls` applies to a console argument, in the
+ * innermost Angular declaration whose function contains `offset`. `null` for anything that isn't
+ * a plain property chain on the scope (`rows.length` of a local, `a || b`, `x[0]`, a call).
+ */
+export function scopeTargetAt(source: string, facts: JsFacts, offset: number, expression: string): ScopeTarget | null {
+  let expr: acorn.Expression;
+  try {
+    expr = acorn.parseExpressionAt(expression, 0, { ecmaVersion: 'latest' });
+  } catch {
+    return null;
+  }
+  if (expression.slice(expr.end).trim()) return null; // `a.b c`: more than one expression
+  const ast = parseJsTolerant(source);
+  if (!ast) return null;
+
+  let best: { decl: NgDeclaration; fn: acorn.FunctionExpression | acorn.ArrowFunctionExpression } | null = null;
+  for (const decl of facts.declarations) {
+    const fn = findFunctionFor(ast, decl);
+    if (!fn || offset < fn.body.start || offset >= fn.body.end) continue;
+    if (!best || fn.body.start >= best.fn.body.start) best = { decl, fn };
+  }
+  if (!best) return null;
+  const { decl, fn } = best;
+
+  // The expression's root identifier is resolved where the logpoint runs, not where it was parsed.
+  const isThisAlias = thisAliasTest(fn, facts.bindings);
+  const atOffset = (node: acorn.Node): acorn.Node => (node.type === 'Identifier' ? { ...node, start: offset, end: offset } : node);
+  const target = scopePath(expr as acorn.Node, scopeParamName(decl, fn), (node) => isThisAlias(atOffset(node)));
+  if (!target) return null;
+  if (target.thisKeyword) {
+    let ownThis = true;
+    walkLib.simple(fn.body as acorn.Node, {
+      Function(node) {
+        if (node.type !== 'ArrowFunctionExpression' && node.body.start <= offset && offset < node.body.end) ownThis = false;
+      },
+    });
+    if (!ownThis) return null;
+  }
+  return { owner: decl.name, path: target.path };
 }
 
 /**

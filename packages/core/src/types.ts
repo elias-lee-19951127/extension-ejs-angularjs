@@ -129,6 +129,27 @@ export interface ScopeWrite {
   rhsText: string;
 }
 
+/** A property path on the scope of an Angular declaration: `rows` on `ListCtrl` is `{ owner: 'ListCtrl', path: ['rows'] }`. */
+export interface ScopeTarget {
+  owner: string;
+  path: string[];
+}
+
+/**
+ * A direct `console.<method>(…)` call inside an Angular declaration's body, with at least one
+ * argument read off the scope (observed-types-r1 ticket 02) — so a logged value can be tied to the
+ * scope variable it shows without parsing anything when the log arrives.
+ */
+export interface ConsoleCall {
+  /**
+   * Span of the method name, `log` in `console.log(…)`: where V8 reports the call frame of a
+   * console call (measured — even as `console . log (` split over lines).
+   */
+  method: Span;
+  /** One per argument, in order: the scope variable it reads, or `null` (`'text'`, `res.data`, `a[0]`). */
+  args: Array<ScopeTarget | null>;
+}
+
 export type BindingKind = 'var' | 'let' | 'const' | 'function' | 'param' | 'catch' | 'class';
 
 export interface JsBinding {
@@ -145,6 +166,7 @@ export interface JsFacts {
   declarations: NgDeclaration[];
   scopeMembers: ScopeMember[];
   scopeWrites: ScopeWrite[];
+  consoleCalls: ConsoleCall[];
   /** Which variable holds angular.module('x', []). */
   moduleAliases: Record<string, string>;
   events: Array<{ name: string; direction: 'emit' | 'broadcast' | 'on'; span: Span }>;
