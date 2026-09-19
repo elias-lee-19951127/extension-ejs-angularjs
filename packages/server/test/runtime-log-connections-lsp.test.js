@@ -71,6 +71,8 @@ async function startFakeRuntime(t, targets) {
     host: '127.0.0.1',
     port: server.address().port,
     sendAnother: (id, params) => sockets.get(id)?.send(JSON.stringify({ method: 'Runtime.consoleAPICalled', params })),
+    /** Hang up on a target's socket from the runtime side, as a target process exiting would. */
+    drop: (id) => sockets.get(id)?.terminate(),
   };
 }
 
@@ -443,6 +445,32 @@ test('LSP: ejsng/runtimeStatus reports connecting -> connected and received/draw
   assert.strictEqual(conn1.received, 1);
   assert.strictEqual(conn1.drawn, 1);
   assert.deepStrictEqual(conn1.droppedByReason, {});
+});
+
+/**
+ * Ticket 06 (inline-runtime-log), item 3's second half: a connection that DID open and then drops
+ * (target process exits, network gone) must be pushed to the client as `failed` — not left
+ * showing `connected`. The unreachable-socket test above only covers a socket that never opened.
+ */
+test('LSP: a connection that opened and then drops is pushed to the client as failed', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-conn-drop-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'app.js'), 'console.log(1);\n');
+
+  const runtime = await startFakeRuntime(t, [{ id: 't1', type: 'node', title: 'app.js', url: 'file:///app.js' }]);
+
+  const { conn, statusChanges } = await startServer(t, root);
+  const result = await conn.sendRequest('ejsng/connectRuntime', { host: runtime.host, port: runtime.port });
+  assert.strictEqual(result.status, 'connected');
+  await waitUntil(() => statusChanges.some((s) => s.key === result.key && s.state === 'connected'));
+
+  runtime.drop('t1');
+
+  await waitUntil(() => statusChanges.some((s) => s.key === result.key && s.state === 'failed'));
+  const status = await conn.sendRequest('ejsng/runtimeStatus');
+  const conn1 = status.connections.find((c) => c.key === result.key);
+  assert.strictEqual(conn1.state, 'failed');
+  assert.strictEqual(typeof conn1.reason, 'string');
 });
 
 test('LSP: a consoleAPICalled event with no stack trace is counted as dropped, not silently lost', async (t) => {
