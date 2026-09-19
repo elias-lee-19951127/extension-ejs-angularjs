@@ -58,7 +58,7 @@ nhiều sẽ thấp hơn; đó là lúc nguồn runtime (#8) đáng làm.
 
 | Bản | Nguồn | Ghi chú |
 |---|---|---|
-| 2 | **R1** — giá trị của `console.log`/logpoint mà pipeline Runtime Log đã nhận (`type/subtype/preview` của CDP `RemoteObject`) | Gần như miễn phí; chỉ có ở biểu thức được log. |
+| 2 | **R1** — giá trị của `console.log`/logpoint mà pipeline Runtime Log đã nhận (`type/subtype/preview` của CDP `RemoteObject`) | Gần như miễn phí; chỉ có ở biểu thức được log. **Đo 2026-09-19: không miễn phí** — preview V8 không có key của object lồng, phải gọi `Runtime.getProperties`. Spec: [`../observed-types-r1/spec.md`](../observed-types-r1/spec.md). |
 | 2 | **R4** — một breakpoint điều kiện luôn `false` tại mỗi `res.render(...)`, ghi shape của object locals qua `Runtime.addBinding` (không đi qua `console`) | Giải đúng lỗi 500 của EJS (#2). Mỗi request thêm một lần đánh giá điều kiện. |
 | 3 | **R3** — lúc hover, `Runtime.evaluate` `angular.element(el).scope()…` trên tab trình duyệt đã kết nối, với `throwOnSideEffect: true` | Giá trị hiện tại thật. Khó: tìm phần tử DOM ứng với template. **Không chạy nếu app build với `debugInfoEnabled(false)`** — chưa kiểm được trên app thật: code nền AOCS nằm ở repo trong WSL (`~/projects/aocs-cityos-lusail`, `~/projects/aocs`), không có trên máy dev Mac. Kiểm bằng DevTools: `angular.element(document.querySelector('[ng-controller]')).scope()` ra `undefined` = đã tắt. |
 | — | ~~R2~~ probe tự động sau mỗi lần gán | **Không làm**: chạy ở mọi lần dòng đó chạy (vòng lặp nóng), hàng trăm breakpoint ngầm khó gỡ lỗi. R1 + R3 phủ đủ. |
