@@ -568,6 +568,7 @@ function extractScopeWrites(ast: acorn.Program, decl: NgDeclaration, facts: JsFa
       const leaves = valueLeaves(right);
       const nullish = leaves.filter(isNullish);
 
+      const after = statementEnd(ancestors as acorn.Node[]);
       facts.scopeWrites.push({
         owner: decl.name,
         via: target.via,
@@ -577,6 +578,8 @@ function extractScopeWrites(ast: acorn.Program, decl: NgDeclaration, facts: JsFa
         nullable: nullish.length > 0,
         inCallback: nested.length > 0,
         rhsText: source.slice(right.start, right.end).replace(/\s+/g, ' ').slice(0, 40),
+        lhsText: source.slice(node.left.start, node.left.end),
+        ...(after !== null ? { after } : {}),
       });
     },
   });
@@ -668,6 +671,27 @@ export function scopeTargetAt(source: string, facts: JsFacts, offset: number, ex
     if (!ownThis) return null;
   }
   return { owner: decl.name, path: target.path };
+}
+
+/**
+ * End of the expression statement an assignment is — `ancestors` ends with the assignment itself.
+ * Climbs through chained assignments (`a = b = x;`: `b = x` is the right side of `a = …`); any
+ * other parent (`return`, a call, an `if` test, a concise arrow body) means it isn't a statement
+ * of its own, and there is no "right after it" to put a logpoint.
+ */
+function statementEnd(ancestors: acorn.Node[]): number | null {
+  let i = ancestors.length - 1;
+  while (i > 0) {
+    const parent = ancestors[i - 1]!;
+    const node = ancestors[i]!;
+    if (parent.type === 'AssignmentExpression' && (parent as acorn.AssignmentExpression).right === node) {
+      i--;
+      continue;
+    }
+    if (parent.type === 'ExpressionStatement' && (parent as acorn.ExpressionStatement).expression === node) return parent.end;
+    return null;
+  }
+  return null;
 }
 
 /**

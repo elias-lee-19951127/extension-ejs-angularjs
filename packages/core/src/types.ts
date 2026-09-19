@@ -127,6 +127,15 @@ export interface ScopeWrite {
   inCallback: boolean;
   /** The right side, whitespace-collapsed and cut to 40 characters — so a hover can say where an unknown shape came from. */
   rhsText: string;
+  /** The left side as written: `$scope.rows`, `vm.rows`, `this.form.owner` — valid code right where it was assigned. */
+  lhsText: string;
+  /**
+   * Offset right after the statement this assignment is — past its `;` — when the assignment is a
+   * whole expression statement (`$scope.rows = res.data;`, or the outer one of `a = b = x;`). A
+   * logpoint at that column runs AFTER the assignment, one-line functions included (measured,
+   * .scratch/log-variable/spec.md). Absent when the assignment sits inside another expression.
+   */
+  after?: number;
 }
 
 /** A property path on the scope of an Angular declaration: `rows` on `ListCtrl` is `{ owner: 'ListCtrl', path: ['rows'] }`. */

@@ -349,3 +349,13 @@ test('runtime evidence from the farther copy of a duplicated controller is left 
   assert.strictEqual(r.text, 'number');
   assert.deepStrictEqual(r.runtime, []);
 });
+
+test('an assignment that could not be inferred carries where to log it and what (log-variable ticket 01)', (t) => {
+  const ws = workspace(t, { 'list.js': LIST, 'list.html': '<p ng-controller="ListCtrl">{{ rows }} {{ sel }}</p>\n' });
+  const src = ws.source('list.js');
+  const [rows] = typeAt(ws, 'list.html', 'rows }}').unknownFrom;
+  assert.strictEqual(rows.lhsText, '$scope.rows');
+  assert.strictEqual(rows.after, src.indexOf('res.data;') + 'res.data;'.length);
+  const [sel] = typeAt(ws, 'list.html', 'sel }}').unknownFrom;
+  assert.deepStrictEqual([sel.rhsText, sel.lhsText, sel.after], ['find()', '$scope.sel', src.indexOf('find();') + 'find();'.length]);
+});

@@ -26,6 +26,9 @@ export interface TypeEvidence {
   site?: { path: string; span: Span };
   /** Static: the right side's text, to explain an unknown shape. */
   rhsText?: string;
+  /** Static: the left side as written, and where a logpoint would run right after it (`ScopeWrite`). */
+  lhsText?: string;
+  after?: number;
   /** Static: the assignment only runs in a callback, not when the controller is constructed. */
   inCallback?: boolean;
   /**
@@ -289,8 +292,11 @@ export interface ObservedTypeResult {
   onlyInCallback: boolean;
   /** Up to 5 assignments that feed it, from the nearest copy of the controller. */
   sites: Array<{ path: string; span: Span; inCallback: boolean }>;
-  /** The assignments whose value couldn't be inferred — what a hover names instead of a bare "unknown". */
-  unknownFrom: Array<{ path: string; span: Span; rhsText: string }>;
+  /**
+   * The assignments whose value couldn't be inferred — what a hover names instead of a bare
+   * "unknown". `after`/`lhsText`: where and what to log to find out (log-variable spec #3, #4).
+   */
+  unknownFrom: Array<{ path: string; span: Span; rhsText: string; lhsText?: string; after?: number }>;
   /** Runtime evidence merged into `text`, one per connection, most recently seen first, at most 3. */
   runtime: RuntimeSighting[];
   /** A runtime log showed `null`/`undefined` where no assignment says so — hover only (r1 decision #9). */
@@ -330,6 +336,8 @@ export function observedTypeOf(
         nullable: w.nullable,
         site: { path, span: w.span },
         rhsText: w.rhsText,
+        lhsText: w.lhsText,
+        ...(w.after !== undefined ? { after: w.after } : {}),
         inCallback: w.inCallback,
         count: 1,
       });
@@ -369,7 +377,13 @@ export function observedTypeOf(
     sites: sites.slice(0, MAX_SITES),
     unknownFrom: relevant
       .filter((e) => e.shapes.some((sh) => sh.kind === 'unknown'))
-      .map((e) => ({ path: e.site!.path, span: e.site!.span, rhsText: e.rhsText ?? '' })),
+      .map((e) => ({
+        path: e.site!.path,
+        span: e.site!.span,
+        rhsText: e.rhsText ?? '',
+        ...(e.lhsText !== undefined ? { lhsText: e.lhsText } : {}),
+        ...(e.after !== undefined ? { after: e.after } : {}),
+      })),
     runtime: sightings(seen),
     seenNullAtRuntime: seen.length > 0 && !!at(runtimes)?.nullable && !(staticType?.nullable ?? false),
   };

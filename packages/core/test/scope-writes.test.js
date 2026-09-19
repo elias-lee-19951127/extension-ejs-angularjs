@@ -143,3 +143,60 @@ angular.module('app', []).controller('C', function ($scope, n, a, b) {
   );
   assert.deepStrictEqual(kind('sum'), { kind: 'unknown' }, 'a + b of unknowns could be either');
 });
+
+// ---------------------------------------------------------------- log-variable ticket 01
+
+/** What sits right after each write's `after`: where a logpoint would go. */
+const afterOf = (src, facts, name) =>
+  writesOf(facts, name).map((w) => (w.after === undefined ? null : JSON.stringify(src.slice(w.after - 1, w.after + 6))));
+
+test('`after` is right past the statement an assignment is — multi-line, one-line function, one-line if, no semicolon', () => {
+  const src = `
+angular.module('app', []).controller('C', function ($scope, $http) {
+  $http.get('/a').then(function (res) {
+    $scope.a = res.data;
+    done();
+  });
+  $http.get('/b').then(function (res) { $scope.b = res.data; });
+  var d = function (res) { if (res) { $scope.d = res.data; } return 1; };
+  $scope.e = 1
+  $scope.f = 2;
+});
+`;
+  const facts = extract(src);
+  assert.deepStrictEqual(afterOf(src, facts, 'a'), ['";\\n    d"']);
+  assert.deepStrictEqual(afterOf(src, facts, 'b'), ['"; });\\n "']);
+  assert.deepStrictEqual(afterOf(src, facts, 'd'), ['"; } ret"']);
+  assert.deepStrictEqual(afterOf(src, facts, 'e'), ['"1\\n  $sc"'], 'no `;`: the end of the expression');
+  assert.deepStrictEqual(writesOf(facts, 'a').map((w) => w.lhsText), ['$scope.a']);
+});
+
+test('`after` climbs a chain of assignments, and is absent when the assignment is inside another expression', () => {
+  const src = `
+angular.module('app', []).controller('C', function ($scope) {
+  $scope.x = $scope.y = 0;
+  $scope.load = function () { return $scope.r = 1; };
+  if (($scope.i = next())) {}
+  call($scope.c = 1);
+  for (var k = 0; k < 2; $scope.k = k++) {}
+  var go = () => $scope.arrow = 1;
+});
+`;
+  const facts = extract(src);
+  const stmtEnd = src.indexOf('0;') + 2;
+  assert.deepStrictEqual(writesOf(facts, 'x').map((w) => w.after), [stmtEnd]);
+  assert.deepStrictEqual(writesOf(facts, 'y').map((w) => w.after), [stmtEnd]);
+  for (const name of ['r', 'i', 'c', 'k', 'arrow']) assert.deepStrictEqual(writesOf(facts, name).map((w) => w.after), [undefined], name);
+});
+
+test('`lhsText` is the left side as written: a renamed $scope, a vm alias, this', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', ['$scope', function (s) {
+  var vm = this;
+  s.rows = [];
+  vm.form = {};
+  this.form.owner = null;
+}]);
+`);
+  assert.deepStrictEqual(facts.scopeWrites.map((w) => w.lhsText), ['s.rows', 'vm.form', 'this.form.owner']);
+});
