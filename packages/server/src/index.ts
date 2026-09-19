@@ -15,6 +15,7 @@ import {
   type Diagnostic,
   type FileSystemWatcher,
   type InitializeResult,
+  type InlayHint,
   type Location,
   LSPErrorCodes,
   type Range,
@@ -85,6 +86,8 @@ const documents = new TextDocuments(TextDocument);
 
 let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
+/** `ejsng.typeHints.nullable`: the "may be empty" inlay hint (observed-types ticket 04). */
+let nullableHintsEnabled = true;
 
 /**
  * Real connection lifecycle (ticket 02, item 4): the panel used to report `connected` the
@@ -230,6 +233,7 @@ connection.onInitialize((params): InitializeResult => {
 
   const settings = (params.initializationOptions ?? {}) as Partial<Config> & {
     diagnostics?: { enabled?: boolean };
+    typeHints?: { nullable?: boolean };
     runtimeLog?: {
       pathMappings?: PathMapping[];
       skipFrames?: string[];
@@ -237,6 +241,7 @@ connection.onInitialize((params): InitializeResult => {
     };
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
+  nullableHintsEnabled = settings.typeHints?.nullable ?? true;
   // `${workspaceFolder}` is expanded once, here, where the root is known — a mapping's `local` can
   // then be committed to a repo's settings instead of hardcoding one machine's absolute path
   // (ticket 05, item 3). An absolute `local` contains no variable and comes back unchanged.
@@ -267,6 +272,9 @@ connection.onInitialize((params): InitializeResult => {
       documentSymbolProvider: true,
       workspaceSymbolProvider: true,
       renameProvider: prepareSupport ? { prepareProvider: true } : true,
+      // Declared even when the setting is off: the handler then answers [] — simpler than
+      // registering dynamically, and the setting only changes on a window reload anyway.
+      inlayHintProvider: true,
     },
   };
 });
@@ -476,6 +484,31 @@ connection.onHover((params) => {
   }
 
   return lines.length ? { contents: { kind: 'markdown' as const, value: lines.join('\n') } } : null;
+});
+
+/**
+ * "may be empty" after a template variable explicitly assigned null/undefined somewhere
+ * (.scratch/observed-types/spec.md decisions #2, #3). Worded as a note, not an error: an Angular
+ * expression renders empty on null instead of throwing. The full type is on hover.
+ */
+connection.languages.inlayHint.on((params): InlayHint[] => {
+  const doc = documents.get(params.textDocument.uri);
+  const r = rel(params.textDocument.uri);
+  if (!nullableHintsEnabled || !workspace || !doc || !r) return [];
+
+  const range = { start: doc.offsetAt(params.range.start), end: doc.offsetAt(params.range.end) };
+  return workspace
+    .nullableHints(r, range)
+    .filter((h) => h.offset >= range.start && h.offset <= range.end)
+    .map((h) => ({
+      position: doc.positionAt(h.offset),
+      label: 'may be empty',
+      paddingLeft: true,
+      tooltip: {
+        kind: 'markdown' as const,
+        value: `\`${h.expression}\` is assigned \`null\`/\`undefined\` somewhere, so it can render empty. Hover it for its observed type and where it's assigned.`,
+      },
+    }));
 });
 
 const MAX_UNKNOWN_SOURCES = 5;

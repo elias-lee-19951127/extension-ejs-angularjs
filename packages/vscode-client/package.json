@@ -152,6 +152,11 @@
           "default": false,
           "description": "Enables warnings for variables that don't exist on scope. Defaults to OFF to avoid false positives on legacy code."
         },
+        "ejsng.typeHints.nullable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Shows a faint \"may be empty\" hint after a template variable that is explicitly assigned null or undefined somewhere in its controller — an Angular expression renders empty then, it doesn't throw. The full observed type is always on hover. Reload the window after changing."
+        },
         "ejsng.runtimeLog.pathMappings": {
           "type": "array",
           "default": [],

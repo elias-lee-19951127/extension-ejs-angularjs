@@ -12,7 +12,7 @@ import { nearestRows, preferNearest } from './rename';
 import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
-import { observedTypeAt, observedTypeOf, type ObservedTypeResult } from './observed-type';
+import { nullableHints, observedTypeAt, observedTypeOf, type NullableHint, type ObservedTypeResult } from './observed-type';
 import { linkDefinition, linkTemplates, withBinding, type TemplateLinkIndex, type TemplateLinkIssue } from './template-links';
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
@@ -686,6 +686,11 @@ export class Workspace implements FactSource, RenameSource {
    */
   observedTypeAt(relPath: string, offset: number): ObservedTypeResult | null {
     return observedTypeAt(this, relPath, offset);
+  }
+
+  /** Variables in a template's Angular expressions that can be empty when rendered — for inlay hints. */
+  nullableHints(relPath: string, range?: Span): NullableHint[] {
+    return nullableHints(this, relPath, range);
   }
 
   /** Observed Type of `memberPath` (`['form', 'name']`) on a controller's scope, as seen from `from`. */

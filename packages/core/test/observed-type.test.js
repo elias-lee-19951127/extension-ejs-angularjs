@@ -202,6 +202,44 @@ angular.module('app', []).controller('ListCtrl', function ($http) {
   assert.strictEqual(typeAt(ws, 'page.html', 'id }}').text, 'number');
 });
 
+test('nullableHints: one hint after each variable explicitly assigned null — not for callback-only, unknown, or EJS locals', (t) => {
+  const ws = workspace(t, {
+    'app.js': `
+angular.module('app', []).controller('C', function ($scope, $http) {
+  $scope.user = null;
+  $scope.state = { error: null };
+  $scope.items = [];
+  $http.get('/s').then(function (res) { $scope.user = res.data.user; $scope.stats = res.data; $scope.items = res.data; });
+});
+`,
+    'page.ejs':
+      '<div ng-controller="C">{{ user.name }} {{ user.name + user.email }}\n' +
+      '<p ng-if="state.error">{{ state.error.message }}</p>{{ stats.total }} {{ items.length }} <%= user.name %></div>\n',
+  });
+  const hints = ws.nullableHints('page.ejs');
+  const src = ws.source('page.ejs');
+  const shown = hints.map((h) => [h.expression, src.slice(h.offset - h.expression.split('.').pop().length, h.offset)]);
+  assert.deepStrictEqual(shown, [
+    ['user', 'user'], // {{ user.name }}
+    ['user', 'user'], // {{ user.name + user.email }}: once per expression
+    ['state.error', 'error'], // ng-if
+    ['state.error', 'error'], // {{ state.error.message }}
+  ]);
+  assert.strictEqual(hints[0].offset, at(ws, 'page.ejs', 'user.name') + 'user'.length);
+
+  // Only the expressions overlapping the range asked for.
+  const line2 = at(ws, 'page.ejs', '<p ng-if');
+  assert.deepStrictEqual(ws.nullableHints('page.ejs', { start: line2, end: src.length }).map((h) => h.expression), ['state.error', 'state.error']);
+});
+
+test('nullableHints: through a controllerAs alias and an ng-repeat item', (t) => {
+  const ws = workspace(t, {
+    'app.js': `angular.module('app', []).controller('C', function () { var vm = this; vm.rows = [{ owner: null }]; vm.sel = undefined; });`,
+    'page.html': '<ul ng-controller="C as vm"><li ng-repeat="row in vm.rows">{{ row.owner.name }} {{ vm.sel.id }}</li></ul>\n',
+  });
+  assert.deepStrictEqual(ws.nullableHints('page.html').map((h) => h.expression), ['row.owner', 'vm.sel']);
+});
+
 test('formatType: 8 keys per object, 2 levels of nesting', () => {
   const props = Object.fromEntries('abcdefghij'.split('').map((k) => [k, { kind: 'primitive', primitive: 'number' }]));
   assert.strictEqual(

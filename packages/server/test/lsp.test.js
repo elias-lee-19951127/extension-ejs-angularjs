@@ -46,7 +46,7 @@ function applyTextEdits(text, edits) {
 /** Default client capabilities — like VSCode: declares prepareRename support. */
 const CLIENT_CAPS = { textDocument: { rename: { prepareSupport: true } } };
 
-async function startServer(t, capabilities = CLIENT_CAPS) {
+async function startServer(t, capabilities = CLIENT_CAPS, initializationOptions = undefined) {
   // A temp copy: the server writes its .ejsng-cache/ into the workspace root.
   const root = mkdtempSync(join(tmpdir(), 'ejsng-lsp-'));
   cpSync(FIXTURE, root, { recursive: true });
@@ -91,6 +91,7 @@ async function startServer(t, capabilities = CLIENT_CAPS) {
     rootUri,
     workspaceFolders: [{ uri: rootUri, name: 'mini' }],
     capabilities,
+    initializationOptions,
   });
   conn.sendNotification('initialized', {});
   // The server handles these sequentially: initialized (registers the watcher, indexes
@@ -405,4 +406,48 @@ test('LSP: hover on a variable only assigned from a response: the reason with it
   const js = open('stats/ctrl.js', 'javascript');
   const fromJs = await hoverAt(js, 'user = {', 1);
   assert.match(fromJs, /\*\*Observed type\*\* of `user`\n```ts\n\{ name: string \} \| null\n```/, fromJs);
+});
+
+// observed-types ticket 04: the "may be empty" inlay hint.
+const NULLABLE_CTRL =
+  "myApp.controller('UserCtrl', function ($scope, $http) {\n" +
+  '  $scope.user = null;\n' +
+  "  $http.get('/me').then(function (res) { $scope.user = { name: res.data.name }; $scope.stats = { total: 1 }; });\n" +
+  '});\n';
+const NULLABLE_TPL = '<div ng-controller="UserCtrl">\n  <b>{{ user.name }}</b>\n  <i>{{ stats.total }}</i>\n</div>\n';
+
+async function nullableHintsFor(t, initializationOptions) {
+  const s = await startServer(t, CLIENT_CAPS, initializationOptions);
+  mkdirSync(join(s.root, 'user'), { recursive: true });
+  writeFileSync(join(s.root, 'user', 'ctrl.js'), NULLABLE_CTRL);
+  writeFileSync(join(s.root, 'user', 'page.html'), NULLABLE_TPL);
+  notifyWatched(s.conn, s.root, ['user', CREATED]);
+  const tpl = s.open('user/page.html', 'html');
+  const hints = await s.conn.sendRequest('textDocument/inlayHint', {
+    textDocument: { uri: tpl.uri },
+    range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } },
+  });
+  return { ...s, tpl, hints };
+}
+
+test('LSP: inlay hint "may be empty" after a variable assigned null — none for one only assigned in a callback', async (t) => {
+  const { init, tpl, hints } = await nullableHintsFor(t);
+  assert.strictEqual(init.capabilities.inlayHintProvider, true);
+  // `user` is set to null at construction: hinted. `stats` is only set in the .then(): not hinted.
+  assert.deepStrictEqual(
+    hints.map((h) => [h.position, h.label, h.paddingLeft]),
+    [[positionOf(tpl.text, 'user.name', 'user'.length), 'may be empty', true]],
+  );
+  assert.match(hints[0].tooltip.value, /`user` is assigned `null`\/`undefined` somewhere/);
+});
+
+test('LSP: ejsng.typeHints.nullable = false -> no inlay hint; a range without the variable -> none either', async (t) => {
+  assert.deepStrictEqual((await nullableHintsFor(t, { typeHints: { nullable: false } })).hints, []);
+
+  const { conn, tpl } = await nullableHintsFor(t);
+  const onlyStats = await conn.sendRequest('textDocument/inlayHint', {
+    textDocument: { uri: tpl.uri },
+    range: { start: { line: 2, character: 0 }, end: { line: 3, character: 0 } },
+  });
+  assert.deepStrictEqual(onlyStats, []);
 });

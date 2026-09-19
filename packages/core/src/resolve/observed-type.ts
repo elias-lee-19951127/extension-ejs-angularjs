@@ -1,5 +1,6 @@
-import type { FileFacts, Span, ValueShape } from '../types';
-import type { Expr } from '../ng/ast';
+import type { FileFacts, ScopeFrame, Span, ValueShape } from '../types';
+import { walk, type Expr } from '../ng/ast';
+import { tryParseExpression } from '../ng/parser';
 import { aliasOf, controllerOf, findLocal } from './rows';
 import { nearestRows } from './rename';
 import { expressionAt, inSpan } from './workspace';
@@ -331,10 +332,28 @@ export function observedTypeAt(src: ObservedTypeSource, relPath: string, offset:
   if (!segs.length) return null;
   const at = segs.findIndex((sg) => inSpan(sg.span, offset));
   if (at === -1) return null; // on a computed key, a call's parentheses… — not a variable we can name
-  const names = segs.slice(0, at + 1).map((sg) => sg.name);
-  const expression = names.join('.');
+  return typeOfNames(src, relPath, hit.expr.scopeChain, segs.slice(0, at + 1).map((sg) => sg.name));
+}
 
-  const chain = hit.expr.scopeChain;
+/**
+ * `names` (`['vm', 'form', 'name']`) read in a template under `chain`: member, key inside one, or
+ * `ng-repeat` item. `memo` caches by what is looked up, for a caller asking about many variables.
+ */
+function typeOfNames(
+  src: ObservedTypeSource,
+  relPath: string,
+  chain: ScopeFrame[],
+  names: string[],
+  memo?: Map<string, ObservedTypeResult | null>,
+): ObservedTypeResult | null {
+  const expression = names.join('.');
+  const query = (controller: string, memberPath: string[], elementPath?: string[]) => {
+    if (!memo) return observedTypeOf(src, relPath, controller, memberPath, expression, elementPath);
+    const key = [controller, memberPath.join('.'), elementPath?.join('.') ?? '\0'].join('\n');
+    if (!memo.has(key)) memo.set(key, observedTypeOf(src, relPath, controller, memberPath, expression, elementPath));
+    const hit = memo.get(key)!;
+    return hit && { ...hit, expression };
+  };
   const controller = controllerOf(chain);
   if (!controller) return null;
   const alias = aliasOf(chain);
@@ -344,10 +363,68 @@ export function observedTypeAt(src: ObservedTypeSource, relPath: string, offset:
   if (local) {
     if (!local.collection) return null; // ng-init and friends: out of scope for v1
     const collection = unalias([local.collection.root, ...local.collection.path]);
-    return observedTypeOf(src, relPath, controller, collection, expression, names.slice(1));
+    return query(controller, collection, names.slice(1));
   }
-  const memberPath = unalias(names);
-  return observedTypeOf(src, relPath, controller, memberPath, expression);
+  return query(controller, unalias(names));
+}
+
+/** Where a template can be empty when rendered: after the variable that is `nullable` (spec decision #2). */
+export interface NullableHint {
+  /** End of the variable's last identifier — where the hint goes. */
+  offset: number;
+  /** The variable as written: `user`, `vm.user`, `state.user`. */
+  expression: string;
+}
+
+/**
+ * Every place in a template's Angular expressions where a variable can be empty when rendered
+ * (spec decisions #2, #3): for each property chain (`vm.user.name`), the first prefix whose
+ * observed type is `nullable` — explicitly assigned null/undefined somewhere. One hint per
+ * variable per expression. Only in callbacks, unknown, not nullable: no hint. EJS locals aren't
+ * Angular expressions, so they never get one. `range`: only expressions overlapping it.
+ */
+export function nullableHints(src: ObservedTypeSource, relPath: string, range?: Span): NullableHint[] {
+  const facts = src.facts(relPath);
+  if (facts?.kind !== 'template') return [];
+  const out: NullableHint[] = [];
+  const memo = new Map<string, ObservedTypeResult | null>();
+  for (const expr of facts.expressions) {
+    if (range && (expr.span.end < range.start || expr.span.start > range.end)) continue;
+    const program = tryParseExpression(expr.text, expr.span.start);
+    if (!program) continue;
+    const seen = new Set<string>();
+    for (const top of chainTops(program)) {
+      const segs = segmentsOf(top);
+      for (let i = 0; i < segs.length; i++) {
+        const names = segs.slice(0, i + 1).map((sg) => sg.name);
+        const t = typeOfNames(src, relPath, expr.scopeChain, names, memo);
+        if (!t) {
+          if (i === 0) continue; // `vm` of `vm.user`: the alias itself has no type, its members do
+          break;
+        }
+        if (!t.nullable) continue;
+        if (!seen.has(t.expression)) {
+          seen.add(t.expression);
+          out.push({ offset: segs[i]!.span.end, expression: t.expression });
+        }
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** The outermost property chains of an expression: `a.b.c` once, not also `a.b` and `a`. */
+function chainTops(program: Parameters<typeof walk>[0]): Expr[] {
+  const nodes: Expr[] = [];
+  const objects = new Set<Expr>();
+  walk(program, (n) => {
+    if (n.type === 'MemberExpression') {
+      nodes.push(n);
+      objects.add(n.object);
+    } else if (n.type === 'Identifier') nodes.push(n);
+  });
+  return nodes.filter((n) => !objects.has(n));
 }
 
 /** `vm.form.name` -> the identifiers `vm`, `form`, `name` with their spans; stops at a computed key. */
