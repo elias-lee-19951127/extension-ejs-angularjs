@@ -1,6 +1,6 @@
 # Spec: Kiểu đã thấy (Observed Type) của biến trong template
 
-**Ngày chốt:** 2026-09-19 · **Trạng thái:** chưa triển khai — ticket 01–05
+**Ngày chốt:** 2026-09-19 · **Trạng thái:** bản 1 xong — ticket 01–05 done (2026-09-19); còn verify tay inlay hint trong VS Code / IntelliJ (ticket 04). Nguồn runtime (R1/R4/R3) chưa có ticket
 **Nguồn:** phiên phản biện 2026-09-19 (7 câu, người dùng đồng ý mọi đề xuất), sau khi đo trên
 `smart-city` (script đo nằm ngoài repo — số liệu chép ở dưới).
 

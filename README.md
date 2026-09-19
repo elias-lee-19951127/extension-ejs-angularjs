@@ -30,6 +30,22 @@ Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **Int
 | Rename | `$scope.busy` → đổi đồng bộ mọi lượt đọc/ghi trong JS và mọi template; từ chối kèm lý do khi xung đột |
 | Completion theo shape | `busy.` → `search`, `ingest`…; `section.` → khoá của phần tử trong `sections` |
 | File đổi ngoài editor | `git pull` / checkout / tool khác → index tự cập nhật (VSCode và IntelliJ), không cần đánh index lại |
+| Kiểu đã thấy | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + các chỗ gán; `vm.user` có lúc `= null` → chú thích nhạt `may be empty` |
+
+### Kiểu đã thấy trong hover và inline
+
+Hover trên một biến scope trong template (`vm.rows`, `vm.form.name`, phần tử `row` của `ng-repeat`) —
+hoặc trên `$scope.x = …` / `this.x = …` trong file JS — có thêm mục **Observed type**: kiểu gộp từ
+**mọi** lần gán trong controller (key không có ở mọi lần gán thành `id?`, khác loại thành `A | B`),
+tối đa 5 chỗ gán dạng link, và hai dòng lưu ý khi có: *Can be empty when rendered* (có lần gán
+`null`/`undefined`) và *Only assigned in a callback* (chưa có giá trị ở lần render đầu). Không suy
+ra được thì ghi lý do và nguồn (`res.data` ở `list.controller.js:30`), không bao giờ ghi `unknown` trơn.
+
+Chú thích **inline** thì cố ý hiếm: chỉ `may be empty` sau biến trong biểu thức Angular khi biến đó
+có lần gán tường minh `null`/`undefined`/`void 0`. Không inline cho biến chỉ gán trong callback
+(gần như mọi dữ liệu tải async), không inline ở file JS hay EJS local. Tắt bằng
+`ejsng.typeHints.nullable`. Bản này chỉ dùng nguồn tĩnh (index); kiểu thấy lúc chạy sẽ đến sau —
+xem `docs/kien-truc.md` mục 5.3.
 
 ## Bắt đầu
 
@@ -121,6 +137,7 @@ dẫn cụ thể bằng biến môi trường `EJSNG_NODE`.
 | `ejsng.templateRoots` | `[]` | Map `templateUrl` sang file: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — template được nối với controller của directive/component/route/state dùng nó |
 | `ejsng.expressViewsDir` | `"views"` | Thư mục view của Express cho `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Mặc định tắt** để tránh hàng nghìn cảnh báo giả trên code cũ |
+| `ejsng.typeHints.nullable` | `true` | Chú thích inline `may be empty` sau biến có lần gán `null`/`undefined`. Hover không có setting. Đổi xong reload window |
 | `ejsng.include` / `exclude` | | Glob quét file |
 
 ## Kiến trúc

@@ -93,3 +93,28 @@ Target over its own debug connection with a condition that always evaluates to `
 and carries on, never pausing the runtime. Its output takes the same path to inline display as
 `console.*`. See `.scratch/inline-logpoints/spec.md` and `docs/adr/0001-runtime-log-sets-logpoints.md`.
 _Avoid_: breakpoint (a plain breakpoint pauses the program — the extension never sets one), tracepoint
+
+## Observed Type
+
+**Observed Type**:
+The data shape a template variable (`vm.rows`, `vm.form.name`, an `ng-repeat` item `row`) has been
+seen to hold — merged from every piece of **Type Evidence** about it, not a declared type. The same
+kind merges into one (a key missing from some assignments becomes optional `id?`); different kinds
+stay a union `A | B`. Two flags come with it: `nullable` (at least one explicit `null`/`undefined`/
+`void 0` assignment) and "only assigned in a callback" (no value at the first render). Shown in
+hover; the "may be empty" inlay hint is for `nullable` only. See `.scratch/observed-types/spec.md`.
+
+- File: `packages/core/src/resolve/observed-type.ts`
+- Entry point: `observedTypeAt(src, relPath, offset)`, `nullableHints(src, relPath, range?)`
+- Differs from **Shape Walking**: Shape Walking only walks the shape of the FIRST assignment
+  (`scopeMembers` — the "declaration" go-to-definition and rename rely on); Observed Type merges
+  EVERY assignment (`scopeWrites`), nested ones like `$scope.form.extra = …` included.
+_Avoid_: inferred type, declared type, a bare `unknown` (when nothing can be inferred, say why and where from)
+
+**Type Evidence**:
+One piece of evidence about a variable's type: `{ source: 'static' | 'runtime', path, shapes,
+nullable, site | connection, count, lastSeen }`. v1 has only `static` — every `ScopeWrite` (one
+`$scope.x = …` / `this.x = …` assignment) is one piece. `runtime` evidence (R1 logpoints, R4
+`res.render`, R3 `scope()` on hover) plugs into the same model later, **held in RAM per connection,
+never written to the cache**.
+_Avoid_: type hint, sample

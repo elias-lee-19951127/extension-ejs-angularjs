@@ -31,6 +31,23 @@ One language server (Node/TypeScript), two thin clients: **VSCode** and **Intell
 | Rename | `$scope.busy` → renames every read/write in sync across JS and every template; refuses with a reason on conflict |
 | Shape-based completion | `busy.` → `search`, `ingest`…; `section.` → the keys of an element in `sections` |
 | Files changed outside the editor | `git pull` / checkout / another tool → index auto-updates (VSCode and IntelliJ), no need to re-index manually |
+| Observed type | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + where it's assigned; `vm.user` sometimes `= null` → a faint `may be empty` hint |
+
+### Observed types in hover and inline
+
+Hovering a scope variable in a template (`vm.rows`, `vm.form.name`, an `ng-repeat` item `row`) —
+or a `$scope.x = …` / `this.x = …` in a JS file — adds an **Observed type** section: the type merged
+from **every** assignment in the controller (a key missing from some assignments becomes `id?`,
+different kinds become `A | B`), up to 5 assignment sites as links, and two notes when they apply:
+*Can be empty when rendered* (some assignment is `null`/`undefined`) and *Only assigned in a callback*
+(no value at the first render). When nothing can be inferred it says why and where from (`res.data`
+at `list.controller.js:30`) — never a bare `unknown`.
+
+**Inline** hints are deliberately rare: only `may be empty`, after a variable in an Angular expression
+that is explicitly assigned `null`/`undefined`/`void 0` somewhere. No inline hint for a variable only
+assigned in a callback (nearly all async-loaded data), in JS files, or for EJS locals. Turn it off with
+`ejsng.typeHints.nullable`. This version uses static sources only (the index); types seen at runtime
+come later — see `docs/architecture.md` section 5.3.
 
 ## Getting started
 
@@ -124,6 +141,7 @@ inherit the shell's PATH. Force a specific path with the `EJSNG_NODE` environmen
 | `ejsng.templateRoots` | `[]` | Maps `templateUrl` to files: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — the template is then linked to the controller of the directive/component/route/state using it |
 | `ejsng.expressViewsDir` | `"views"` | Express views directory for `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Off by default** to avoid thousands of false warnings on legacy code |
+| `ejsng.typeHints.nullable` | `true` | Inline `may be empty` hint after a variable assigned `null`/`undefined` somewhere. Hover has no setting. Reload the window after changing it |
 | `ejsng.include` / `exclude` | | Glob patterns for file scanning |
 
 ## Architecture

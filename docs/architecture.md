@@ -355,6 +355,63 @@ completion on `vm.user.` can suggest `name`, `email`. Cheap approach:
 
 If you want more than this level → see section 6.
 
+#### 5.3.1 Observed Type — hover, and an inline "may be empty" (2026-09-19)
+
+The shape above serves **completion and go-to-definition**, so it takes only the **first
+assignment** (`scopeMembers` — the "declaration"). To let a developer **see the data shape** while
+writing a template without opening the controller, v1 adds a separate fact and a merging layer. Full
+spec: `.scratch/observed-types/spec.md`.
+
+**Merge every assignment, not just the first.** Measured on `smart-city` (32 data members, 581 uses
+in templates): the first assignment gives a useful type for **78.8%** of uses; merging every
+assignment raises that to **96.0%**. The main reason: 5 members are assigned `null` first and the
+real value later. The extractor now records **every** `$scope.x = …` / `this.x = …` assignment
+(including through `var vm = this`) in a new fact, `JsFacts.scopeWrites`, each carrying: the shape of
+every branch (`a ? b : c`, `a || b`), a `nullable` flag (some branch is an explicit
+`null`/`undefined`/`void 0`), an `inCallback` flag, and the shortened right-hand side to explain a
+shape that can't be inferred. Primitives are now typed (`string`/`number`/`boolean`). `scopeMembers`
+**stays** first-assignment-only — putting every assignment there would give go-to-definition several
+targets and change how rename behaves.
+
+Merge rules (`packages/core/src/resolve/observed-type.ts`): the same kind merges into one, a key
+missing from some assignments becoming optional `id?`; genuinely different kinds stay a union
+`A | B`; an `unknown` next to something known is dropped and marked `partial`. TypeScript syntax,
+`T[]`. Hover cuts off at 2 nesting levels and 8 keys per level, noting the rest as `…+N`. Only the
+**copy of the controller nearest the file** is merged when a controller is declared in several files
+(as `preferNearest` does, Appendix K) — `lastSearchMs` measured 8 assignments because it was declared
+twice.
+
+**Nested assignments.** `$scope.state.loading = true` adds the key `loading` (optional) to the shape
+of `state`. Without it, hovering `{{ state.loading }}` would wrongly say "`state` has no `loading`" —
+being wrong is worse than staying silent.
+
+**Why not inline on every expression.** A type annotation after every expression doubles the length
+of a template line, and users would turn it off immediately (the same reason
+`ejsng.diagnostics.enabled` is off by default). Inline hints have to be rare to be trusted: only
+**`may be empty`**, faintly styled, after a variable with **at least one explicit** `null`/`undefined`
+assignment. It is not called an error: Angular expressions don't throw on null (`{{ a.b }}` renders
+empty). A member **only assigned in a callback** gets no inline hint — counting that case would flag
+nearly all async-loaded data; the hover says it instead. JS files and EJS locals: no inline hints. On
+`smart-city`: 9 templates → 127 hints, each matching a real `= null`; 62ms for all 9 files.
+
+**A data model ready for runtime sources.** A variable's type = a set of **Type Evidence**
+`{ source: 'static' | 'runtime', shape, site | connection, count, lastSeen }`. v1 has only `static`
+(each `ScopeWrite` is one piece) — runtime can plug in later without changing the display. Runtime
+evidence is **held in RAM, per connection, never written to the cache**: old values go stale fast and
+may contain personal data.
+
+**Roadmap for runtime sources.**
+
+| Version | Source | Notes |
+|---|---|---|
+| 2 | **R1** — values from `console.log`/logpoints the Runtime Log pipeline already receives (`type/subtype/preview` of a CDP `RemoteObject`) | Nearly free; only for expressions that are logged. |
+| 2 | **R4** — an always-`false` conditional breakpoint at each `res.render(...)`, recording the shape of the locals through `Runtime.addBinding` | Targets exactly the EJS 500 error (`<%= user.name %>` with `user` undefined) — which static analysis barely knows about, since the type comes from `req`/the DB. |
+| 3 | **R3** — on hover, `Runtime.evaluate` `angular.element(el).scope()…` on a connected tab, with `throwOnSideEffect: true` | The real current value. Hard part: finding the DOM element for the template. Doesn't work if the app is built with `debugInfoEnabled(false)`. |
+
+**R2 dropped** (an automatic probe after every assignment): the probe runs every time that line
+runs — hot loops included — and leaves hundreds of hidden breakpoints that are hard to debug. R1 + R3
+cover the need without either cost.
+
 ---
 
 ## 6. The big fork: hand-written resolver vs. virtual-TS (Volar-style)

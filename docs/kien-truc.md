@@ -341,6 +341,55 @@ gợi ý được `name`, `email`. Cách rẻ:
 
 Nếu muốn hơn mức này → xem mục 6.
 
+#### 5.3.1 Kiểu đã thấy (Observed Type) — hover và inline "có thể rỗng" (2026-09-19)
+
+Shape ở trên phục vụ **completion và go-to-definition**, nên chỉ lấy **lần gán đầu** (`scopeMembers`
+— "chỗ khai báo"). Để dev **thấy hình dạng dữ liệu** khi viết template mà không mở controller, bản 1
+thêm một fact riêng và một lớp gộp. Spec đầy đủ: `.scratch/observed-types/spec.md`.
+
+**Gộp mọi lần gán, không chỉ lần đầu.** Đo trên `smart-city` (32 member dữ liệu, 581 lượt dùng
+trong template): lần gán đầu cho kiểu có ích ở **78.8%** lượt dùng, gộp mọi lần gán lên **96.0%**. Lý
+do chính: 5 member được gán `null` trước rồi mới gán giá trị thật. Extractor giờ ghi **mọi** lần gán
+`$scope.x = …` / `this.x = …` (kể cả qua `var vm = this`) vào fact mới `JsFacts.scopeWrites`, mỗi lần
+gán kèm: shape của từng nhánh (`a ? b : c`, `a || b`), cờ `nullable` (có nhánh tường minh
+`null`/`undefined`/`void 0`), cờ `inCallback`, và vế phải rút gọn để giải thích khi không suy ra được.
+Primitive giờ có kiểu (`string`/`number`/`boolean`). `scopeMembers` **giữ nguyên** lần gán đầu — nhét
+mọi lần gán vào đó sẽ làm go-to-definition ra nhiều đích và đổi hành vi rename.
+
+Luật gộp (`packages/core/src/resolve/observed-type.ts`): cùng loại → gộp một, key không có ở mọi
+lần gán thành optional `id?`; khác loại hẳn → union `A | B`; `unknown` cạnh cái đã biết thì bỏ, đánh
+dấu `partial`. Cú pháp TypeScript, `T[]`. Hover cắt ở 2 cấp lồng, 8 key/cấp, phần cắt ghi `…+N`. Chỉ
+gộp từ **bản controller gần file nhất** khi controller khai báo trùng ở nhiều file (như
+`preferNearest`, phụ lục K) — đo thấy `lastSearchMs` có 8 lần gán vì bị khai báo 2 lần.
+
+**Gán lồng.** `$scope.state.loading = true` bổ sung key `loading` (optional) vào shape của `state`.
+Không có bước này thì hover `{{ state.loading }}` báo sai "`state` không có `loading`" — sai còn tệ
+hơn im lặng.
+
+**Vì sao không inline mọi biểu thức.** Chú thích kiểu sau mọi biểu thức làm dòng template dài gấp
+đôi, người dùng sẽ tắt ngay (cùng lý do `ejsng.diagnostics.enabled` mặc định tắt). Inline phải hiếm
+mới được tin: chỉ **`may be empty`**, style nhạt, sau biến có **ít nhất một lần gán tường minh**
+`null`/`undefined`. Không gọi là lỗi: biểu thức Angular không ném lỗi khi gặp null (`{{ a.b }}` ra
+rỗng). Member **chỉ gán trong callback** không được inline — tính cả trường hợp đó thì gần như mọi
+dữ liệu tải async bị gắn cờ; chỉ ghi trong hover. File JS và EJS local: không inline. Trên
+`smart-city`: 9 template → 127 hint, đều ứng với `= null` thật; 62ms cả 9 file.
+
+**Mô hình dữ liệu cho nguồn runtime.** Kiểu của một biến = tập **Bằng chứng kiểu (Type Evidence)**
+`{ source: 'static' | 'runtime', shape, site | connection, count, lastSeen }`. Bản 1 chỉ có `static`
+(mỗi `ScopeWrite` là một bằng chứng) — runtime cắm vào sau không phải đổi hiển thị. Bằng chứng
+runtime **chỉ ở RAM, theo kết nối, không ghi cache**: giá trị cũ nhanh và có thể chứa dữ liệu cá nhân.
+
+**Lộ trình nguồn runtime.**
+
+| Bản | Nguồn | Ghi chú |
+|---|---|---|
+| 2 | **R1** — giá trị `console.log`/logpoint mà pipeline Runtime Log đã nhận (`type/subtype/preview` của CDP `RemoteObject`) | Gần như miễn phí; chỉ có ở biểu thức được log. |
+| 2 | **R4** — breakpoint điều kiện luôn `false` tại mỗi `res.render(...)`, ghi shape của locals qua `Runtime.addBinding` | Giải đúng lỗi 500 của EJS (`<%= user.name %>` với `user` undefined) — thứ tĩnh gần như không biết vì kiểu đến từ `req`/DB. |
+| 3 | **R3** — lúc hover, `Runtime.evaluate` `angular.element(el).scope()…` trên tab đã kết nối, `throwOnSideEffect: true` | Giá trị hiện tại thật. Khó: tìm phần tử DOM ứng với template. Không chạy nếu app build với `debugInfoEnabled(false)`. |
+
+**Bỏ R2** (probe tự động sau mỗi lần gán): probe chạy ở mọi lần dòng đó chạy — cả vòng lặp nóng —
+và để lại hàng trăm breakpoint ngầm khó gỡ lỗi. R1 + R3 phủ đủ nhu cầu mà không có hai cái giá đó.
+
 ---
 
 ## 6. Ngã rẽ lớn: tự viết resolver vs. virtual-TS (kiểu Volar)

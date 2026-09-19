@@ -90,3 +90,27 @@ kenh debug cua chinh no, voi dieu kien luon tra `false` — ghi log roi chay tie
 runtime. Log cua no di chung duong ve inline voi `console.*`. Xem
 `.scratch/inline-logpoints/spec.md` va `docs/adr/0001-runtime-log-sets-logpoints.md`.
 _Avoid_: breakpoint (breakpoint thuong thi dung chuong trinh — extension khong bao gio dat loai do), tracepoint
+
+## Observed Type
+
+**Kieu da thay (Observed Type)**:
+Hinh dang du lieu ma mot bien template (`vm.rows`, `vm.form.name`, phan tu `row` cua `ng-repeat`)
+da duoc thay giu — gop tu moi **Bang chung kieu** ve no, khong phai kieu khai bao. Cung loai thi gop
+mot (key khong co o moi lan gan thanh optional `id?`), khac loai thi union `A | B`. Kem hai co:
+`nullable` (co it nhat mot lan gan tuong minh `null`/`undefined`/`void 0`) va "chi gan trong
+callback" (chua co gia tri o lan render dau). Hien trong hover; inlay hint "may be empty" chi cho
+`nullable`. Xem `.scratch/observed-types/spec.md`.
+
+- File: `packages/core/src/resolve/observed-type.ts`
+- Entry point: `observedTypeAt(src, relPath, offset)`, `nullableHints(src, relPath, range?)`
+- Khac **Shape Walking**: Shape Walking chi di tren shape cua lan gan DAU (`scopeMembers` — "cho
+  khai bao" ma go-to-definition va rename dua vao); Observed Type gop MOI lan gan (`scopeWrites`),
+  ke ca gan long `$scope.form.extra = …`.
+_Avoid_: inferred type, declared type, `unknown` tron (khong suy ra duoc thi ghi ly do + nguon)
+
+**Bang chung kieu (Type Evidence)**:
+Mot manh bang chung ve kieu cua mot bien: `{ source: 'static' | 'runtime', path, shapes, nullable,
+site | connection, count, lastSeen }`. Ban 1 chi co `static` — moi `ScopeWrite` (mot lan gan
+`$scope.x = …` / `this.x = …`) la mot bang chung. Bang chung `runtime` (R1 logpoint, R4 `res.render`,
+R3 `scope()` luc hover) cam vao cung mo hinh sau nay, **chi o RAM theo ket noi, khong ghi cache**.
+_Avoid_: type hint, sample
