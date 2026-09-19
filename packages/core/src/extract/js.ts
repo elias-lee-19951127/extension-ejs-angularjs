@@ -3,6 +3,7 @@ import * as walkLib from 'acorn-walk';
 import type {
   Confidence,
   Config,
+  JsBinding,
   JsFacts,
   NgDeclaration,
   NgDeclKind,
@@ -13,7 +14,7 @@ import type {
   ValueShape,
 } from '../types';
 import { parseJsTolerant, propName, stringOf } from './js-common';
-import { extractBindings } from './bindings';
+import { extractBindings, resolveBinding } from './bindings';
 
 const DECL_METHODS = new Set<NgDeclKind>([
   'controller', 'service', 'factory', 'provider', 'directive',
@@ -338,6 +339,7 @@ function extractScopeMembers(ast: acorn.Program, decl: NgDeclaration, facts: JsF
   if (!fnNode) return;
 
   const scopeParam = scopeParamName(decl, fnNode);
+  const isThisAlias = thisAliasTest(fnNode, facts.bindings);
   const alias = decl.ddo?.controllerAs;
 
   const seen = new Set<string>();
@@ -350,7 +352,7 @@ function extractScopeMembers(ast: acorn.Program, decl: NgDeclaration, facts: JsF
       const obj = node.left.object;
       let via: ScopeMember['via'] | null = null;
       if (scopeParam && obj.type === 'Identifier' && obj.name === scopeParam) via = '$scope';
-      else if (obj.type === 'ThisExpression') via = 'this';
+      else if (obj.type === 'ThisExpression' || isThisAlias(obj)) via = 'this';
       if (!via) return;
 
       const name = node.left.property.name;
@@ -426,6 +428,37 @@ export function scopeParamName(
   }
   const param = fn.params[idx];
   return param && param.type === 'Identifier' ? param.name : null;
+}
+
+/**
+ * Tests whether a node is a variable holding the controller instance: `var vm = this;` (or
+ * `self`, `ctrl`…) declared in the controller's own body — the usual controllerAs style. Resolved
+ * through the bindings, so a nested parameter that happens to be called `vm` doesn't count.
+ *
+ * Unlike `this`, such a variable still means the controller inside a nested callback. A
+ * `var x = this` inside a nested non-arrow function captures THAT function's `this` — ignored.
+ */
+function thisAliasTest(
+  fn: acorn.FunctionExpression | acorn.ArrowFunctionExpression,
+  bindings: JsBinding[],
+): (node: acorn.Node) => boolean {
+  if (fn.type === 'ArrowFunctionExpression') return () => false; // an arrow has no `this` of its own
+  const declared = new Set<number>();
+  walkLib.ancestor(fn.body as acorn.Node, {
+    VariableDeclarator(node, _state, ancestors) {
+      if (node.id.type !== 'Identifier' || node.init?.type !== 'ThisExpression') return;
+      const ownThis = (ancestors as acorn.Node[]).some(
+        (a) => a !== node && (a.type === 'FunctionExpression' || a.type === 'FunctionDeclaration'),
+      );
+      if (!ownThis) declared.add(node.id.start);
+    },
+  });
+  if (!declared.size) return () => false;
+  return (node) => {
+    if (node.type !== 'Identifier') return false;
+    const binding = resolveBinding(bindings, (node as acorn.Identifier).name, node.start);
+    return !!binding && declared.has(binding.span.start);
+  };
 }
 
 /**
@@ -506,24 +539,25 @@ const COMPARISON_OPS = new Set(['==', '!=', '===', '!==', '<', '<=', '>', '>=', 
  * Every assignment onto the declaration's scope, nested ones included — see `ScopeWrite`.
  *
  * Recognizes the scope the same way `extractScopeMembers` does (the `$scope` parameter by its DI
- * position, or `this`), with one difference: `this` inside a non-arrow function nested in the
+ * position, `this`, or a `var vm = this` alias), with one difference: `this` inside a non-arrow function nested in the
  * body is that function's own `this`, not the controller, so it is not counted here.
  */
 function extractScopeWrites(ast: acorn.Program, decl: NgDeclaration, facts: JsFacts, source: string): void {
   const fnNode = findFunctionFor(ast, decl);
   if (!fnNode) return;
   const scopeParam = scopeParamName(decl, fnNode);
+  const isThisAlias = thisAliasTest(fnNode, facts.bindings);
 
   walkLib.ancestor(fnNode.body as acorn.Node, {
     AssignmentExpression(node, _state, ancestors) {
-      const target = scopePath(node.left as acorn.Node, scopeParam);
+      const target = scopePath(node.left as acorn.Node, scopeParam, isThisAlias);
       if (!target) return;
 
       // Functions between the declaration's own function and this assignment.
       const nested = (ancestors as acorn.Node[]).filter(
         (a) => a.type === 'FunctionExpression' || a.type === 'ArrowFunctionExpression' || a.type === 'FunctionDeclaration',
       );
-      if (target.via === 'this' && nested.some((f) => f.type !== 'ArrowFunctionExpression')) return;
+      if (target.thisKeyword && nested.some((f) => f.type !== 'ArrowFunctionExpression')) return;
 
       let right: acorn.Node = node.right;
       while (right.type === 'AssignmentExpression') right = (right as acorn.AssignmentExpression).right; // a = b = 0
@@ -544,11 +578,16 @@ function extractScopeWrites(ast: acorn.Program, decl: NgDeclaration, facts: JsFa
   });
 }
 
-/** `$scope.a.b` / `this.a.b` -> `{ via, path: ['a', 'b'] }`; anything else (computed keys included) -> null. */
+/**
+ * `$scope.a.b` / `this.a.b` / `vm.a.b` (`vm = this`) -> `{ via, path: ['a', 'b'] }`; anything else
+ * (computed keys included) -> null. `thisKeyword`: written with `this` itself, whose meaning a
+ * nested function changes.
+ */
 function scopePath(
   node: acorn.Node,
   scopeParam: string | null,
-): { via: ScopeWrite['via']; path: string[]; span: Span } | null {
+  isThisAlias: (node: acorn.Node) => boolean,
+): { via: ScopeWrite['via']; path: string[]; span: Span; thisKeyword: boolean } | null {
   const path: string[] = [];
   let cur = node;
   let span: Span | null = null;
@@ -560,8 +599,11 @@ function scopePath(
     cur = m.object;
   }
   if (!span) return null;
-  if (cur.type === 'ThisExpression') return { via: 'this', path, span };
-  if (scopeParam && cur.type === 'Identifier' && (cur as acorn.Identifier).name === scopeParam) return { via: '$scope', path, span };
+  if (cur.type === 'ThisExpression') return { via: 'this', path, span, thisKeyword: true };
+  if (isThisAlias(cur)) return { via: 'this', path, span, thisKeyword: false };
+  if (scopeParam && cur.type === 'Identifier' && (cur as acorn.Identifier).name === scopeParam) {
+    return { via: '$scope', path, span, thisKeyword: false };
+  }
   return null;
 }
 

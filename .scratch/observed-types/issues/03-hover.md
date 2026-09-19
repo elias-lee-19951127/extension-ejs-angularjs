@@ -37,3 +37,9 @@ Test: `packages/server/test/lsp.test.js` (2 test mới, fixture `mini` + thư m�
 Giới hạn thấy khi làm (có sẵn, ngoài ticket): extractor **không theo bí danh `var vm = this`** —
 `vm.x = …` không thành `ScopeWrite` (cũng không thành `scopeMembers`), nên controller viết kiểu
 controllerAs qua `vm` không có kiểu. Chỉ `this.x = …` trực tiếp và `$scope`/bí danh tham số được nhận.
+
+**2026-09-19 — đã sửa giới hạn trên.** `thisAliasTest` trong `extract/js.ts`: biến khai báo
+`var vm = this` ngay trong thân controller (không trong hàm lồng non-arrow) được coi là `via: 'this'`
+cho cả `scopeMembers` và `scopeWrites`, kể cả khi dùng trong callback. Xác định qua `resolveBinding`
+nên tham số lồng tên `vm` không bị nhận nhầm. `PARSER_VERSION` 13 → 14. Rename qua controllerAs vẫn
+bị từ chối như trước (rename-orchestrator).

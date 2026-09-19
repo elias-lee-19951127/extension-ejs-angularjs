@@ -101,6 +101,28 @@ angular.module('app', []).controller('C', function ($timeout) {
   assert.deepStrictEqual(ready.map((w) => [w.via, w.inCallback]), [['this', false], ['this', true]]);
 });
 
+test('`var vm = this` is the controller, in nested callbacks too; a nested `vm` parameter or `this` capture is not', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', function ($http) {
+  var vm = this;
+  vm.rows = [];
+  $http.get('/r').then(function (res) { vm.rows = res.data; vm.state.loaded = true; });
+  function other(vm) { vm.notMine = 1; }
+  $http.get('/x').then(function () { var self = this; self.alsoNot = 2; });
+});
+`);
+  const rows = writesOf(facts, 'rows');
+  assert.deepStrictEqual(rows.map((w) => [w.via, w.inCallback, w.rhsText]), [['this', false, '[]'], ['this', true, 'res.data']]);
+  assert.deepStrictEqual(writesOf(facts, 'state').map((w) => w.path), [['state', 'loaded']]);
+  assert.deepStrictEqual(writesOf(facts, 'notMine'), []);
+  assert.deepStrictEqual(writesOf(facts, 'alsoNot'), []);
+
+  // scopeMembers (definition's declaration site) sees it too — the first assignment only.
+  const members = facts.scopeMembers.filter((m) => m.name === 'rows');
+  assert.deepStrictEqual(members.map((m) => [m.via, m.owner]), [['this', 'C']]);
+  assert.ok(!facts.scopeMembers.some((m) => m.name === 'notMine' || m.name === 'alsoNot'));
+});
+
 test('primitives are typed: string, number, boolean, and expressions that obviously yield one', () => {
   const facts = extract(`
 angular.module('app', []).controller('C', function ($scope, n, a, b) {

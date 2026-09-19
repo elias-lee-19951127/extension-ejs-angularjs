@@ -182,6 +182,26 @@ angular.module('app', []).controller('C', function ($scope) {
   assert.strictEqual(typeAt(ws, 'app.js', 'form.extra'), null);
 });
 
+test('controllerAs written through `var vm = this`: definition and observed type reach the controller', (t) => {
+  const ws = workspace(t, {
+    'app.js': `
+angular.module('app', []).controller('ListCtrl', function ($http) {
+  var vm = this;
+  vm.rows = null;
+  $http.get('/rows').then(function () { vm.rows = [{ id: 1 }]; });
+});
+`,
+    'page.html': '<ul ng-controller="ListCtrl as vm"><li ng-repeat="row in vm.rows">{{ row.id }}</li></ul>\n',
+  });
+  const def = ws.definitionAt('page.html', at(ws, 'page.html', 'rows"'));
+  assert.deepStrictEqual(def.targets.map((d) => [d.path, ws.source(d.path).slice(d.span.start, d.span.end)]), [['app.js', 'rows']]);
+
+  const rows = typeAt(ws, 'page.html', 'rows"');
+  assert.strictEqual(rows.text, '{ id: number }[] | null');
+  assert.strictEqual(rows.sites.length, 2);
+  assert.strictEqual(typeAt(ws, 'page.html', 'id }}').text, 'number');
+});
+
 test('formatType: 8 keys per object, 2 levels of nesting', () => {
   const props = Object.fromEntries('abcdefghij'.split('').map((k) => [k, { kind: 'primitive', primitive: 'number' }]));
   assert.strictEqual(
