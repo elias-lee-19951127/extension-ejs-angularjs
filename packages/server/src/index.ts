@@ -35,6 +35,7 @@ import {
   parseLogMessage,
   RuntimeEvidenceStore,
   typeOfRuntimeValue,
+  typeSignature,
   type ScopeTarget,
   type Config,
   type ObservedTypeResult,
@@ -271,6 +272,8 @@ connection.onInitialize((params): InitializeResult => {
     watched?.dynamicRegistration === true ? { relative: watched.relativePatternSupport === true } : null;
 
   workspace = new Workspace({ root, ...settings });
+  // observed-types-r1: hover merges in what every live runtime connection has seen.
+  workspace.setRuntimeEvidence((owner, member) => [...runtimeLogConnections.values()].flatMap((info) => info.typeEvidence.forMember(owner, member)));
 
   return {
     capabilities: {
@@ -523,10 +526,16 @@ connection.languages.inlayHint.on((params): InlayHint[] => {
 
 const MAX_UNKNOWN_SOURCES = 5;
 
+/** `14:03:22`, local time — when a runtime last showed a value. */
+function clockTime(ms: number): string {
+  return new Date(ms).toTimeString().slice(0, 8);
+}
+
 /**
  * The Observed Type section of a hover (.scratch/observed-types/spec.md decisions #1, #3, #7):
  * the merged type, whether it can be empty or is only set in a callback, and where it's assigned.
- * Never a bare "unknown" — what couldn't be inferred is named with its source.
+ * Never a bare "unknown" — what couldn't be inferred is named with its source. Runtime evidence
+ * (observed-types-r1 decision #8) is merged into the type and says where and when it was seen.
  */
 function observedTypeLines(t: ObservedTypeResult): string[] {
   const lines = [`**Observed type** of \`${t.expression}\``];
@@ -535,9 +544,11 @@ function observedTypeLines(t: ObservedTypeResult): string[] {
     .map((u) => `\`${u.rhsText || '…'}\` (${fileLink(u.path, u.span)})`)
     .join(', ');
 
+  const fromRuntime = t.runtime.length > 0;
   if (t.text) {
     lines.push('```ts', t.text, '```');
-    if (t.partial && sources) lines.push(`- _Some assignments could not be inferred and are left out:_ ${sources}`);
+    if (sources && fromRuntime) lines.push(`- _Not inferred statically_ (${sources}) _— shape from runtime_`);
+    else if (t.partial && sources) lines.push(`- _Some assignments could not be inferred and are left out:_ ${sources}`);
   } else if (sources) {
     lines.push(`- _Could not be inferred — assigned from_ ${sources}`);
   } else {
@@ -548,6 +559,10 @@ function observedTypeLines(t: ObservedTypeResult): string[] {
     lines.push(`- _Only assigned in a callback_ (${fileLink(t.sites[0].path, t.sites[0].span)}) — no value at the first render.`);
   }
   if (t.sites.length) lines.push(`- Assigned at: ${t.sites.map((s) => fileLink(s.path, s.span)).join(', ')}`);
+  for (const r of t.runtime) {
+    lines.push(`- _Seen at runtime:_ ${r.count}× — last ${clockTime(r.lastSeen)} via \`${r.connection}\`, logged at ${fileLink(r.site.path, r.site.span)}`);
+  }
+  if (t.seenNullAtRuntime) lines.push('- _Seen `null`/`undefined` at runtime_ — no assignment sets it, so it gets no inline hint.');
   return lines;
 }
 
@@ -1108,7 +1123,9 @@ function collectTypeEvidence(key: string, info: RuntimeLogConnectionInfo, log: P
   targets.forEach((target, i) => {
     const arg = log.args[i];
     if (!target || !arg) return;
-    const place = `${relPath}\u0000${offset}\u0000${i}`;
+    // Keyed by the preview's type too: the same place logging a DIFFERENT kind of value (an object,
+    // then `null`) must be dug and recorded, not counted as more of the first. The preview costs no request.
+    const place = `${relPath}\u0000${offset}\u0000${i}\u0000${typeSignature(typeOfRuntimeValue({ object: arg }))}`;
     if (!info.typeEvidence.claim(place, Date.now())) return;
     const getProperties = (objectId: string): Promise<unknown> =>
       info.request('Runtime.getProperties', { objectId, ownProperties: true, generatePreview: true });

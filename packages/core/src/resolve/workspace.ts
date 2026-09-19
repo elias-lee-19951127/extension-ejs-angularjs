@@ -12,7 +12,7 @@ import { nearestRows, preferNearest } from './rename';
 import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
-import { nullableHints, observedTypeAt, observedTypeOf, type NullableHint, type ObservedTypeResult } from './observed-type';
+import { nullableHints, observedTypeAt, observedTypeOf, type NullableHint, type ObservedTypeResult, type TypeEvidence } from './observed-type';
 import { linkDefinition, linkTemplates, withBinding, type TemplateLinkIndex, type TemplateLinkIssue } from './template-links';
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
@@ -692,6 +692,20 @@ export class Workspace implements FactSource, RenameSource {
   nullableHints(relPath: string, range?: Span): NullableHint[] {
     return nullableHints(this, relPath, range);
   }
+
+  /**
+   * Where runtime Type Evidence comes from (observed-types-r1): the server's live connections.
+   * Workspace keeps none itself — runtime evidence is never indexed or cached.
+   */
+  setRuntimeEvidence(provider: ((owner: string, member: string) => TypeEvidence[]) | null): void {
+    this.runtimeEvidenceProvider = provider;
+  }
+
+  runtimeEvidence(owner: string, member: string): TypeEvidence[] {
+    return this.runtimeEvidenceProvider?.(owner, member) ?? [];
+  }
+
+  private runtimeEvidenceProvider: ((owner: string, member: string) => TypeEvidence[]) | null = null;
 
   /**
    * The `console.*` call a runtime log's frame points at — `offset` is where V8 reports it, the

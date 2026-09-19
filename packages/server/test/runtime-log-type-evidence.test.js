@@ -119,3 +119,71 @@ test('LSP + real node --inspect: a console.log and a logpoint of scope variables
   await waitForStatus(conn, (s) => s.connections[0]?.state === 'failed');
   assert.strictEqual((await conn.sendRequest('ejsng/runtimeStatus')).connections[0].typeEvidence, 0);
 });
+
+function positionOf(text, needle, offset = 0) {
+  const idx = text.indexOf(needle);
+  assert.notStrictEqual(idx, -1, `${needle} not found`);
+  const before = text.slice(0, idx + offset);
+  const line = before.split('\n').length - 1;
+  return { line, character: before.length - before.lastIndexOf('\n') - 1 };
+}
+
+// Values no assignment can type: they come from a function call. Only the runtime can say.
+const LOADING_CONTROLLER = [
+  'var angular = { module: function () { return { controller: function (n, f) { f.call({}, {}); return this; } }; } };',
+  "function load(n) { return [{ id: n, name: 'x', owner: { id: 1, name: 'o' } }]; }",
+  "function find(n) { return n % 2 ? { title: 't' } : null; }",
+  "angular.module('app', []).controller('ListCtrl', function ($scope) {",
+  '  var n = 0;',
+  '  $scope.rows = [];',
+  '  setInterval(function () {',
+  '    n++;',
+  '    $scope.rows = load(n);',
+  '    $scope.sel = find(n);',
+  '    console.log($scope.rows, $scope.sel);',
+  '  }, 40);',
+  '});',
+  '',
+].join('\n');
+
+test('LSP + real node --inspect: hover merges what the runtime logged, says where and when; the inline hint does not move', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-type-hover-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'list.controller.js'), LOADING_CONTROLLER);
+  const html = '<ul ng-controller="ListCtrl"><li ng-repeat="row in rows">{{ row.owner.name }}</li>{{ sel.title }}</ul>\n';
+  writeFileSync(join(root, 'list.html'), html);
+
+  const { child, port } = await startInspectedNode(t, root, 'list.controller.js');
+  const { conn } = await startServer(t, root);
+  const uri = pathToFileURL(join(root, 'list.html')).href;
+  conn.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: 'html', version: 1, text: html } });
+  const hover = (needle, offset = 0) =>
+    conn.sendRequest('textDocument/hover', { textDocument: { uri }, position: positionOf(html, needle, offset) }).then((h) => h.contents.value);
+  const hints = () => conn.sendRequest('textDocument/inlayHint', { textDocument: { uri }, range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } } });
+
+  const before = await hover('rows">');
+  assert.match(before, /```ts\nunknown\[\]\n```/, before);
+  assert.match(before, /_Some assignments could not be inferred and are left out:_ `load\(n\)`/, before);
+  assert.doesNotMatch(before, /Seen at runtime/, before);
+  const hintsBefore = await hints();
+
+  assert.strictEqual((await conn.sendRequest('ejsng/connectRuntime', { host: '127.0.0.1', port })).status, 'connected');
+  await waitForStatus(conn, (s) => s.connections[0]?.typeEvidence >= 3); // rows, sel as object, sel as null
+
+  const rows = await hover('rows">');
+  assert.match(rows, /```ts\n\{ id: number, name: string, owner: \{ id: number, name: string \} \}\[\]\n```/, rows);
+  assert.match(rows, /_Not inferred statically_ \(`load\(n\)` \(\[list\.controller\.js:9\]\(\S*#L9\)\)\) _— shape from runtime_/, rows);
+  assert.match(rows, /_Seen at runtime:_ \d+× — last \d\d:\d\d:\d\d via `[^`]+`, logged at \[list\.controller\.js:11\]\(\S*#L11\)/, rows);
+  assert.match(await hover('name }}'), /```ts\nstring\n```/);
+
+  const sel = await hover('sel.title');
+  assert.match(sel, /```ts\n\{ title: string \} \| null\n```/, sel);
+  assert.match(sel, /_Seen `null`\/`undefined` at runtime_/, sel);
+  assert.doesNotMatch(sel, /_Can be empty when rendered_/, sel);
+  assert.deepStrictEqual(await hints(), hintsBefore, 'runtime evidence never adds an inline hint');
+
+  // The runtime going away takes its part of the hover with it.
+  child.kill();
+  await waitForStatus(conn, (s) => s.connections[0]?.state === 'failed');
+  assert.strictEqual(await hover('rows">'), before);
+});

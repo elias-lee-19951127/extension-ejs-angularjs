@@ -249,3 +249,103 @@ test('formatType: 8 keys per object, 2 levels of nesting', () => {
   const deep = { kind: 'object', props: { l1: { kind: 'object', props: { l2: { kind: 'object', props: { x: { kind: 'primitive' } } } } } } };
   assert.strictEqual(C.formatType(C.fromShape(deep)), '{ l1: { l2: {…} } }');
 });
+
+// ---------------------------------------------------------------- runtime evidence (observed-types-r1 ticket 04)
+
+/** Feed `ws` runtime evidence the way the server does: a store per connection, each value dug already. */
+function withRuntime(ws, stores) {
+  ws.setRuntimeEvidence((owner, member) => stores.flatMap((s) => s.forMember(owner, member)));
+}
+
+function logValue(store, place, target, value, site, now) {
+  store.claim(place, now);
+  store.record(place, target, C.typeOfRuntimeValue(value), site, now);
+}
+
+const obj = (props) => ({
+  object: { type: 'object' },
+  properties: Object.entries(props).map(([name, value]) => ({ name, value })),
+});
+const prim = (type) => ({ object: { type } });
+const NULL = { object: { type: 'object', subtype: 'null' } };
+
+const LIST = `
+angular.module('app', []).controller('ListCtrl', function ($scope, $http) {
+  $scope.rows = [];
+  $http.get('/rows').then(function (res) {
+    $scope.rows = res.data;
+    console.log($scope.rows);
+  });
+  $scope.sel = find();
+});
+`;
+
+test('runtime evidence fills in what no assignment could say; the hover still names what was not inferred', (t) => {
+  const ws = workspace(t, { 'list.js': LIST, 'list.html': '<ul ng-controller="ListCtrl"><li ng-repeat="row in rows">{{ row.owner.name }} {{ sel }}</li></ul>\n' });
+  const before = typeAt(ws, 'list.html', 'rows">');
+  assert.strictEqual(before.text, 'unknown[]');
+  assert.deepStrictEqual(before.runtime, []);
+
+  const store = new C.RuntimeEvidenceStore('Chrome — localhost:9222');
+  const site = { path: 'list.js', span: { start: ws.source('list.js').indexOf('log('), end: 0 } };
+  const row = obj({ id: prim('number'), owner: obj({ name: prim('string') }) });
+  logValue(store, 'p', { owner: 'ListCtrl', path: ['rows'] }, { object: { type: 'object', subtype: 'array' }, properties: [{ name: '0', value: row }] }, site, 1000);
+  logValue(store, 'p2', { owner: 'ListCtrl', path: ['rows'] }, { object: { type: 'object', subtype: 'array' }, properties: [{ name: '0', value: row }] }, site, 2000);
+  withRuntime(ws, [store]);
+
+  const after = typeAt(ws, 'list.html', 'rows">');
+  assert.strictEqual(after.text, '{ id: number, owner: { name: string } }[]');
+  assert.deepStrictEqual(after.unknownFrom.map((u) => u.rhsText), ['res.data'], 'still said: the assignment itself was not inferred');
+  assert.deepStrictEqual(after.runtime, [{ connection: 'Chrome — localhost:9222', count: 2, lastSeen: 2000, site }]);
+  assert.deepStrictEqual(after.sites.length, 2, '"Assigned at" lists assignments only');
+  // Through an ng-repeat item and a nested key.
+  assert.strictEqual(typeAt(ws, 'list.html', 'name }}').text, 'string');
+
+  // Gone with the connection.
+  withRuntime(ws, []);
+  assert.strictEqual(typeAt(ws, 'list.html', 'rows">').text, 'unknown[]');
+});
+
+test('null seen at runtime shows in the hover, never in the inline hint', (t) => {
+  const ws = workspace(t, { 'list.js': LIST, 'list.html': '<p ng-controller="ListCtrl">{{ sel.name }}</p>\n' });
+  const store = new C.RuntimeEvidenceStore('node');
+  const site = { path: 'list.js', span: { start: 0, end: 0 } };
+  logValue(store, 'a', { owner: 'ListCtrl', path: ['sel'] }, NULL, site, 1);
+  logValue(store, 'b', { owner: 'ListCtrl', path: ['sel'] }, obj({ name: prim('string') }), site, 2);
+  withRuntime(ws, [store]);
+
+  const r = typeAt(ws, 'list.html', 'sel.name');
+  assert.strictEqual(r.text, '{ name: string } | null');
+  assert.strictEqual(r.nullable, false, 'no assignment sets it to null');
+  assert.strictEqual(r.seenNullAtRuntime, true);
+  assert.deepStrictEqual(ws.nullableHints('list.html'), []);
+});
+
+test('a member only a runtime has seen still gets a type; two connections give two sightings', (t) => {
+  const ws = workspace(t, {
+    'a.js': `angular.module('app', []).controller('C', function ($scope, data) { angular.extend($scope, data); console.log($scope.extra); });`,
+    'page.html': '<p ng-controller="C">{{ extra }}</p>\n',
+  });
+  assert.strictEqual(typeAt(ws, 'page.html', 'extra'), null);
+  const one = new C.RuntimeEvidenceStore('container-a');
+  const two = new C.RuntimeEvidenceStore('container-b');
+  const site = { path: 'a.js', span: { start: 0, end: 0 } };
+  logValue(one, 'x', { owner: 'C', path: ['extra'] }, prim('number'), site, 5);
+  logValue(two, 'x', { owner: 'C', path: ['extra'] }, prim('string'), site, 9);
+  withRuntime(ws, [one, two]);
+  const r = typeAt(ws, 'page.html', 'extra');
+  assert.strictEqual(r.text, 'number | string');
+  assert.deepStrictEqual(r.runtime.map((s) => s.connection), ['container-b', 'container-a'], 'most recent first');
+  assert.deepStrictEqual(r.sites, []);
+});
+
+test('runtime evidence from the farther copy of a duplicated controller is left out, like its assignments', (t) => {
+  const ctrl = (v) => `angular.module('app', []).controller('Dup', function ($scope) { $scope.v = ${v}; });`;
+  const ws = workspace(t, { 'near/c.js': ctrl('1'), 'near/page.html': '<p ng-controller="Dup">{{ v }}</p>\n', 'far/away/c.js': ctrl('2') });
+  const store = new C.RuntimeEvidenceStore('x');
+  logValue(store, 'far', { owner: 'Dup', path: ['v'] }, prim('string'), { path: 'far/away/c.js', span: { start: 0, end: 0 } }, 1);
+  withRuntime(ws, [store]);
+  const r = typeAt(ws, 'near/page.html', 'v }}');
+  assert.strictEqual(r.text, 'number');
+  assert.deepStrictEqual(r.runtime, []);
+});

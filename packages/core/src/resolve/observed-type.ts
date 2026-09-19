@@ -260,6 +260,17 @@ function formatNested(type: ObservedType, limits: FormatLimits, level: number): 
 export interface ObservedTypeSource {
   facts(relPath: string): FileFacts | null;
   jsPaths(): string[];
+  /** Runtime evidence about `member` on `owner`'s scope, from every live connection (observed-types-r1). */
+  runtimeEvidence?(owner: string, member: string): TypeEvidence[];
+}
+
+/** Runtime evidence behind a type, per connection — the hover's "Seen at runtime" line. */
+export interface RuntimeSighting {
+  connection: string;
+  count: number;
+  lastSeen: number;
+  /** The log that last showed it. */
+  site: { path: string; span: Span };
 }
 
 export interface ObservedTypeResult {
@@ -267,7 +278,10 @@ export interface ObservedTypeResult {
   expression: string;
   /** TypeScript-like text within the hover limits, or `null` when nothing is known. */
   text: string | null;
-  /** Some assignment explicitly sets it to null/undefined (spec decision #3). */
+  /**
+   * Some assignment explicitly sets it to null/undefined (spec decision #3). Static only: what a
+   * runtime happened to log never makes it here, so the inline hint stays put (r1 decision #9).
+   */
   nullable: boolean;
   /** Some evidence couldn't be inferred and was left out of `text`. */
   partial: boolean;
@@ -277,9 +291,14 @@ export interface ObservedTypeResult {
   sites: Array<{ path: string; span: Span; inCallback: boolean }>;
   /** The assignments whose value couldn't be inferred — what a hover names instead of a bare "unknown". */
   unknownFrom: Array<{ path: string; span: Span; rhsText: string }>;
+  /** Runtime evidence merged into `text`, one per connection, most recently seen first, at most 3. */
+  runtime: RuntimeSighting[];
+  /** A runtime log showed `null`/`undefined` where no assignment says so — hover only (r1 decision #9). */
+  seenNullAtRuntime: boolean;
 }
 
 const MAX_SITES = 5;
+const MAX_RUNTIME_SIGHTINGS = 3;
 
 /**
  * The observed type of `memberPath` on `controller`'s scope (`['form', 'name']`), as seen from
@@ -316,29 +335,59 @@ export function observedTypeOf(
       });
     }
   }
+  // Runtime evidence was logged inside the controller's own body, so its site says which copy it's from.
+  all.push(...(src.runtimeEvidence?.(controller, member) ?? []).filter((e) => e.site));
   const evidence = nearestRows(from, all.map((e) => ({ ...e, path: e.site!.path, evidence: e }))).map((r) => r.evidence);
   if (!evidence.length) return null;
+  const statics = evidence.filter((e) => e.source === 'static');
+  const runtimes = evidence.filter((e) => e.source === 'runtime');
 
-  let type: ObservedType | null = typeAtPath(typeFromEvidence(evidence), memberPath.slice(1));
-  if (type && elementPath) {
-    type = elementType(type);
-    if (type) type = typeAtPath(type, elementPath);
-  }
+  const at = (pieces: TypeEvidence[]): ObservedType | null => {
+    if (!pieces.length) return null;
+    let t: ObservedType | null = typeAtPath(typeFromEvidence(pieces), memberPath.slice(1));
+    if (t && elementPath) {
+      t = elementType(t);
+      if (t) t = typeAtPath(t, elementPath);
+    }
+    return t;
+  };
+  const type = at(evidence);
+  const staticType = runtimes.length ? at(statics) : type;
 
   // Evidence about the target itself or an object containing it — not about a sibling key.
-  const relevant = evidence.filter((e) => e.path.length <= memberPath.length && e.path.every((seg, i) => memberPath[i] === seg));
+  const covers = (e: TypeEvidence) => e.path.length <= memberPath.length && e.path.every((seg, i) => memberPath[i] === seg);
+  const relevant = statics.filter(covers);
   const sites = relevant.map((e) => ({ path: e.site!.path, span: e.site!.span, inCallback: !!e.inCallback }));
+  // Runtime: also a log of a key inside the target (`vm.form.owner` for `vm.form`) — it told us about it.
+  const seen = runtimes.filter((e) => covers(e) || memberPath.every((seg, i) => e.path[i] === seg));
   return {
     expression,
     text: type ? formatType(type) : null,
-    nullable: type?.nullable ?? false,
+    nullable: staticType?.nullable ?? false,
     partial: type?.partial ?? false,
     onlyInCallback: sites.length > 0 && sites.every((s) => s.inCallback),
     sites: sites.slice(0, MAX_SITES),
     unknownFrom: relevant
       .filter((e) => e.shapes.some((sh) => sh.kind === 'unknown'))
       .map((e) => ({ path: e.site!.path, span: e.site!.span, rhsText: e.rhsText ?? '' })),
+    runtime: sightings(seen),
+    seenNullAtRuntime: seen.length > 0 && !!at(runtimes)?.nullable && !(staticType?.nullable ?? false),
   };
+}
+
+function sightings(evidence: TypeEvidence[]): RuntimeSighting[] {
+  const byConnection = new Map<string, RuntimeSighting>();
+  for (const e of evidence) {
+    const connection = e.connection ?? '';
+    const cur = byConnection.get(connection);
+    const lastSeen = e.lastSeen ?? 0;
+    if (!cur) byConnection.set(connection, { connection, count: e.count, lastSeen, site: e.site! });
+    else {
+      cur.count += e.count;
+      if (lastSeen > cur.lastSeen) Object.assign(cur, { lastSeen, site: e.site! });
+    }
+  }
+  return [...byConnection.values()].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, MAX_RUNTIME_SIGHTINGS);
 }
 
 /**
