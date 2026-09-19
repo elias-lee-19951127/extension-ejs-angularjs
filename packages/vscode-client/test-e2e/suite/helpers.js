@@ -74,7 +74,8 @@ function stubWindow(name, implementation) {
 /**
  * A fake runtime: `/json/list` discovery plus a CDP WebSocket that answers every request, serves
  * the `Debugger` domain from `scripts` (`{scriptId, url, source}`, metadata derived from the source
- * the way V8 derives it), and pushes console calls when the test says so.
+ * the way V8 derives it), and pushes console calls when the test says so. Every command received
+ * is kept in `commands`; `Debugger.setBreakpointByUrl` answers with a fresh `breakpointId`.
  */
 async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [] } = {}) {
   const server = createServer((req, res) => {
@@ -87,6 +88,8 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
     res.end();
   });
   const state = { socket: null, scriptsDelivered: false, closed: false };
+  const commands = [];
+  let nextBreakpoint = 1;
   const wss = new WebSocketServer({ server });
   wss.on('connection', (socket, req) => {
     if (req.url.slice(1) !== id) return;
@@ -96,7 +99,8 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
     });
     socket.on('message', (raw) => {
       const msg = JSON.parse(raw.toString());
-      socket.send(JSON.stringify({ id: msg.id, result: msg.method === 'Debugger.getScriptSource' ? scriptSource(msg) : {} }));
+      commands.push(msg);
+      socket.send(JSON.stringify({ id: msg.id, result: resultFor(msg) }));
       if (msg.method === 'Debugger.enable') {
         for (const s of scripts) {
           const lines = s.source.split('\n');
@@ -119,6 +123,11 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
       }
     });
   });
+  function resultFor(msg) {
+    if (msg.method === 'Debugger.getScriptSource') return scriptSource(msg);
+    if (msg.method === 'Debugger.setBreakpointByUrl') return { breakpointId: `bp${nextBreakpoint++}`, locations: [] };
+    return {};
+  }
   function scriptSource(msg) {
     const found = scripts.find((s) => s.scriptId === msg.params.scriptId);
     return { scriptSource: found ? found.source : '' };
@@ -133,15 +142,17 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
     /** Connected, and every `scriptParsed` written — a log sent after this lands behind the metadata it needs. */
     isReady: () => state.socket !== null && state.scriptsDelivered,
     isClosed: () => state.closed,
-    sendLog(value, { url, line = 0, scriptId }) {
+    commands,
+    /**
+     * `value` may be an array: one string argument each. `logpointId` puts that logpoint's
+     * condition frame on top of the stack, the way V8 reports a logpoint's console call.
+     */
+    sendLog(value, { url, line = 0, scriptId, logpointId }) {
       const frame = { url, lineNumber: line, columnNumber: 0 };
       if (scriptId) frame.scriptId = scriptId;
-      state.socket.send(
-        JSON.stringify({
-          method: 'Runtime.consoleAPICalled',
-          params: { type: 'log', args: [{ type: 'string', value }], stackTrace: { callFrames: [frame] } },
-        }),
-      );
+      const callFrames = logpointId === undefined ? [frame] : [{ url: `ejsng-logpoint-${logpointId}`, lineNumber: 0, columnNumber: 0 }, frame];
+      const args = (Array.isArray(value) ? value : [value]).map((v) => ({ type: 'string', value: v }));
+      state.socket.send(JSON.stringify({ method: 'Runtime.consoleAPICalled', params: { type: 'log', args, stackTrace: { callFrames } } }));
     },
   };
 }

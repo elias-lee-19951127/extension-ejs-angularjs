@@ -20,6 +20,7 @@ import {
   type RuntimeStatusConnection,
   type RuntimeStatusSummary,
 } from './runtime-log-state';
+import { logpointsFrom } from './logpoints';
 import { RuntimeLogViewProvider } from './runtime-log-view';
 import {
   appUrlForPort,
@@ -842,6 +843,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
   // status bar/panel don't have to wait for the next poll tick to stop lying about a connection
   // that's still `connecting` or has already `failed`.
   client.onNotification('ejsng/runtimeStatusChanged', () => void refreshRuntimeStatus());
+
+  // Inline logpoints (.scratch/inline-logpoints/spec.md): the server sets VS Code's logpoints on the
+  // runtime itself, so they work without a VS Code debug session. Always the whole list — the
+  // server replaces what it had rather than applying a diff.
+  const sendLogpoints = (): void => {
+    const enabled = vscode.workspace.getConfiguration('ejsng').get<boolean>('runtimeLog.logpoints', true);
+    void client?.sendNotification('ejsng/setLogpoints', { logpoints: logpointsFrom(vscode.debug.breakpoints, enabled) });
+  };
+  sendLogpoints();
+  context.subscriptions.push(
+    vscode.debug.onDidChangeBreakpoints(sendLogpoints),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('ejsng.runtimeLog.logpoints')) sendLogpoints();
+    }),
+  );
 
   return process.env.EJSNG_EXTENSION_TEST === '1' ? testApi : undefined;
 }

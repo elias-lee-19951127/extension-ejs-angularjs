@@ -46,9 +46,15 @@ export interface RuntimeLogCallbacks {
   onClose?: (code: number, reason: string) => void;
 }
 
-/** One open CDP connection: the socket to close, plus the one request ticket 06 ever makes of it. */
+/** One open CDP connection: the socket to close, plus the requests this feature makes of it. */
 export interface RuntimeLogConnection {
   socket: WebSocket;
+  /**
+   * Send one CDP command and resolve its `result` — or `null` if the socket is not open, the
+   * runtime answers with an error, or no reply arrives within `timeoutMs`. Like
+   * `getScriptSource`, a request to a network peer must degrade, never hang or throw.
+   */
+  request(method: string, params?: object, timeoutMs?: number): Promise<unknown>;
   /**
    * `Debugger.getScriptSource` — the exact source the runtime compiled, for confirming a file on
    * disk really is what is running. Resolves `null` if the socket is not open, the runtime
@@ -65,10 +71,15 @@ const FIRST_REQUEST_ID = 3;
  * Open a CDP/Inspector Protocol client to `url` (per spec, a target the user started themselves
  * with `node --inspect`) and report every console call it can anchor to a line via `onLog`.
  *
- * Both `Runtime` and `Debugger` are enabled. `Debugger` is enabled ONLY to receive
- * `scriptParsed` events (ticket 06, item 2): no breakpoint is ever set and the runtime is never
- * paused, so the target keeps running exactly as it would without a debugger attached. Measured
- * cost of the resulting backlog: 246 ms at 10,000 modules, once per connect (see the ticket).
+ * Both `Runtime` and `Debugger` are enabled. `Debugger` is enabled to receive `scriptParsed`
+ * events (ticket 06, item 2) and to set logpoints (.scratch/inline-logpoints/spec.md). The runtime
+ * is still never paused: the only breakpoints ever set are logpoints, whose condition always
+ * evaluates to `false` (`buildLogpointCondition`), so the target keeps running exactly as it would
+ * without a debugger attached. Measured cost of the `scriptParsed` backlog: 246 ms at 10,000
+ * modules, once per connect (see ticket 06).
+ *
+ * `onOpen` fires only after both `enable` calls are written, so a caller may send `Debugger.*`
+ * commands from it: messages on one socket arrive in order.
  *
  * `onError` fires for a connection failure or drop (bad/unreachable `url`, network reset). A
  * `ws` socket THROWS on the process if an `error` event has no listener, so registering it isn't
@@ -81,9 +92,9 @@ export function connectRuntimeLog(url: string, callbacks: RuntimeLogCallbacks): 
   let nextRequestId = FIRST_REQUEST_ID;
 
   socket.on('open', () => {
-    onOpen?.();
     socket.send(JSON.stringify({ id: 1, method: 'Runtime.enable' }));
     socket.send(JSON.stringify({ id: 2, method: 'Debugger.enable' }));
+    onOpen?.();
   });
   socket.on('error', (err) => onError?.(err));
   socket.on('close', (code: number, reason: Buffer) => {
@@ -104,23 +115,29 @@ export function connectRuntimeLog(url: string, callbacks: RuntimeLogCallbacks): 
     }
   });
 
+  const request = (method: string, params?: object, timeoutMs = 2000): Promise<unknown> => {
+    if (socket.readyState !== WebSocket.OPEN) return Promise.resolve(null);
+    const id = nextRequestId++;
+    return new Promise<unknown>((resolve) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve(null);
+      }, timeoutMs);
+      pending.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result ?? null);
+      });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+  };
+
   return {
     socket,
-    getScriptSource(scriptId, timeoutMs = 2000) {
-      if (socket.readyState !== WebSocket.OPEN) return Promise.resolve(null);
-      const id = nextRequestId++;
-      return new Promise<string | null>((resolve) => {
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          resolve(null);
-        }, timeoutMs);
-        pending.set(id, (result) => {
-          clearTimeout(timer);
-          const source = (result as { scriptSource?: unknown } | undefined)?.scriptSource;
-          resolve(typeof source === 'string' ? source : null);
-        });
-        socket.send(JSON.stringify({ id, method: 'Debugger.getScriptSource', params: { scriptId } }));
-      });
+    request,
+    async getScriptSource(scriptId, timeoutMs = 2000) {
+      const result = await request('Debugger.getScriptSource', { scriptId }, timeoutMs);
+      const source = (result as { scriptSource?: unknown } | null)?.scriptSource;
+      return typeof source === 'string' ? source : null;
     },
   };
 }

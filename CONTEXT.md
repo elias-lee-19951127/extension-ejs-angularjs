@@ -83,3 +83,10 @@ len duong dan cua no ben trong container — sua file nay khong anh huong gi toi
 File tren dia co noi dung khac voi ban Runtime Target dang chay (da sua nhung runtime chua nap
 lai). Log tu Stale File khong duoc ve inline vi so dong khong con dung.
 _Avoid_: outdated file, dirty file
+
+**Logpoint**:
+Breakpoint cua VS Code co `logMessage` (`x = {x}`) ma extension tu dat len Runtime Target qua
+kenh debug cua chinh no, voi dieu kien luon tra `false` — ghi log roi chay tiep, khong bao gio dung
+runtime. Log cua no di chung duong ve inline voi `console.*`. Xem
+`.scratch/inline-logpoints/spec.md` va `docs/adr/0001-runtime-log-sets-logpoints.md`.
+_Avoid_: breakpoint (breakpoint thuong thi dung chuong trinh — extension khong bao gio dat loai do), tracepoint

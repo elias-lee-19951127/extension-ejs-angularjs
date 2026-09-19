@@ -86,3 +86,10 @@ A file whose content on disk differs from the copy the Runtime Target is running
 yet reloaded by the runtime). Logs from a Stale File are never drawn inline, since their line
 numbers no longer hold.
 _Avoid_: outdated file, dirty file
+
+**Logpoint**:
+A VS Code breakpoint carrying a `logMessage` (`x = {x}`), which the extension sets on the Runtime
+Target over its own debug connection with a condition that always evaluates to `false` — it logs
+and carries on, never pausing the runtime. Its output takes the same path to inline display as
+`console.*`. See `.scratch/inline-logpoints/spec.md` and `docs/adr/0001-runtime-log-sets-logpoints.md`.
+_Avoid_: breakpoint (a plain breakpoint pauses the program — the extension never sets one), tracepoint

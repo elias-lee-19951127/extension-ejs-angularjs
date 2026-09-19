@@ -19,6 +19,7 @@ to every template that reads it, rename across both, and dead-code detection.
 | Dead code | controller / directive / filter / property nobody uses |
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
 | Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity |
+| Inline logpoints | VS Code logpoints (right-click the gutter → **Add Logpoint…**, e.g. `user = {user.name}`) show inline while connected — no code change, no restart, no debug session, and the app never pauses |
 | Runtime Log panel | One **Connect** button finds your Node container through Docker, maps container paths from its mounts, and shows a step-by-step checklist of what works and why not — with fixes right on the failing step |
 
 ## Requirements
@@ -36,6 +37,7 @@ No separate install step — the language server ships bundled inside the extens
 | `ejsng.diagnostics.enabled` | `false` | Off by default to avoid false warnings on legacy code |
 | `ejsng.runtimeLog.pathMappings` | `[]` | Container path → local path. Usually inferred from Docker mounts; declare one to override. `${workspaceFolder}` allowed |
 | `ejsng.runtimeLog.skipFrames` | `[]` | Extra stack-frame globs never used as a log's anchor (e.g. your own log wrapper) |
+| `ejsng.runtimeLog.logpoints` | `true` | Show VS Code logpoints inline while connected. Turn off if you also debug the same app with VS Code's debugger and see each logpoint twice in the Debug Console |
 | `ejsng.runtimeLog.chromeExecutablePath` | `""` | Browser for **Launch browser**. Empty = Chrome, then Edge, then Brave |
 | `ejsng.runtimeLog.chromeDebugPort` | `9222` | Debug port the launched browser opens |
 
@@ -60,7 +62,9 @@ This is an early release: dynamic `templateUrl` expressions, and JS built throug
 are reported as "unresolved" rather than followed. Runtime log: browser logs need the browser's
 debug port reachable from where the extension runs — under Remote-WSL that means WSL
 `networkingMode=mirrored`; Remote-SSH and Dev Containers support Node logs only for now. Minified or
-obfuscated files without source maps are skipped rather than drawn on "line 1".
+obfuscated files without source maps are skipped rather than drawn on "line 1". Logpoints: `.js`
+files only (not `.ejs` templates, which compile without source maps), no hit count condition, and on
+Node older than 20.16 their output also goes to the app's own stdout.
 
 ## Release Notes
 

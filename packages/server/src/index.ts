@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, platform as osPlatform, release as osRelease } from 'node:os';
 import { dirname } from 'node:path';
 import {
@@ -57,6 +57,9 @@ import {
   type RuntimeEnvironment,
   type FrameDiagnosticEntry,
   type RuntimeLogFrameDiagnostic,
+  buildLogpointCondition,
+  logpointUrlRegex,
+  runtimePathCandidates,
 } from '@ejsng/core';
 import {
   connectRuntimeLog,
@@ -156,6 +159,21 @@ interface RuntimeLogConnectionInfo {
    * offering every one of them would bury the one that matters.
    */
   usedMountMappings: Map<string, PathMapping>;
+  /** Send any CDP command on this connection (see `RuntimeLogConnection.request`). */
+  request: RuntimeLogConnection['request'];
+  /** The logpoints currently set on this connection — see `applyLogpoints`. */
+  logpoints: ConnectionLogpoints;
+}
+
+/** What `applyLogpoints` has set on one connection, so the next call can take it all back. */
+interface ConnectionLogpoints {
+  /** Bumped on every re-apply: a `setBreakpointByUrl` reply for an older generation is removed on arrival. */
+  generation: number;
+  breakpointIds: string[];
+  /** Every `urlRegex` already set, per logpoint — a script URL one of these matches is already covered. */
+  regexes: Array<{ id: number; re: RegExp }>;
+  /** `id + NUL + url` for every exact-`url` breakpoint set from a `scriptParsed` (spec decision #7b). */
+  exactUrls: Set<string>;
 }
 
 /** Ticket 09 — identity of a connection's target, as shown in the checklist. */
@@ -999,6 +1017,8 @@ function startRuntimeLogConnection(
     urlResolutions: new Map(),
     meta,
     usedMountMappings: new Map(),
+    request: () => Promise.resolve(null), // replaced right below, before any callback fires
+    logpoints: { generation: 0, breakpointIds: [], regexes: [], exactUrls: new Set() },
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -1008,6 +1028,7 @@ function startRuntimeLogConnection(
       if (runtimeLogConnections.get(key) !== info) return;
       info.openedAt = Date.now();
       setConnectionState(key, info, 'connected');
+      applyLogpoints(info);
     },
     onLog: (log) => {
       if (runtimeLogConnections.get(key) !== info) return;
@@ -1019,6 +1040,7 @@ function startRuntimeLogConnection(
     onScript: (script) => {
       if (runtimeLogConnections.get(key) !== info) return;
       info.scripts.set(script.scriptId, script);
+      bindScriptLogpoints(info, script);
     },
     onUnanchored: () => {
       if (runtimeLogConnections.get(key) !== info) return;
@@ -1038,8 +1060,146 @@ function startRuntimeLogConnection(
   });
   info.socket = cdp.socket;
   info.getScriptSource = cdp.getScriptSource;
+  info.request = cdp.request;
   runtimeLogConnections.set(key, info);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Inline logpoints (.scratch/inline-logpoints/spec.md): VS Code logpoints, set by this server on
+// every Runtime Log connection as breakpoints whose condition logs and evaluates to `false`. The
+// log they produce comes back through the ordinary `consoleAPICalled` path above — frame
+// selection, content verification and drawing are all shared.
+// ---------------------------------------------------------------------------------------------
+
+interface Logpoint {
+  id: number;
+  /** The file as the editor names it, plus its realpath when that differs (a runtime reports realpaths). */
+  hostPaths: string[];
+  /** 0-based, as both LSP and CDP count lines. */
+  line: number;
+  logMessage: string;
+  condition?: string;
+}
+
+/** The last list `ejsng/setLogpoints` sent — the client always sends the whole list, never a diff. */
+let logpoints: Logpoint[] = [];
+let nextLogpointId = 1;
+
+/** `path`'s realpath, or `path` itself if it has none (doesn't exist, or isn't a filesystem path at all). */
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function logpointMappings(info: RuntimeLogConnectionInfo): PathMapping[] {
+  return [...runtimeLogPathMappings, ...info.inferredPathMappings, ...info.urlMappings];
+}
+
+/**
+ * Set one logpoint breakpoint for the current generation. A reply arriving after a newer
+ * `applyLogpoints` has started belongs to a list that no longer exists, so it is removed at once
+ * instead of being recorded — otherwise quick successive edits could leave orphans that keep logging.
+ */
+function setLogpointBreakpoint(info: RuntimeLogConnectionInfo, lp: Logpoint, target: { url: string } | { urlRegex: string }): void {
+  const generation = info.logpoints.generation;
+  const params = { ...target, lineNumber: lp.line, condition: buildLogpointCondition(lp) };
+  void info.request('Debugger.setBreakpointByUrl', params).then((result) => {
+    const breakpointId = (result as { breakpointId?: unknown } | null)?.breakpointId;
+    if (typeof breakpointId !== 'string') return;
+    if (info.logpoints.generation === generation) info.logpoints.breakpointIds.push(breakpointId);
+    else void info.request('Debugger.removeBreakpoint', { breakpointId });
+  });
+}
+
+/**
+ * Replace every logpoint on one connection with the current list: remove what this server set
+ * before, then set each logpoint by `urlRegex` on every Runtime Path its file may be loaded under
+ * (spec decision #7a) — which also binds scripts the runtime hasn't loaded yet. Scripts already
+ * known are then checked for anything only a forward mapping finds (#7b).
+ */
+function applyLogpoints(info: RuntimeLogConnectionInfo): void {
+  const previous = info.logpoints.breakpointIds;
+  info.logpoints = { generation: info.logpoints.generation + 1, breakpointIds: [], regexes: [], exactUrls: new Set() };
+  for (const breakpointId of previous) void info.request('Debugger.removeBreakpoint', { breakpointId });
+  if (logpoints.length === 0) return;
+
+  const mappings = logpointMappings(info);
+  for (const lp of logpoints) {
+    const runtimePaths = new Set(lp.hostPaths.flatMap((p) => runtimePathCandidates(p, mappings)));
+    for (const runtimePath of runtimePaths) {
+      const urlRegex = logpointUrlRegex(runtimePath);
+      info.logpoints.regexes.push({ id: lp.id, re: new RegExp(urlRegex) });
+      setLogpointBreakpoint(info, lp, { urlRegex });
+    }
+  }
+  for (const script of info.scripts.values()) bindScriptLogpoints(info, script);
+}
+
+/**
+ * Spec decision #7b: a script whose URL maps FORWARD onto a file with a logpoint, but which none of
+ * that logpoint's regexes covers — typically a browser URL matched to a file by its tail (ticket 07),
+ * which no reverse mapping could have predicted. Set by exact `url`, once per logpoint and URL.
+ */
+function bindScriptLogpoints(info: RuntimeLogConnectionInfo, script: ScriptMetadata): void {
+  if (logpoints.length === 0 || !workspace || !script.url) return;
+  const url = script.url;
+  // Cheap filter first: only a script named like some logpoint's file is worth mapping at all.
+  const name = url.replace(/[?#].*$/, '').split('/').pop();
+  const named = logpoints.filter((lp) => lp.hostPaths.some((p) => p.split('/').pop() === name));
+  if (named.length === 0) return;
+
+  const rawPath = url.startsWith('file://') ? URI.parse(url).fsPath : normalizeRuntimePath(url);
+  const mapped = mapContainerPath(rawPath, logpointMappings(info));
+  let hostPath = mapped.path;
+  if (!mapped.matched && isHttpUrl(rawPath)) {
+    const resolved = urlResolverFor(workspace, info)(rawPath);
+    if (resolved.kind !== 'unique') return;
+    hostPath = resolved.hostPath;
+  }
+  const real = realpathOr(hostPath);
+
+  for (const lp of named) {
+    if (!lp.hostPaths.includes(hostPath) && !lp.hostPaths.includes(real)) continue;
+    if (info.logpoints.regexes.some((r) => r.id === lp.id && r.re.test(url))) continue;
+    const key = `${lp.id}\u0000${url}`;
+    if (info.logpoints.exactUrls.has(key)) continue;
+    info.logpoints.exactUrls.add(key);
+    setLogpointBreakpoint(info, lp, { url });
+  }
+}
+
+interface LogpointParams {
+  uri: string;
+  line: number;
+  logMessage: string;
+  condition?: string;
+}
+
+/**
+ * `ejsng/setLogpoints` — the client's whole current list of logpoints (never a diff), re-applied to
+ * every open connection. A connection still connecting picks the list up when it opens.
+ */
+connection.onNotification('ejsng/setLogpoints', (params: { logpoints?: LogpointParams[] }) => {
+  logpoints = (params.logpoints ?? [])
+    .filter((lp) => typeof lp.uri === 'string' && Number.isInteger(lp.line) && lp.line >= 0 && typeof lp.logMessage === 'string')
+    .map((lp) => {
+      const fsPath = URI.parse(lp.uri).fsPath;
+      const real = realpathOr(fsPath);
+      return {
+        id: nextLogpointId++,
+        hostPaths: real === fsPath ? [fsPath] : [fsPath, real],
+        line: lp.line,
+        logMessage: lp.logMessage,
+        ...(typeof lp.condition === 'string' && lp.condition.trim() ? { condition: lp.condition } : {}),
+      };
+    });
+  for (const info of runtimeLogConnections.values()) {
+    if (info.state === 'connected') applyLogpoints(info);
+  }
+});
 
 function discoverTargetsOrError(host: string, port: number): Promise<DiscoveredTarget[] | { status: 'error'; message: string }> {
   return discoverTargets(host, port).catch((err: unknown) => ({

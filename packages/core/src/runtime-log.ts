@@ -7,6 +7,7 @@
  * comparison, report building, ANSI stripping, …) alongside it.
  */
 import mm from 'micromatch';
+import { logpointIdFromUrl } from './logpoint';
 
 /**
  * Convert a 0-based {line, character} location — the shape both the V8 Inspector Protocol's
@@ -117,6 +118,12 @@ export interface ParsedConsoleLog {
   callFrames: CallFrame[];
   value: string;
   severity: 'log' | 'warning' | 'error';
+  /**
+   * Set when this call came from a logpoint's condition (.scratch/inline-logpoints/spec.md) rather
+   * than from the user's own code. Its condition frame is already removed from `callFrames`, so the
+   * first frame is the line the logpoint sits on.
+   */
+  logpointId?: number;
 }
 
 /** Collapse CDP's many console types (log/debug/info/dir/trace/…) to what the UI colors by. */
@@ -153,7 +160,13 @@ function formatArg(arg: RemoteObject): string {
  */
 export function parseConsoleApiCalled(event: unknown): ParsedConsoleLog | null {
   if (!isConsoleApiCalledEvent(event)) return null;
-  const rawFrames = event.stackTrace?.callFrames ?? [];
+  let rawFrames = event.stackTrace?.callFrames ?? [];
+  // A logpoint's console call runs inside its breakpoint condition, whose own frame (named by the
+  // `sourceURL` the condition carries) sits on top of the line the logpoint is on. Drop it, and
+  // join the arguments WITHOUT the space console-style joining adds: they are the pieces of one
+  // message the user wrote, spacing included.
+  const logpointId = rawFrames[0] ? logpointIdFromUrl(rawFrames[0].url) : null;
+  if (logpointId !== null) rawFrames = rawFrames.slice(1);
   if (rawFrames.length === 0) return null;
   return {
     // Normalized to just what this feature uses — a raw CDP CallFrame also carries
@@ -164,8 +177,9 @@ export function parseConsoleApiCalled(event: unknown): ParsedConsoleLog | null {
       columnNumber: f.columnNumber,
       ...(f.scriptId !== undefined ? { scriptId: f.scriptId } : {}),
     })),
-    value: event.args.map(formatArg).join(' '),
+    value: event.args.map(formatArg).join(logpointId !== null ? '' : ' '),
     severity: severityOf(event.type),
+    ...(logpointId !== null ? { logpointId } : {}),
   };
 }
 
