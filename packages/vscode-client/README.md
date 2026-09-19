@@ -70,6 +70,14 @@ Node older than 20.16 their output also goes to the app's own stdout.
 
 ## Release Notes
 
+### 0.4.2
+
+- A line hit many times shows its count inline (`» 42 (×3)`), and its hover lists the last values
+  before the latest — each with the container or tab it came from and when.
+- Reconnecting to an app (after a restart) clears what that app logged before; other runtimes'
+  values on the same lines stay. Editing a file keeps each line's values on its code as lines are
+  added or removed.
+
 ### 0.4.1
 
 - Hovering a line with an inline log shows where the value came from — the container name
