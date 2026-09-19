@@ -1322,6 +1322,18 @@ connection.onRequest('ejsng/disconnectRuntime', (params: { key: string }) => {
 });
 
 /**
+ * LSP `shutdown`: close every runtime-log connection explicitly rather than leaving the debug
+ * sockets for process exit to tear down. `close()`, not `terminate()`: this really is the end, so
+ * send a proper close frame the inspector sees as a clean disconnect. Same delete-first rule as
+ * ejsng/disconnectRuntime, so no close handler reports the connection as failed.
+ */
+connection.onShutdown(() => {
+  const sockets = [...runtimeLogConnections.values()].map((info) => info.socket);
+  runtimeLogConnections.clear();
+  for (const socket of sockets) socket.close(1000, 'language server shutdown');
+});
+
+/**
  * New in ticket 02 (item 4) — additive, does not change any existing request/notification shape
  * (ejsng/connectRuntime, connectRuntimeTarget, disconnectRuntime, runtimeLog all keep their
  * current contract, so the future IntelliJ client isn't broken). Lets a client build a real
