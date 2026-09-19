@@ -129,6 +129,13 @@ export interface ChecklistContainer {
   /** `null`: `--inspect` is on, but its port isn't published to the host. */
   hostInspectorPort: number | null;
   inspectorContainerPort: number;
+  /** `<ip>:<port>` when the port isn't published but the inspector answered at the container's own IP. */
+  containerIpEndpoint?: string | null;
+}
+
+/** Can this extension reach the container's inspector — published, or at the container's own IP? */
+function isReachable(c: ChecklistContainer): boolean {
+  return c.hostInspectorPort !== null || !!c.containerIpEndpoint;
 }
 
 export interface ChecklistConnection {
@@ -322,8 +329,8 @@ function dockerStep(input: RuntimeChecklistInput): ChecklistStep {
     step.detail = `Docker ${env.docker.version} — containers not listed yet.`;
     return step;
   }
-  const connectable = input.containers.filter((c) => c.hostInspectorPort !== null);
-  const unreachable = input.containers.filter((c) => c.hostInspectorPort === null);
+  const connectable = input.containers.filter(isReachable);
+  const unreachable = input.containers.filter((c) => !isReachable(c));
   if (connectable.length === 0 && unreachable.length === 0) {
     step.status = 'skipped';
     step.detail = `Docker ${env.docker.version} — no running Node container with --inspect.`;
@@ -334,8 +341,13 @@ function dockerStep(input: RuntimeChecklistInput): ChecklistStep {
     connectable.length > 0
       ? `Found ${connectable.map(describeContainer).join('; ')}`
       : 'No container publishes its inspector port.';
+  for (const c of connectable) {
+    if (c.hostInspectorPort === null && c.containerIpEndpoint) {
+      step.notes.push(`${c.name}: inspector not published — reached at its container IP ${c.containerIpEndpoint}.`);
+    }
+  }
   for (const c of unreachable) {
-    step.notes.push(`${c.name} runs Node with --inspect, but port ${c.inspectorContainerPort} is not published to the host.`);
+    step.notes.push(`${c.name} runs Node with --inspect, but port ${c.inspectorContainerPort} is not published to the host (nor reachable at the container's IP).`);
     step.fixes.push({
       kind: 'copy-compose',
       label: `Copy compose snippet for ${c.name}`,
@@ -550,7 +562,14 @@ export function buildRuntimeReport(input: RuntimeChecklistInput, context: Runtim
   );
   if (input.containers) {
     const containers = input.containers.map(
-      (c) => `${describeContainer(c)} (inspector ${c.hostInspectorPort === null ? `${c.inspectorContainerPort}, not published` : c.hostInspectorPort})`,
+      (c) =>
+        `${describeContainer(c)} (inspector ${
+          c.hostInspectorPort !== null
+            ? c.hostInspectorPort
+            : c.containerIpEndpoint
+              ? `${c.containerIpEndpoint}, container IP`
+              : `${c.inspectorContainerPort}, not published`
+        })`,
     );
     lines.push(`- Containers: ${containers.length > 0 ? containers.join('; ') : 'none with --inspect'}`);
   }

@@ -132,3 +132,36 @@ test('checklist: on a Windows server a UNC mapping is fine and not flagged', () 
   const mapping = buildRuntimeChecklist(checklistInput({ serverPlatform: 'win32', connections: [] })).find((s) => s.id === 'path-mapping');
   assert.ok(!mapping.notes.some((n) => n.includes('Windows path')));
 });
+
+// ---- Unpublished inspector reached at the container's own IP ----
+
+const { parseDockerInspect, resolveDockerCandidates } = require('../dist');
+
+test('parseDockerInspect: container IPs come from every attached network (and the legacy field), de-duplicated', () => {
+  const [info] = parseDockerInspect([
+    {
+      Id: 'x',
+      Name: '/cityos-app',
+      State: { Running: true },
+      Config: { Cmd: ['node', '--inspect=0.0.0.0:9229', 'bin/www'], Env: [] },
+      NetworkSettings: { IPAddress: '172.18.0.5', Ports: {}, Networks: { a: { IPAddress: '172.18.0.5' }, b: { IPAddress: '10.0.1.7' }, c: { IPAddress: '' } } },
+      Mounts: [],
+    },
+  ]);
+  assert.deepStrictEqual(info.ipAddresses, ['172.18.0.5', '10.0.1.7']);
+  const [candidate] = resolveDockerCandidates([info]);
+  assert.strictEqual(candidate.hostInspectorPort, null);
+  assert.deepStrictEqual(candidate.containerIps, ['172.18.0.5', '10.0.1.7']);
+});
+
+test('checklist: a container reached at its IP counts as found, with a note saying how; one that is not is still flagged', () => {
+  const docker = (containers) =>
+    buildRuntimeChecklist(checklistInput({ containers, connections: [] })).find((s) => s.id === 'docker');
+  const viaIp = { name: 'cityos-app', appPorts: [3000], hostInspectorPort: null, inspectorContainerPort: 9229, containerIpEndpoint: '172.18.0.5:9229' };
+  const ok = docker([viaIp]);
+  assert.strictEqual(ok.status, 'ok');
+  assert.ok(ok.notes.some((n) => n.includes('reached at its container IP 172.18.0.5:9229')));
+  const dead = docker([{ ...viaIp, containerIpEndpoint: null }]);
+  assert.strictEqual(dead.status, 'warn');
+  assert.ok(dead.fixes.some((f) => f.kind === 'copy-compose'));
+});

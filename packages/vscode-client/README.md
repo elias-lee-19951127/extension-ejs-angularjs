@@ -45,7 +45,9 @@ No separate install step — the language server ships bundled inside the extens
 
 - **EJS/NG: Reindex Workspace**
 - **EJS/NG: Show Index Stats**
-- **EJS/NG: Connect to Runtime** — finds a Node container with `--inspect` through Docker, or asks
+- **EJS/NG: Connect to Runtime** — finds a Node container with `--inspect` through Docker (an
+  inspector port that isn't published is tried at the container's own IP, which works when Docker
+  Engine runs on the same Linux/WSL host), or asks
   for a `host:port` (an app port works too), and shows its `console.log` output inline. Multiple
   connections can be open at once.
 - **EJS/NG: Disconnect Runtime** — pick one of the currently open runtime connections to close.
@@ -67,6 +69,21 @@ files only (not `.ejs` templates, which compile without source maps), no hit cou
 Node older than 20.16 their output also goes to the app's own stdout.
 
 ## Release Notes
+
+### 0.4.0
+
+- **Inline logpoints**: VS Code logpoints (right-click the gutter → **Add Logpoint…**) show inline
+  on a connected runtime — no code change, no restart, no debug session; the app never pauses. They
+  also work where your logger writes only to a file. Setting: `ejsng.runtimeLog.logpoints`.
+- **Unpublished inspector ports**: a container running `--inspect=0.0.0.0:9229` without publishing
+  that port is connected to at its own IP when that's routable (Docker Engine inside WSL / Linux).
+- **Remote-WSL path mappings**: a `\\wsl.localhost\…` path pasted into
+  `ejsng.runtimeLog.pathMappings` is read as its Linux path, and the most specific mapping always
+  applies first — logs under nested mounts no longer vanish as "file not readable". The checklist
+  flags both.
+- The panel names the path it looked for when a file isn't readable, skips Node built-ins such as
+  `node:events`, and folds a stack that repeats (a framework logging every message) into one
+  counted entry, so it can't push your own log out of view.
 
 ### 0.3.0
 

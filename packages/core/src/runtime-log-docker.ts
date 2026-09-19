@@ -42,6 +42,14 @@ export interface DockerContainerInfo {
    * candidate regardless of what else it publishes.
    */
   inspectorContainerPort: number | null;
+  /**
+   * The container's own IP address on each Docker network it is attached to. Where Docker runs
+   * on the same Linux host as this extension (Docker Engine inside WSL, or plain Linux) these are
+   * routable from the host, so an inspector the compose file never published is still reachable
+   * at `<ip>:<inspectorContainerPort>`. Under Docker Desktop they usually aren't — the caller
+   * probes rather than assumes.
+   */
+  ipAddresses: string[];
 }
 
 /** A container that IS a Runtime Target candidate (ticket 04) — has `--inspect` enabled somehow. */
@@ -61,6 +69,8 @@ export interface DockerRuntimeCandidate {
   inspectorContainerPort: number;
   /** Every published host port OTHER than the inspector's — what a user recognizes as "the app port" (`cityos-web: 5000`), sorted ascending and de-duplicated. */
   appPorts: number[];
+  /** See `DockerContainerInfo.ipAddresses` — where to try an inspector that `hostInspectorPort` says isn't published. */
+  containerIps: string[];
 }
 
 /** Node's own default inspector port when `--inspect`/`--inspect-brk` is given with no explicit port. */
@@ -110,6 +120,19 @@ function parsePortBindings(ports: unknown): DockerPortBinding[] {
   return result;
 }
 
+/** `docker inspect`'s `NetworkSettings`: one `IPAddress` per attached network (plus the legacy top-level one), de-duplicated, empty ones dropped. */
+function parseIpAddresses(settings: { IPAddress?: unknown; Networks?: unknown } | undefined): string[] {
+  const ips = new Set<string>();
+  const add = (v: unknown): void => {
+    if (typeof v === 'string' && v.trim()) ips.add(v.trim());
+  };
+  if (typeof settings?.Networks === 'object' && settings.Networks !== null) {
+    for (const network of Object.values(settings.Networks)) add((network as { IPAddress?: unknown } | null)?.IPAddress);
+  }
+  add(settings?.IPAddress);
+  return [...ips];
+}
+
 /** `docker inspect`'s `Mounts`: an array of objects, only `Source`/`Destination` matter here. */
 function parseMounts(mounts: unknown): DockerMount[] {
   if (!Array.isArray(mounts)) return [];
@@ -140,7 +163,7 @@ export function parseDockerInspect(entries: unknown): DockerContainerInfo[] {
       Name?: unknown;
       State?: { Running?: unknown };
       Config?: { Cmd?: unknown; Entrypoint?: unknown; Env?: unknown };
-      NetworkSettings?: { Ports?: unknown };
+      NetworkSettings?: { Ports?: unknown; IPAddress?: unknown; Networks?: unknown };
       Mounts?: unknown;
     };
     if (typeof e.Id !== 'string' || typeof e.Name !== 'string') continue;
@@ -157,6 +180,7 @@ export function parseDockerInspect(entries: unknown): DockerContainerInfo[] {
       ports: parsePortBindings(e.NetworkSettings?.Ports),
       mounts: parseMounts(e.Mounts),
       inspectorContainerPort: extractInspectorContainerPort(cmd, env),
+      ipAddresses: parseIpAddresses(e.NetworkSettings),
     });
   }
   return result;
@@ -184,6 +208,7 @@ export function resolveDockerCandidates(containers: DockerContainerInfo[]): Dock
       hostInspectorPort,
       inspectorContainerPort: c.inspectorContainerPort,
       appPorts,
+      containerIps: c.ipAddresses,
     });
   }
   return candidates;

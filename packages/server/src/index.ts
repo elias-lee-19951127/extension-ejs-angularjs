@@ -33,7 +33,7 @@ import {
   type Config,
   type Span,
   formatDockerCandidateLabel,
-  partitionDockerCandidates,
+  type DockerRuntimeCandidate,
   filterDockerCandidatesByAppPort,
   mappingsFromMounts,
   prepareDeclaredMappings,
@@ -1355,6 +1355,50 @@ connection.onRequest('ejsng/runtimeStatus', () => ({
 /** Docker always publishes a container's ports on the Docker host's own loopback interface. */
 const DOCKER_DISCOVERY_HOST = '127.0.0.1';
 
+/** How long to wait on a container IP before calling it unroutable (Docker Desktop's usually are). */
+const CONTAINER_IP_PROBE_TIMEOUT_MS = 1000;
+
+/** A Docker candidate together with the address its inspector actually answered at. */
+interface ReachableDockerCandidate {
+  candidate: DockerRuntimeCandidate;
+  host: string;
+  port: number;
+  /** `true` when reached at the container's own IP because the inspector port isn't published. */
+  viaContainerIp: boolean;
+}
+
+/**
+ * Where each candidate's inspector can be reached. A published port is used as before, on the
+ * Docker host's loopback. An UNPUBLISHED one is tried at the container's own IP — routable when
+ * Docker Engine runs on this same Linux host (inside WSL, say), so the compose file needs no
+ * change. Nothing about the container is touched: this is one HTTP GET of `/json/list`, which
+ * answers only if the inspector listens on all interfaces (`--inspect=0.0.0.0:…`).
+ */
+async function reachDockerCandidates(
+  candidates: DockerRuntimeCandidate[],
+): Promise<{ reachable: ReachableDockerCandidate[]; unreachable: DockerRuntimeCandidate[] }> {
+  const reached = await Promise.all(
+    candidates.map(async (candidate): Promise<ReachableDockerCandidate | null> => {
+      if (candidate.hostInspectorPort !== null) {
+        return { candidate, host: DOCKER_DISCOVERY_HOST, port: candidate.hostInspectorPort, viaContainerIp: false };
+      }
+      for (const ip of candidate.containerIps) {
+        try {
+          await discoverTargets(ip, candidate.inspectorContainerPort, CONTAINER_IP_PROBE_TIMEOUT_MS);
+          return { candidate, host: ip, port: candidate.inspectorContainerPort, viaContainerIp: true };
+        } catch {
+          /* not routable from here, or nothing listening on that interface — try the next network */
+        }
+      }
+      return null;
+    }),
+  );
+  return {
+    reachable: reached.filter((r): r is ReachableDockerCandidate => r !== null),
+    unreachable: candidates.filter((_, i) => reached[i] === null),
+  };
+}
+
 /** One connectable Docker container, shaped for a client-side Quick Pick (checklist item 5). */
 interface DockerCandidateSummary {
   host: string;
@@ -1403,7 +1447,7 @@ connection.onRequest(
   async (params: { appPort?: number }): Promise<DiscoverRuntimeTargetsResult> => {
     const containers = await listDockerRuntimeCandidates();
     const filtered = params.appPort != null ? filterDockerCandidatesByAppPort(containers, params.appPort) : containers;
-    const { connectable, unreachable } = partitionDockerCandidates(filtered);
+    const { reachable: connectable, unreachable } = await reachDockerCandidates(filtered);
     const unreachableNames = unreachable.map((c) => c.containerName);
 
     // Ticket 05: remember each connectable container's mounts against the endpoint it's reachable
@@ -1411,18 +1455,18 @@ connection.onRequest(
     // with different mounts — or removed entirely — can never leave a stale entry behind: these
     // mappings are recomputed on every Connect and never written to settings (checklist item 4).
     dockerContainersByEndpoint.clear();
-    for (const c of connectable) {
-      dockerContainersByEndpoint.set(`${DOCKER_DISCOVERY_HOST}:${c.hostInspectorPort as number}`, {
-        containerName: c.containerName,
-        mounts: c.mounts,
-      });
+    for (const r of connectable) {
+      dockerContainersByEndpoint.set(`${r.host}:${r.port}`, { containerName: r.candidate.containerName, mounts: r.candidate.mounts });
     }
     // Ticket 09: every container seen, filtered or not — the checklist reports the whole picture.
+    // A container filtered out by app port was never probed, so it has no container-IP endpoint.
+    const ipEndpoints = new Map(connectable.filter((r) => r.viaContainerIp).map((r) => [r.candidate, `${r.host}:${r.port}`]));
     lastDockerContainers = containers.map((c) => ({
       name: c.containerName,
       appPorts: c.appPorts,
       hostInspectorPort: c.hostInspectorPort,
       inspectorContainerPort: c.inspectorContainerPort,
+      containerIpEndpoint: ipEndpoints.get(c) ?? null,
     }));
 
     if (connectable.length === 0) {
@@ -1435,11 +1479,11 @@ connection.onRequest(
     if (connectable.length > 1) {
       return {
         status: 'choose-container',
-        candidates: connectable.map((c) => ({
-          host: DOCKER_DISCOVERY_HOST,
-          port: c.hostInspectorPort as number, // non-null: filtered into `connectable` on exactly that
-          label: formatDockerCandidateLabel(c),
-          appPorts: c.appPorts,
+        candidates: connectable.map((r) => ({
+          host: r.host,
+          port: r.port,
+          label: formatDockerCandidateLabel(r.candidate) + (r.viaContainerIp ? ` (inspector at container IP ${r.host}:${r.port})` : ''),
+          appPorts: r.candidate.appPorts,
         })),
         unreachable: unreachableNames,
       };
@@ -1450,23 +1494,24 @@ connection.onRequest(
     // always exactly one target for a Node process, but handled generally in case it ever isn't).
     const [only] = connectable;
     if (!only) return { status: 'no-docker-target' }; // unreachable in practice: connectable.length === 1 here
-    const port = only.hostInspectorPort as number;
+    const { host, port, candidate } = only;
+    const where = only.viaContainerIp ? 'answers its inspector at container IP' : 'publishes an inspector port at';
     let targets: DiscoveredTarget[];
     try {
-      targets = await discoverTargets(DOCKER_DISCOVERY_HOST, port);
+      targets = await discoverTargets(host, port);
     } catch (err) {
       return { status: 'error', message: err instanceof Error ? err.message : String(err) };
     }
     if (targets.length === 0) {
       return {
         status: 'error',
-        message: `container "${only.containerName}" publishes an inspector port at ${DOCKER_DISCOVERY_HOST}:${port}, but nothing answered the debug protocol there`,
+        message: `container "${candidate.containerName}" ${where} ${host}:${port}, but nothing answered the debug protocol there`,
       };
     }
     if (targets.length > 1) {
       return {
         status: 'choose',
-        host: DOCKER_DISCOVERY_HOST,
+        host,
         port,
         targets: targets.map((t) => ({ id: t.id, title: t.title, url: t.url, type: t.type })),
         unreachable: unreachableNames,
@@ -1476,12 +1521,12 @@ connection.onRequest(
     if (!target) {
       return {
         status: 'error',
-        message: `container "${only.containerName}" publishes an inspector port at ${DOCKER_DISCOVERY_HOST}:${port}, but nothing answered the debug protocol there`,
+        message: `container "${candidate.containerName}" ${where} ${host}:${port}, but nothing answered the debug protocol there`,
       };
     }
-    const key = runtimeLogConnectionKey(DOCKER_DISCOVERY_HOST, port, target.id);
-    startRuntimeLogConnection(key, target.webSocketDebuggerUrl, mappingsFromMounts(only.mounts), connectionMeta(DOCKER_DISCOVERY_HOST, port, target));
-    return { status: 'connected', key, host: DOCKER_DISCOVERY_HOST, port, unreachable: unreachableNames };
+    const key = runtimeLogConnectionKey(host, port, target.id);
+    startRuntimeLogConnection(key, target.webSocketDebuggerUrl, mappingsFromMounts(candidate.mounts), connectionMeta(host, port, target));
+    return { status: 'connected', key, host, port, unreachable: unreachableNames };
   },
 );
 

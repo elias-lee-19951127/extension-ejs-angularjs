@@ -153,10 +153,10 @@ export function connectRuntimeLog(url: string, callbacks: RuntimeLogCallbacks): 
  * advertised (ticket 02, item 2: that value can be wrong, e.g. `0.0.0.0`, or unreachable from
  * here, e.g. a container-internal interface).
  */
-export function discoverTargets(host: string, port: number): Promise<DiscoveredTarget[]> {
+export function discoverTargets(host: string, port: number, timeoutMs = 3000): Promise<DiscoveredTarget[]> {
   return new Promise((resolve, reject) => {
     const req = httpGet(
-      { host, port, path: '/json/list', timeout: 3000, headers: { Host: REQUIRED_HOST_HEADER } },
+      { host, port, path: '/json/list', timeout: timeoutMs, headers: { Host: REQUIRED_HOST_HEADER } },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));

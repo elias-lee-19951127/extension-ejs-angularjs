@@ -92,8 +92,8 @@ async function startServer(t, root, initializationOptions = {}) {
 function waitUntil(predicate, timeoutMs = 3000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
-    const check = () => {
-      if (predicate()) return resolve();
+    const check = async () => {
+      if (await predicate()) return resolve();
       if (Date.now() - start > timeoutMs) return reject(new Error('timed out waiting for condition'));
       setTimeout(check, 20);
     };
@@ -139,6 +139,8 @@ test('LSP: UNC paths + broad-mount-first settings still draw a log under the nes
   });
   const result = await conn.sendRequest('ejsng/connectRuntime', { host: runtime.host, port: runtime.port });
   assert.strictEqual(result.status, 'connected');
+  // `connected` above means "connecting started"; a log sent before the socket opens is lost.
+  await waitUntil(async () => (await statusFor(conn, result.key))?.state === 'connected');
 
   runtime.sendEvent('t1', logFrom('node:events', 'file:///home/cityos/aocs-cityos/aocs/services/svc.js'));
   await waitUntil(() => runtimeLogs.length > 0);
@@ -163,6 +165,8 @@ test('LSP: a mapped file that does not exist is reported with the path tried; th
   });
   const result = await conn.sendRequest('ejsng/connectRuntime', { host: runtime.host, port: runtime.port });
   assert.strictEqual(result.status, 'connected');
+  // `connected` above means "connecting started"; a log sent before the socket opens is lost.
+  await waitUntil(async () => (await statusFor(conn, result.key))?.state === 'connected');
 
   for (let i = 0; i < 3; i++) runtime.sendEvent('t1', logFrom('/srv/messaging/do.js'));
   runtime.sendEvent('t1', logFrom('/srv/service.js'));
