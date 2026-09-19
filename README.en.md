@@ -63,6 +63,10 @@ still missing:
 node packages/cli/dist/index.js sweep --root /path/to/your/repo
 ```
 
+The end of the output lists every `templateUrl` that could not be linked (a dynamic expression, no
+matching file, or one template given several controllers). Pass `templateRoots` on the CLI with
+`--template-root /views/=src/views=.ejs,.html` (repeatable) and `--views-dir src/views`.
+
 Locate by string instead of counting columns (use this to inspect one specific expression):
 
 ```bash
@@ -117,6 +121,8 @@ inherit the shell's PATH. Force a specific path with the `EJSNG_NODE` environmen
 | `ejsng.moduleAliases` | `["myApp","app","appModule"]` | Variables holding the Angular module but declared in another file |
 | `ejsng.ejsDelimiter` | `"%"` | Change to `"?"` for `<? ?>` |
 | `ejsng.customDirectives` | `{}` | `{"myOn": "statement"}` — the company's own custom directives |
+| `ejsng.templateRoots` | `[]` | Maps `templateUrl` to files: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — the template is then linked to the controller of the directive/component/route/state using it |
+| `ejsng.expressViewsDir` | `"views"` | Express views directory for `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Off by default** to avoid thousands of false warnings on legacy code |
 | `ejsng.include` / `exclude` | | Glob patterns for file scanning |
 

@@ -113,6 +113,40 @@
           "default": {},
           "description": "Custom directives -> expression kind. Example: {\"myOn\":\"statement\"}."
         },
+        "ejsng.templateRoots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "urlPrefix",
+              "fsPath"
+            ],
+            "properties": {
+              "urlPrefix": {
+                "type": "string",
+                "description": "URL prefix as written in templateUrl, e.g. \"/views/\"."
+              },
+              "fsPath": {
+                "type": "string",
+                "description": "Directory it is served from, relative to the workspace root, e.g. \"src/views\"."
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extensions to try when the file behind the URL has a different one, e.g. [\".ejs\", \".html\"]."
+              }
+            }
+          },
+          "description": "Maps runtime templateUrl values (directive, component, $routeProvider, $stateProvider) to template files, so a template's expressions resolve against the controller that renders it. Reload the window after changing."
+        },
+        "ejsng.expressViewsDir": {
+          "type": "string",
+          "default": "views",
+          "description": "Express views directory, relative to the workspace root — where res.render('user/profile') looks for its view. Reload the window after changing."
+        },
         "ejsng.diagnostics.enabled": {
           "type": "boolean",
           "default": false,

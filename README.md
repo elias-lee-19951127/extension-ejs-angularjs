@@ -61,6 +61,10 @@ Quét độ phủ — thử resolve **mọi** định danh trong **mọi** templ
 node packages/cli/dist/index.js sweep --root /duong/dan/toi/repo
 ```
 
+Cuối output là danh sách `templateUrl` chưa nối được (biểu thức động, không khớp file nào, hoặc một
+template bị gán nhiều controller). Khai `templateRoots` qua CLI bằng
+`--template-root /views/=src/views=.ejs,.html` (lặp lại được) và `--views-dir src/views`.
+
 Định vị bằng chuỗi thay vì đếm cột (dùng khi soi một biểu thức cụ thể):
 
 ```bash
@@ -114,6 +118,8 @@ dẫn cụ thể bằng biến môi trường `EJSNG_NODE`.
 | `ejsng.moduleAliases` | `["myApp","app","appModule"]` | Biến giữ angular module nhưng khai báo ở file khác |
 | `ejsng.ejsDelimiter` | `"%"` | Đổi thành `"?"` cho `<? ?>` |
 | `ejsng.customDirectives` | `{}` | `{"myOn": "statement"}` — directive tự viết của công ty |
+| `ejsng.templateRoots` | `[]` | Map `templateUrl` sang file: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — template được nối với controller của directive/component/route/state dùng nó |
+| `ejsng.expressViewsDir` | `"views"` | Thư mục view của Express cho `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Mặc định tắt** để tránh hàng nghìn cảnh báo giả trên code cũ |
 | `ejsng.include` / `exclude` | | Glob quét file |
 

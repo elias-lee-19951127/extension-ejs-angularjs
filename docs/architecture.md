@@ -304,6 +304,24 @@ and the real file may be a `.ejs`. Needs a config map:
 If `templateUrl` is a dynamic expression (`templateUrl: base + '/x.html'`) → skip it, and record
 it in an "unresolved links" report so the user knows to declare it manually.
 
+**Implemented** (`.scratch/template-roots-config/issues/01-resolve-template-url.md`), sources 2–5,
+in `packages/core/src/resolve/template-links.ts`:
+- The extractor records `JsFacts.templateLinks` (still a pure fact, not yet mapped to a file). Layer 4
+  maps the URL through `templateRoots` (longest prefix first; the name as-is, then each of
+  `extensions` swapped in or appended), and finally tries the URL as a path from the workspace root.
+- The controller is joined **at query time**: `Workspace.facts()` inserts a controller frame just
+  inside the root frame of every scope chain — an `ng-controller` inside the template is nearer, so
+  it still wins. Because it goes through `facts()`, go-to-definition, completion, hover and rename
+  all see the same link.
+- A template given **several different controllers** is bound to none and reported as
+  `ambiguous-controller` (guessing would resolve half its expressions wrongly). A URL matching no
+  file → `no-file`; an expression → `dynamic`. Report: `Workspace.templateLinkIssues()` and the end
+  of `ejsng sweep`'s output.
+- `expressViewsDir` (default `views`, like Express) for `res.render('user/profile')`: Ctrl+click on
+  the view name opens the view; Ctrl+click on `<%= user %>` jumps to the `user` key of every
+  `res.render()` rendering that view.
+- Not done: the fallback heuristic (source 6), and `$uibModal.open`/`$mdDialog.show({templateUrl})`.
+
 ### 5.2 Scope chain resolver
 For every element in the virtual DOM, build a **scope chain** going from the node up to the root:
 ```

@@ -12,6 +12,7 @@ import { nearestRows, preferNearest } from './rename';
 import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
+import { linkDefinition, linkTemplates, withBinding, type TemplateLinkIndex, type TemplateLinkIssue } from './template-links';
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { resolveDefinition } from './definition';
@@ -124,6 +125,10 @@ export class Workspace implements FactSource, RenameSource {
   private overlays = new Map<string, string>();
   private overlayFacts = new Map<string, FileFacts>();
   private linker = new Linker();
+  /** Layer 4 `templateUrl` / `res.render()` links — rebuilt by every `link()`. */
+  private templateLinks: TemplateLinkIndex | null = null;
+  /** `facts()` of a bound template, per raw facts object — so a query doesn't rebuild every scope chain. */
+  private boundFacts = new WeakMap<TemplateFacts, { binding: unknown; facts: TemplateFacts }>();
   /**
    * `config.root` with symlinks resolved, computed once and cached — used ONLY for the
    * containment comparison in `toRelative`. `config.root` itself is left untouched everywhere
@@ -268,6 +273,7 @@ export class Workspace implements FactSource, RenameSource {
       }
     }
     this.store.replaceLinkedRefs(entries);
+    this.templateLinks = linkTemplates(all, this.config);
     return total;
   }
 
@@ -451,8 +457,30 @@ export class Workspace implements FactSource, RenameSource {
     ]);
   }
 
+  /**
+   * A file's facts — for a template whose controller comes from a `templateUrl` elsewhere, with
+   * that controller joined into its scope chains (see `withBinding`). Every query reading a
+   * template through here — definition, completion, hover, rename — sees the same binding.
+   */
   facts(relPath: string): FileFacts | null {
-    return this.overlayFacts.get(relPath) ?? this.store.getFacts(relPath);
+    const raw = this.overlayFacts.get(relPath) ?? this.store.getFacts(relPath);
+    if (!raw || raw.kind !== 'template') return raw;
+    const binding = this.templateLinks?.bindings.get(relPath);
+    if (!binding) return raw;
+    const cached = this.boundFacts.get(raw);
+    if (cached?.binding === binding) return cached.facts;
+    const facts = withBinding(raw, binding);
+    this.boundFacts.set(raw, { binding, facts });
+    return facts;
+  }
+
+  /**
+   * Every `templateUrl` the linker could not use — an expression, a URL no `templateRoots`
+   * entry maps to an indexed file, or one template given different controllers — so the user
+   * can see what to declare instead of links silently missing (docs/kien-truc.md section 5.1).
+   */
+  templateLinkIssues(): TemplateLinkIssue[] {
+    return this.templateLinks?.issues ?? [];
   }
 
   source(relPath: string): string | null {
@@ -552,6 +580,9 @@ export class Workspace implements FactSource, RenameSource {
 
   /** Go-to-definition. Main algorithm: packages/core/src/resolve/definition.ts. */
   definitionAt(relPath: string, offset: number): DefinitionResult {
+    const facts = this.facts(relPath);
+    const linked = facts && this.templateLinks ? linkDefinition(this.templateLinks, relPath, offset, facts) : null;
+    if (linked) return linked;
     return preferNearest(relPath, resolveDefinition(this, relPath, offset));
   }
 
@@ -637,6 +668,17 @@ export class Workspace implements FactSource, RenameSource {
     return this.linker.resolveCandidates(candidates);
   }
 
+  /** RenameSource.linkedController — the controller a `templateUrl` binds to this template. */
+  linkedController(relPath: string): string | null {
+    return this.templateLinks?.bindings.get(relPath)?.controller ?? null;
+  }
+
+  /** RenameSource.bindTemplate — the same join `facts()` applies, for facts extracted fresh. */
+  bindTemplate(relPath: string, facts: TemplateFacts): TemplateFacts {
+    const binding = this.templateLinks?.bindings.get(relPath);
+    return binding ? withBinding(facts, binding) : facts;
+  }
+
   /** Symbols nobody uses — dead-code candidates. */
   unused(): SymbolRow[] {
     return this.store.unusedSymbols(['controller', 'filter', 'directive', 'service', 'factory', 'scope-member']);
@@ -663,7 +705,8 @@ export class Workspace implements FactSource, RenameSource {
     // the expression becomes valid, and the node containing the dummy tells us which
     // property chain the user is typing after.
     const patched = source.slice(0, offset) + COMPLETION_DUMMY + source.slice(offset);
-    const hit = expressionAt(extractTemplate(patched, this.config), offset);
+    const binding = this.templateLinks?.bindings.get(relPath);
+    const hit = expressionAt(this.bindTemplate(relPath, extractTemplate(patched, this.config)), offset);
     if (hit) {
       if (hit.node.type === 'Literal') return []; // typing inside a string
       const { root, path } = unwind(hit.node);
@@ -681,11 +724,23 @@ export class Workspace implements FactSource, RenameSource {
       }
     }
 
-    // No expression yet (just typed '{{', not closed): use the nearest controller.
+    // No expression yet (just typed '{{', not closed): use the nearest controller — an
+    // ng-controller around the cursor, else the one a templateUrl binds to this template.
     const enclosing = facts.controllers
       .filter((c) => inSpan(c.elementSpan, offset))
       .sort((a, b) => b.elementSpan.start - a.elementSpan.start)[0];
-    if (!enclosing) return [];
+    if (!enclosing) {
+      if (!binding) return [];
+      return this.rootCompletions(relPath, [
+        {
+          kind: 'controller',
+          controllerName: binding.controller,
+          ...(binding.alias ? { alias: binding.alias } : {}),
+          locals: [],
+          elementSpan: { start: 0, end: source.length },
+        },
+      ]);
+    }
     return this.rootCompletions(relPath, [
       {
         kind: 'controller',

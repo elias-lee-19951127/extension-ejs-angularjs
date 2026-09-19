@@ -8,6 +8,7 @@ import type {
   NgDeclKind,
   ScopeMember,
   Span,
+  TemplateLink,
   ValueShape,
 } from '../types';
 import { parseJsTolerant, propName, stringOf } from './js-common';
@@ -32,6 +33,7 @@ export function extractJs(source: string, config: Config): JsFacts {
     events: [],
     bindings: [],
     renderCalls: [],
+    templateLinks: [],
     parseErrors: [],
   };
 
@@ -51,6 +53,7 @@ export function extractJs(source: string, config: Config): JsFacts {
       tryExtractDeclaration(node, facts, aliasSet, config);
       tryExtractEvent(node, facts);
       tryExtractRender(node, facts);
+      tryExtractRouteLinks(node, facts);
     },
   });
 
@@ -157,6 +160,9 @@ function tryExtractDeclaration(
 
   if (method === 'directive' || method === 'component') {
     decl.ddo = extractDdo(second);
+    const obj = ddoObject(second);
+    // A component's controller is published on its template's scope as `$ctrl` unless it says otherwise.
+    if (obj) pushTemplateLinks(obj, method, name, facts, method === 'component' ? '$ctrl' : null);
   }
 
   facts.declarations.push(decl);
@@ -241,19 +247,24 @@ function extractDeps(node: acorn.Node): NgDeclaration['deps'] {
   return [];
 }
 
-/** Extract the directive definition object. */
-function extractDdo(node: acorn.Node): NgDeclaration['ddo'] {
-  let obj: acorn.ObjectExpression | null = null;
-  if (node.type === 'ObjectExpression') obj = node as acorn.ObjectExpression;
+/** The directive definition object: the object itself, or the one its factory returns. */
+function ddoObject(node: acorn.Node): acorn.ObjectExpression | null {
+  if (node.type === 'ObjectExpression') return node as acorn.ObjectExpression;
   if (node.type === 'ArrayExpression') {
     const last = (node as acorn.ArrayExpression).elements.at(-1);
     if (last && (last.type === 'FunctionExpression' || last.type === 'ArrowFunctionExpression')) {
-      obj = returnedObject(last as acorn.FunctionExpression);
+      return returnedObject(last as acorn.FunctionExpression);
     }
   }
   if (node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
-    obj = returnedObject(node as acorn.FunctionExpression);
+    return returnedObject(node as acorn.FunctionExpression);
   }
+  return null;
+}
+
+/** Extract the directive definition object. */
+function extractDdo(node: acorn.Node): NgDeclaration['ddo'] {
+  const obj = ddoObject(node);
   if (!obj) return undefined;
 
   const ddo: NonNullable<NgDeclaration['ddo']> = {};
@@ -472,6 +483,77 @@ function tryExtractEvent(node: acorn.CallExpression, facts: JsFacts): void {
   });
 }
 
+/**
+ * `$routeProvider.when('/path', {templateUrl, controller})` and
+ * `$stateProvider.state('name', {templateUrl, controller, views: {...}})` (also the
+ * `.state({name, ...})` form). Matched by shape — method name plus an object literal carrying
+ * `templateUrl` (directly or in a view) — so `$urlRouterProvider.when('/a', '/b')` or any other
+ * unrelated `.when()`/`.state()` contributes nothing.
+ */
+function tryExtractRouteLinks(node: acorn.CallExpression, facts: JsFacts): void {
+  if (node.callee.type !== 'MemberExpression' || node.callee.computed) return;
+  if (node.callee.property.type !== 'Identifier') return;
+  const method = node.callee.property.name;
+  if (method !== 'when' && method !== 'state') return;
+
+  const [first, second] = node.arguments;
+  const obj =
+    second?.type === 'ObjectExpression' ? second : method === 'state' && first?.type === 'ObjectExpression' ? first : null;
+  if (!obj) return;
+
+  if (method === 'when') {
+    pushTemplateLinks(obj, 'route', stringOf(first as acorn.Node) ?? '?', facts, null);
+    return;
+  }
+  const stateName = (obj === first ? stringOf(propValue(obj, 'name')) : stringOf(first as acorn.Node)) ?? '?';
+  pushTemplateLinks(obj, 'state', stateName, facts, null);
+  const views = propValue(obj, 'views');
+  if (views?.type !== 'ObjectExpression') return;
+  for (const prop of (views as acorn.ObjectExpression).properties) {
+    if (prop.type !== 'Property' || prop.value.type !== 'ObjectExpression') continue;
+    pushTemplateLinks(prop.value, 'state', `${propName(prop) ?? '?'}@${stateName}`, facts, null);
+  }
+}
+
+/** Record the `templateUrl` of one definition object, if it has one. */
+function pushTemplateLinks(
+  obj: acorn.ObjectExpression,
+  via: TemplateLink['via'],
+  owner: string,
+  facts: JsFacts,
+  defaultAlias: string | null,
+): void {
+  const urlNode = propValue(obj, 'templateUrl');
+  if (!urlNode) return;
+  // `controller: 'ProfileCtrl as vm'` is the inline form of controllerAs.
+  const ctrl = stringOf(propValue(obj, 'controller'));
+  const inline = ctrl ? /^\s*(\S+)\s+as\s+([\w$]+)\s*$/.exec(ctrl) : null;
+  facts.templateLinks.push({
+    via,
+    owner,
+    url: staticString(urlNode),
+    urlSpan: { start: urlNode.start, end: urlNode.end },
+    controller: inline ? inline[1]! : ctrl,
+    controllerAs: inline ? inline[2]! : (stringOf(propValue(obj, 'controllerAs')) ?? defaultAlias),
+  });
+}
+
+function propValue(obj: acorn.ObjectExpression, key: string): acorn.Node | null {
+  for (const prop of obj.properties) {
+    if (prop.type === 'Property' && propName(prop) === key) return prop.value;
+  }
+  return null;
+}
+
+/** A string literal, or a template literal with no `${}` in it. */
+function staticString(node: acorn.Node): string | null {
+  if (node.type === 'TemplateLiteral') {
+    const tl = node as acorn.TemplateLiteral;
+    return tl.expressions.length === 0 ? (tl.quasis[0]?.value.cooked ?? null) : null;
+  }
+  return stringOf(node);
+}
+
 /** Axis A: res.render('view', { user, orders }) */
 function tryExtractRender(node: acorn.CallExpression, facts: JsFacts): void {
   if (node.callee.type !== 'MemberExpression' || node.callee.computed) return;
@@ -481,19 +563,21 @@ function tryExtractRender(node: acorn.CallExpression, facts: JsFacts): void {
   const viewPath = stringOf(viewNode as acorn.Node);
   if (viewPath === null) return;
 
-  const localKeys: string[] = [];
+  const locals: Array<{ name: string; span: Span }> = [];
   const second = node.arguments[1];
   if (second && second.type === 'ObjectExpression') {
     for (const prop of second.properties) {
       if (prop.type !== 'Property') continue;
       const key = propName(prop);
-      if (key) localKeys.push(key);
+      if (key) locals.push({ name: key, span: { start: prop.key.start, end: prop.key.end } });
     }
   }
   facts.renderCalls.push({
     viewPath,
-    localKeys,
+    localKeys: locals.map((l) => l.name),
     span: { start: node.start, end: node.end },
+    viewSpan: { start: viewNode!.start, end: viewNode!.end },
+    locals,
   });
 }
 

@@ -68,6 +68,25 @@ export interface NgDeclaration {
   };
 }
 
+/**
+ * One `templateUrl` and the controller that will own that template's scope at runtime —
+ * directive/component DDO, `$routeProvider.when`, `$stateProvider.state` (and each of its
+ * named views). Still a pure fact: the URL is NOT mapped to a file here, that needs config
+ * and the set of indexed files (Layer 4).
+ */
+export interface TemplateLink {
+  via: 'directive' | 'component' | 'route' | 'state';
+  /** Directive/component name, route path or state name (plus `@view` for a named view). */
+  owner: string;
+  /** The literal URL, or `null` when `templateUrl` is an expression that can't be read statically. */
+  url: string | null;
+  /** Span of the `templateUrl` value. */
+  urlSpan: Span;
+  /** Controller NAME — `null` when absent or declared inline as a function. */
+  controller: string | null;
+  controllerAs: string | null;
+}
+
 /** A property assigned onto $scope or this within a controller's body. */
 export interface ScopeMember {
   /** Property name: 'busy', 'selectSection'. */
@@ -103,7 +122,17 @@ export interface JsFacts {
   /** Plain JavaScript variable/function declarations, with scope — for Ctrl+Click within .js. */
   bindings: JsBinding[];
   /** Axis A: res.render('view', {a, b}) */
-  renderCalls: Array<{ viewPath: string; localKeys: string[]; span: Span }>;
+  renderCalls: Array<{
+    viewPath: string;
+    localKeys: string[];
+    span: Span;
+    /** The view-name string itself: `'user/profile'`. */
+    viewSpan: Span;
+    /** Each passed key with the span of its property key — where an EJS local jumps to. */
+    locals: Array<{ name: string; span: Span }>;
+  }>;
+  /** Every `templateUrl` this file points at, from any of the sources in docs/kien-truc.md section 5.1. */
+  templateLinks: TemplateLink[];
   parseErrors: Array<{ message: string; span: Span }>;
 }
 

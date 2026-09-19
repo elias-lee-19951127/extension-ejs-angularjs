@@ -28,6 +28,10 @@ export interface RenameSource {
   openTemplatePaths(): string[];
   /** Resolve a directive for a Layer-2-unresolved attribute value (e.g. `kbm-file="onPick($file)"`). */
   resolveScopeRefs(candidates: AttrCandidate[]): RefInput[];
+  /** The controller a `templateUrl` elsewhere binds to this template, if any. */
+  linkedController(relPath: string): string | null;
+  /** `facts` with that binding joined into its scope chains — for facts extracted fresh, not via `facts()`. */
+  bindTemplate(relPath: string, facts: TemplateFacts): TemplateFacts;
 }
 
 interface RenameEdits {
@@ -200,10 +204,14 @@ function jsRenameEdits(
   return out;
 }
 
-/** Templates declaring ng-controller X — only there can a ref to X's $scope exist. */
+/**
+ * Templates declaring ng-controller X, or bound to X by a `templateUrl` — only there can a ref
+ * to X's $scope exist.
+ */
 function templatesUsing(deps: RenameSource, controller: string): string[] {
   const paths = new Set([...deps.templatePaths(), ...deps.openTemplatePaths()]);
   return [...paths].filter((p) => {
+    if (deps.linkedController(p) === controller) return true;
     const facts = deps.facts(p);
     return facts?.kind === 'template' && facts.controllers.some((c) => c.name === controller);
   });
@@ -220,7 +228,8 @@ function templateRenameEdits(
   for (const path of paths) {
     const source = deps.source(path);
     if (source === null) continue;
-    const fresh = extractTemplate(source, deps.config);
+    const fresh = deps.bindTemplate(path, extractTemplate(source, deps.config));
+    const linked = deps.linkedController(path);
     const where = (span: Span) => `${path}:${lineOf(source, span.start)}`;
 
     // Every place referencing this controller's $scope: a root inside an expression, and
@@ -235,7 +244,8 @@ function templateRenameEdits(
       }
     }
     for (const cand of fresh.attrCandidates) {
-      if (cand.container !== controller) continue;
+      // No ng-controller around it in this file: the template's own scope is the linked controller's.
+      if ((cand.container ?? linked) !== controller) continue;
       for (const r of deps.resolveScopeRefs([cand])) {
         if (r.axis !== 'ng-scope') continue;
         sites.push({ name: r.name, span: r.span, shadowed: cand.locals.includes(newName) });

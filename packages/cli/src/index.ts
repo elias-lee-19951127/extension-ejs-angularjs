@@ -25,13 +25,18 @@ ejsng — tracks variables/functions between EJS and AngularJS 1.x
   ejsng members <controller> [root]     List scope properties of a controller
   ejsng unused [root]                   Symbols with no usages found (dead-code candidates)
   ejsng sweep [root]                    Try to resolve EVERY identifier in every template,
-                                        report coverage and list the unresolved ones
+                                        report coverage and list the unresolved ones,
+                                        plus every templateUrl that could not be linked
   ejsng scan  <file>                    Show the facts extracted from a file
 
 Options:
   --root <path>            Root directory (default: current directory)
   --module-alias <name>    Add a name treated as an angular module (repeatable)
   --delimiter <char>       EJS delimiter (default '%')
+  --template-root <urlPrefix>=<fsPath>[=<.ext,.ext>]
+                           Map a templateUrl prefix to a directory (repeatable),
+                           e.g. /views/=src/views=.ejs,.html
+  --views-dir <path>       Express views directory for res.render() (default 'views')
   --json                   Output JSON
 `);
   process.exit(1);
@@ -42,20 +47,31 @@ interface Opts {
   json: boolean;
   moduleAliases: string[];
   delimiter: string;
+  templateRoots: Config['templateRoots'];
+  viewsDir?: string;
   rest: string[];
 }
 
 function parseArgs(argv: string[]): Opts {
-  const opts: Opts = { root: process.cwd(), json: false, moduleAliases: [], delimiter: '%', rest: [] };
+  const opts: Opts = { root: process.cwd(), json: false, moduleAliases: [], delimiter: '%', templateRoots: [], rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--root') opts.root = argv[++i] ?? opts.root;
     else if (a === '--module-alias') opts.moduleAliases.push(argv[++i] ?? '');
     else if (a === '--delimiter') opts.delimiter = argv[++i] ?? '%';
+    else if (a === '--template-root') opts.templateRoots.push(parseTemplateRoot(argv[++i] ?? ''));
+    else if (a === '--views-dir') opts.viewsDir = argv[++i];
     else if (a === '--json') opts.json = true;
     else opts.rest.push(a);
   }
   return opts;
+}
+
+/** `/views/=src/views=.ejs,.html` -> `{ urlPrefix: '/views/', fsPath: 'src/views', extensions: ['.ejs', '.html'] }`. */
+function parseTemplateRoot(arg: string): Config['templateRoots'][number] {
+  const [urlPrefix, fsPath, exts] = arg.split('=');
+  if (!urlPrefix || !fsPath) usage();
+  return { urlPrefix, fsPath, ...(exts ? { extensions: exts.split(',').filter(Boolean) } : {}) };
 }
 
 function makeWorkspace(opts: Opts): Workspace {
@@ -64,6 +80,8 @@ function makeWorkspace(opts: Opts): Workspace {
     cfg.moduleAliases = ['myApp', 'app', 'appModule', ...opts.moduleAliases];
   }
   cfg.ejsDelimiter = opts.delimiter;
+  if (opts.templateRoots.length) cfg.templateRoots = opts.templateRoots;
+  if (opts.viewsDir) cfg.expressViewsDir = opts.viewsDir;
   return new Workspace(cfg);
 }
 
@@ -349,6 +367,16 @@ function main(): void {
         if (failures.length > 40) console.log(`  … ${failures.length - 40} more`);
         process.exitCode = 1;
       }
+
+      // Reported, not counted as failures: a dynamic templateUrl is legitimate code, it just
+      // needs the user to know that link is missing (docs/kien-truc.md section 5.1).
+      const linkIssues = ws.templateLinkIssues();
+      console.log(`\nUnresolved template links: ${linkIssues.length}`);
+      for (const issue of linkIssues.slice(0, 40)) {
+        const lc = toLineCol(ws.source(issue.path) ?? '', issue.span.start);
+        console.log(`  ${issue.path}:${lc.line}:${lc.col}  ${issue.via} '${issue.owner}' [${issue.reason}] — ${issue.detail}`);
+      }
+      if (linkIssues.length > 40) console.log(`  … ${linkIssues.length - 40} more`);
       ws.close();
       break;
     }

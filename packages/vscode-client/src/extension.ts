@@ -745,6 +745,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       moduleAliases: cfg.get('moduleAliases'),
       ejsDelimiter: cfg.get('ejsDelimiter'),
       customDirectives: cfg.get('customDirectives'),
+      templateRoots: cfg.get('templateRoots'),
+      expressViewsDir: cfg.get('expressViewsDir'),
       diagnostics: { enabled: cfg.get('diagnostics.enabled') },
       runtimeLog: {
         pathMappings: cfg.get('runtimeLog.pathMappings'),

@@ -294,6 +294,21 @@ dẫn đĩa, và file thật có thể là `.ejs`. Cần config map:
 Nếu `templateUrl` là biểu thức động (`templateUrl: base + '/x.html'`) → bỏ qua, ghi nhận vào
 báo cáo "unresolved links" để người dùng biết mà khai báo tay.
 
+**Đã hiện thực** (`.scratch/template-roots-config/issues/01-resolve-template-url.md`), nguồn 2–5,
+ở `packages/core/src/resolve/template-links.ts`:
+- Extractor ghi `JsFacts.templateLinks` (vẫn là fact thuần, chưa map ra file). Layer 4 map URL qua
+  `templateRoots` (prefix dài nhất trước; thử tên y nguyên, rồi đổi/thêm từng `extensions`), cuối
+  cùng thử URL như đường dẫn từ gốc workspace.
+- Controller được nối **lúc query**: `Workspace.facts()` chèn một frame controller ngay trong frame
+  root của mọi scope chain — `ng-controller` bên trong template vẫn gần hơn nên vẫn thắng. Nhờ
+  đi qua `facts()`, go-to-definition, completion, hover và rename đều thấy cùng một liên kết.
+- Một template bị gán **nhiều controller khác nhau** → không gán cái nào, báo `ambiguous-controller`
+  (đoán sẽ làm nửa số biểu thức resolve sai). URL không khớp file nào → `no-file`; biểu thức → `dynamic`.
+  Báo cáo: `Workspace.templateLinkIssues()` và cuối output `ejsng sweep`.
+- `expressViewsDir` (mặc định `views`, như Express) cho `res.render('user/profile')`: Ctrl+click vào
+  tên view mở file view; Ctrl+click vào `<%= user %>` nhảy tới key `user` của các `res.render()` render view đó.
+- Chưa làm: heuristic dự phòng (nguồn 6), và `$uibModal.open`/`$mdDialog.show({templateUrl})`.
+
 ### 5.2 Scope chain resolver
 Với mỗi element trong virtual DOM, dựng **scope chain** đi từ node lên root:
 ```
