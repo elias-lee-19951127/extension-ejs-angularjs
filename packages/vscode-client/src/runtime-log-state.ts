@@ -88,6 +88,8 @@ export interface RuntimeStatusConnection {
   outsideWorkspaceDirs?: string[];
   /** Ticket 07, item 4 — URL prefix -> local directory, discovered by suffix matching. Session-only until the user saves one. */
   urlMappings?: RuntimePathMapping[];
+  /** observed-types-r1 — types of scope variables learned from this connection's logs, shown in hover. */
+  typeEvidence?: number;
 }
 
 /** A container/URL path prefix and the local directory it stands for — mirrors `PathMapping` in packages/core. */
@@ -112,6 +114,8 @@ export interface RuntimeStatusSummary {
   outsideWorkspaceDirs: string[];
   /** Ticket 07, item 4 — every connection's discovered URL mappings, de-duplicated by remote+local. */
   urlMappings: RuntimePathMapping[];
+  /** observed-types-r1 — pieces of runtime Type Evidence across every connection. */
+  typeEvidence: number;
 }
 
 /** Keep the panel's "recent logs" list to a reasonable size even with several live connections. */
@@ -134,12 +138,14 @@ export function summarizeRuntimeStatus(connections: RuntimeStatusConnection[]): 
     wrapperSuggestion: null,
     outsideWorkspaceDirs: [],
     urlMappings: [],
+    typeEvidence: 0,
   };
   const outsideDirs = new Set<string>();
   const urlMappings = new Map<string, RuntimePathMapping>();
   for (const c of connections) {
     summary.received += c.received;
     summary.drawn += c.drawn;
+    summary.typeEvidence += c.typeEvidence ?? 0;
     summary.dropped += Object.values(c.droppedByReason).reduce((a, b) => a + b, 0);
     summary[c.state]++;
     summary.recentLogs.push(...(c.recentLogs ?? []));
@@ -214,7 +220,9 @@ export function escapeGlobPath(path: string): string {
 export function formatRuntimeStatusBarText(connectionCount: number, summary: RuntimeStatusSummary): string {
   if (connectionCount === 0) return 'EJS/NG Runtime: off';
   const note = summary.connecting > 0 ? ' (connecting…)' : summary.failed > 0 ? ' (failed)' : '';
-  return `EJS/NG Runtime: received ${summary.received} / drawn ${summary.drawn} / dropped ${summary.dropped}${note}`;
+  // Only once there is some: it's how a user learns logging a scope variable feeds the hover.
+  const types = summary.typeEvidence > 0 ? ` · ${summary.typeEvidence} type${summary.typeEvidence === 1 ? '' : 's'} seen` : '';
+  return `EJS/NG Runtime: received ${summary.received} / drawn ${summary.drawn} / dropped ${summary.dropped}${types}${note}`;
 }
 
 /** How many past values each line keeps for its hover (.scratch/inline-runtime-log/issues/05-log-history.md). */

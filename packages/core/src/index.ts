@@ -20,5 +20,6 @@ export * from './resolve/rename';
 export * from './runtime-log';
 export * from './logpoint';
 export * from './runtime-shape';
+export * from './runtime-evidence';
 export * from './runtime-log-docker';
 export * from './runtime-log-checklist';

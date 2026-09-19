@@ -123,6 +123,12 @@ export interface ParsedConsoleLog {
   value: string;
   severity: 'log' | 'warning' | 'error';
   /**
+   * The arguments as the runtime sent them — `value` is only their text. Kept so a value tied to a
+   * scope variable can be dug into for its type (observed-types-r1); `objectId`s are handles the
+   * runtime holds until its console is cleared.
+   */
+  args: RemoteObject[];
+  /**
    * Set when this call came from a logpoint's condition (.scratch/inline-logpoints/spec.md) rather
    * than from the user's own code. Its condition frame is already removed from `callFrames`, so the
    * first frame is the line the logpoint sits on.
@@ -183,6 +189,7 @@ export function parseConsoleApiCalled(event: unknown): ParsedConsoleLog | null {
     })),
     value: event.args.map(formatArg).join(logpointId !== null ? '' : ' '),
     severity: severityOf(event.type),
+    args: event.args,
     ...(logpointId !== null ? { logpointId } : {}),
   };
 }

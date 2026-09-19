@@ -81,6 +81,7 @@ test('summarizeRuntimeStatus: an empty connection list summarizes to all zeros',
     wrapperSuggestion: null,
     outsideWorkspaceDirs: [],
     urlMappings: [],
+    typeEvidence: 0,
   });
 });
 
@@ -100,6 +101,7 @@ test('summarizeRuntimeStatus: sums received/drawn across connections, and droppe
     wrapperSuggestion: null,
     outsideWorkspaceDirs: [],
     urlMappings: [],
+    typeEvidence: 0,
   });
 });
 
@@ -260,6 +262,18 @@ test('formatRuntimeStatusBarText: no connections at all reads "off"', () => {
 test('formatRuntimeStatusBarText: a live connection shows received/drawn/dropped, not just a count', () => {
   const text = formatRuntimeStatusBarText(1, { received: 120, drawn: 34, dropped: 86, connecting: 0, connected: 1, failed: 0 });
   assert.strictEqual(text, 'EJS/NG Runtime: received 120 / drawn 34 / dropped 86');
+});
+
+test('formatRuntimeStatusBarText: types learned from logs are counted across connections, once there are any', () => {
+  const summary = summarizeRuntimeStatus([
+    { key: 'a', state: 'connected', received: 3, drawn: 3, droppedByReason: {}, typeEvidence: 2 },
+    { key: 'b', state: 'connected', received: 1, drawn: 1, droppedByReason: {}, typeEvidence: 1 },
+  ]);
+  assert.strictEqual(formatRuntimeStatusBarText(2, summary), 'EJS/NG Runtime: received 4 / drawn 4 / dropped 0 · 3 types seen');
+  assert.strictEqual(
+    formatRuntimeStatusBarText(1, summarizeRuntimeStatus([{ key: 'a', state: 'connected', received: 1, drawn: 1, droppedByReason: {} }])),
+    'EJS/NG Runtime: received 1 / drawn 1 / dropped 0',
+  );
 });
 
 test('formatRuntimeStatusBarText: a still-connecting connection is flagged, not silently shown as if it were live', () => {

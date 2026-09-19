@@ -97,6 +97,10 @@ test('parseConsoleApiCalled: a logpoint call anchors to the line under its condi
     callFrames: [{ url: 'file:///app/index.js', lineNumber: 5, columnNumber: 2, scriptId: '81' }],
     value: 'n = 3',
     severity: 'log',
+    args: [
+      { type: 'string', value: 'n = ' },
+      { type: 'number', value: 3 },
+    ],
     logpointId: 4,
   });
 });

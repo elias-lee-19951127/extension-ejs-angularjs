@@ -31,6 +31,11 @@ import {
   mapContainerPath,
   offsetForLocation,
   Workspace,
+  digRuntimeValue,
+  parseLogMessage,
+  RuntimeEvidenceStore,
+  typeOfRuntimeValue,
+  type ScopeTarget,
   type Config,
   type ObservedTypeResult,
   type Span,
@@ -169,6 +174,11 @@ interface RuntimeLogConnectionInfo {
   request: RuntimeLogConnection['request'];
   /** The logpoints currently set on this connection — see `applyLogpoints`. */
   logpoints: ConnectionLogpoints;
+  /**
+   * observed-types-r1 — the types of scope variables this connection's logs showed. Lives exactly
+   * as long as the connection: replaced on reconnect, dropped on disconnect, cleared on failure.
+   */
+  typeEvidence: RuntimeEvidenceStore;
 }
 
 /** What `applyLogpoints` has set on one connection, so the next call can take it all back. */
@@ -944,6 +954,8 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
   if (info.state === state && info.reason === reason) return;
   info.state = state;
   info.reason = reason;
+  // What a dead connection saw is no longer being seen (observed-types-r1 decision #6).
+  if (state === 'failed') info.typeEvidence.clear();
   void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason, endpoint: info.meta.endpoint });
 }
 
@@ -1069,6 +1081,42 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     // Ticket 05 (log history): a reconnect to this endpoint resets what it logged before.
     endpoint: info.meta.endpoint,
   });
+  if (inWorkspace) collectTypeEvidence(key, info, log, relPath, offset);
+}
+
+/**
+ * observed-types-r1: a drawn log whose arguments read scope variables — a `console.*` call the
+ * index recorded, or a logpoint's `{expressions}` — becomes runtime Type Evidence for them. Dug
+ * after the log is drawn and outside `info.queue`, so `getProperties` round-trips never hold up
+ * the next log's drawing. A wrapper call, or a log of a local, matches nothing and is skipped.
+ */
+function collectTypeEvidence(key: string, info: RuntimeLogConnectionInfo, log: ParsedConsoleLog, relPath: string, offset: number): void {
+  if (!workspace) return;
+  let targets: Array<ScopeTarget | null> | undefined;
+  let span: Span = { start: offset, end: offset };
+  if (log.logpointId !== undefined) {
+    const lp = logpoints.find((l) => l.id === log.logpointId);
+    if (lp?.relPath !== relPath) return; // a logpoint since replaced, or drawn in another file
+    targets = lp.targets;
+  } else {
+    const call = workspace.consoleCallAt(relPath, offset);
+    targets = call?.args;
+    if (call) span = call.method;
+  }
+  if (!targets) return;
+  const site = { path: relPath, span };
+  targets.forEach((target, i) => {
+    const arg = log.args[i];
+    if (!target || !arg) return;
+    const place = `${relPath}\u0000${offset}\u0000${i}`;
+    if (!info.typeEvidence.claim(place, Date.now())) return;
+    const getProperties = (objectId: string): Promise<unknown> =>
+      info.request('Runtime.getProperties', { objectId, ownProperties: true, generatePreview: true });
+    void digRuntimeValue(arg, getProperties).then(({ value }) => {
+      if (runtimeLogConnections.get(key) !== info) return;
+      info.typeEvidence.record(place, target, typeOfRuntimeValue(value), site, Date.now());
+    });
+  });
 }
 
 /**
@@ -1107,6 +1155,7 @@ function startRuntimeLogConnection(
     usedMountMappings: new Map(),
     request: () => Promise.resolve(null), // replaced right below, before any callback fires
     logpoints: { generation: 0, breakpointIds: [], regexes: [], exactUrls: new Set() },
+    typeEvidence: new RuntimeEvidenceStore(runtimeSourceLabel(meta)),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a
@@ -1167,6 +1216,13 @@ interface Logpoint {
   line: number;
   logMessage: string;
   condition?: string;
+  /** The file, workspace-relative — `null` outside the workspace, where no index can say what the expressions read. */
+  relPath: string | null;
+  /**
+   * observed-types-r1: per part of `logMessage` — one per argument the condition logs — the scope
+   * variable an `{expression}` reads, resolved once here rather than on every log it produces.
+   */
+  targets?: Array<ScopeTarget | null>;
 }
 
 /** The last list `ejsng/setLogpoints` sent — the client always sends the whole list, never a diff. */
@@ -1267,6 +1323,19 @@ interface LogpointParams {
 }
 
 /**
+ * What each part of a logpoint's message reads, evaluated where the logpoint runs: the first
+ * non-blank character of its line. `undefined` when no expression reads a scope variable.
+ */
+function logpointTargets(relPath: string, line: number, logMessage: string): Array<ScopeTarget | null> | undefined {
+  const source = workspace?.source(relPath);
+  if (!workspace || source == null || !relPath.endsWith('.js')) return undefined;
+  const lineStart = offsetForLocation(source, line, 0);
+  const offset = lineStart + (/^\s*/.exec(source.slice(lineStart))?.[0].length ?? 0);
+  const targets = parseLogMessage(logMessage).map((part) => (part.kind === 'expr' ? workspace!.scopeTargetAt(relPath, offset, part.expr) : null));
+  return targets.some((t) => t) ? targets : undefined;
+}
+
+/**
  * `ejsng/setLogpoints` — the client's whole current list of logpoints (never a diff), re-applied to
  * every open connection. A connection still connecting picks the list up when it opens.
  */
@@ -1276,12 +1345,16 @@ connection.onNotification('ejsng/setLogpoints', (params: { logpoints?: LogpointP
     .map((lp) => {
       const fsPath = URI.parse(lp.uri).fsPath;
       const real = realpathOr(fsPath);
+      const relPath = rel(lp.uri);
+      const targets = relPath ? logpointTargets(relPath, lp.line, lp.logMessage) : undefined;
       return {
         id: nextLogpointId++,
         hostPaths: real === fsPath ? [fsPath] : [fsPath, real],
         line: lp.line,
         logMessage: lp.logMessage,
         ...(typeof lp.condition === 'string' && lp.condition.trim() ? { condition: lp.condition } : {}),
+        relPath,
+        ...(targets ? { targets } : {}),
       };
     });
   for (const info of runtimeLogConnections.values()) {
@@ -1440,6 +1513,8 @@ connection.onRequest('ejsng/runtimeStatus', () => ({
     outsideWorkspaceDirs: [...info.outsideWorkspaceDirs],
     // Ticket 07, item 4 — offered for saving, never saved here.
     urlMappings: info.urlMappings,
+    // observed-types-r1 decision #11 — types of scope variables learned from this connection's logs.
+    typeEvidence: info.typeEvidence.size,
   })),
 }));
 

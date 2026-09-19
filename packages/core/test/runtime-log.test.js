@@ -77,6 +77,8 @@ test('parseConsoleApiCalled: joins primitive args and carries every call frame t
     ],
     value: 'total 42',
     severity: 'log',
+    // Kept as sent, for observed-types-r1 to dig into.
+    args: event.args,
   });
 });
 
@@ -254,7 +256,12 @@ test('parseRuntimeLogMessage: a well-formed consoleAPICalled frame parses throug
   });
   assert.deepStrictEqual(parseRuntimeLogMessage(raw), {
     kind: 'log',
-    log: { callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }], value: 'hi', severity: 'log' },
+    log: {
+      callFrames: [{ url: '/app.js', lineNumber: 0, columnNumber: 0 }],
+      value: 'hi',
+      severity: 'log',
+      args: [{ type: 'string', value: 'hi' }],
+    },
   });
 });
 
