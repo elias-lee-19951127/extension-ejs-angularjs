@@ -25,26 +25,30 @@ export function offsetForLocation(source: string, line: number, character: numbe
 }
 
 /** CDP `Runtime.ObjectPreview` — a compact, best-effort rendering of an object/array arg. */
-interface ObjectPreview {
+export interface ObjectPreview {
   subtype?: string;
   overflow: boolean;
   properties: PropertyPreview[];
 }
 
-interface PropertyPreview {
+export interface PropertyPreview {
   name: string;
   type: string;
+  subtype?: string;
   value?: string;
   valuePreview?: ObjectPreview;
 }
 
-/** A `RemoteObject` (CDP `Runtime` domain) — only the fields v1 formatting needs. */
-interface RemoteObject {
+/** A `RemoteObject` (CDP `Runtime` domain) — the fields formatting and Observed Type use. */
+export interface RemoteObject {
   type: string;
   subtype?: string;
+  className?: string;
   value?: unknown;
   description?: string;
   preview?: ObjectPreview;
+  /** Handle for `Runtime.getProperties` — held by the runtime until its console is cleared. */
+  objectId?: string;
 }
 
 /** A `CallFrame` (CDP `Runtime` domain) — only the fields the log-to-line mapping needs. */

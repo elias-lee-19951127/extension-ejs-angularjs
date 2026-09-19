@@ -28,6 +28,13 @@ export interface TypeEvidence {
   rhsText?: string;
   /** Static: the assignment only runs in a callback, not when the controller is constructed. */
   inCallback?: boolean;
+  /**
+   * Runtime: the type read off the logged value (`runtime-shape.ts`), merged in alongside `shapes`.
+   * A type rather than a `ValueShape`: a value can hold arrays of mixed elements, objects known to
+   * be incomplete, `Record`s — none of which the index's `ValueShape` (persisted, walked by
+   * completion) should have to carry. Runtime evidence is never cached, so it needn't serialize.
+   */
+  type?: ObservedType;
   /** Runtime: the connection it was observed on. */
   connection?: string;
   count: number;
@@ -43,10 +50,18 @@ export interface ObservedType {
 }
 
 export type Variant =
-  | { kind: 'object'; props: Map<string, { type: ObservedType; optional: boolean }> }
+  /**
+   * `open`: seen only in part — a truncated runtime preview — so a key missing from it proves
+   * nothing and must not turn optional when merged (observed-types-r1 decision #4).
+   */
+  | { kind: 'object'; props: Map<string, { type: ObservedType; optional: boolean }>; open?: boolean }
   | { kind: 'array'; element: ObservedType }
   | { kind: 'function'; params: string[] }
   | { kind: 'primitive'; primitive?: string }
+  /** A built-in object shown by its class, never walked into: `Date`, `Map`, `Promise`. */
+  | { kind: 'named'; name: string }
+  /** An object used as a dictionary — its keys are data, so only its values' type is kept. */
+  | { kind: 'record'; value: ObservedType }
   | { kind: 'unknown' };
 
 const EMPTY = (): ObservedType => ({ variants: [], nullable: false, partial: false });
@@ -91,7 +106,9 @@ export function mergeTypes(a: ObservedType, b: ObservedType): ObservedType {
 }
 
 function variantKey(v: Variant): string {
-  return v.kind === 'primitive' ? `primitive:${v.primitive ?? '?'}` : v.kind;
+  if (v.kind === 'primitive') return `primitive:${v.primitive ?? '?'}`;
+  if (v.kind === 'named') return `named:${v.name}`;
+  return v.kind;
 }
 
 function mergeVariants(a: Variant, b: Variant): Variant {
@@ -101,11 +118,15 @@ function mergeVariants(a: Variant, b: Variant): Variant {
       const x = a.props.get(key);
       const y = b.props.get(key);
       if (x && y) props.set(key, { type: mergeTypes(x.type, y.type), optional: x.optional || y.optional });
-      else props.set(key, { type: (x ?? y)!.type, optional: true });
+      // Missing from one side makes a key optional only if that side lists every key it has.
+      else if (x) props.set(key, { type: x.type, optional: x.optional || !b.open });
+      else props.set(key, { type: y!.type, optional: y!.optional || !a.open });
     }
-    return { kind: 'object', props };
+    // One complete side is enough to know the whole key set.
+    return a.open && b.open ? { kind: 'object', props, open: true } : { kind: 'object', props };
   }
   if (a.kind === 'array' && b.kind === 'array') return { kind: 'array', element: mergeTypes(a.element, b.element) };
+  if (a.kind === 'record' && b.kind === 'record') return { kind: 'record', value: mergeTypes(a.value, b.value) };
   return a; // functions, primitives of the same kind, unknowns: nothing more to learn from the second
 }
 
@@ -114,16 +135,17 @@ function mergeVariants(a: Variant, b: Variant): Variant {
  * (`$scope.form = …`, `path.length === 1`) is merged in; each nested one (`$scope.form.extra = …`)
  * adds its key — optional, since it wasn't there at every point — to the object at that path.
  */
-export function typeFromEvidence(writes: Array<Pick<TypeEvidence, 'path' | 'shapes' | 'nullable'>>): ObservedType {
+export function typeFromEvidence(writes: Array<Pick<TypeEvidence, 'path' | 'shapes' | 'nullable' | 'type'>>): ObservedType {
   let type = EMPTY();
   for (const w of writes.filter((x) => x.path.length === 1)) type = mergeTypes(type, writeType(w));
   for (const w of writes.filter((x) => x.path.length > 1)) type = withNestedKey(type, w.path.slice(1), writeType(w));
   return type;
 }
 
-function writeType(w: Pick<TypeEvidence, 'shapes' | 'nullable'>): ObservedType {
+function writeType(w: Pick<TypeEvidence, 'shapes' | 'nullable' | 'type'>): ObservedType {
   let t: ObservedType = { ...EMPTY(), nullable: w.nullable };
   for (const s of w.shapes) t = mergeTypes(t, fromShape(s));
+  if (w.type) t = mergeTypes(t, w.type);
   return t;
 }
 
@@ -154,12 +176,14 @@ export function typeAtPath(type: ObservedType, path: string[]): ObservedType | n
   for (const seg of path) {
     let next: ObservedType | null = null;
     for (const v of cur.variants) {
-      const holder = v.kind === 'array' ? v.element.variants.find((e) => e.kind === 'object') : v;
-      if (holder?.kind !== 'object') continue;
-      const prop = holder.props.get(seg);
-      if (!prop) continue;
-      // An optional key is NOT nullable: only an explicit null counts (spec decision #3).
-      next = next ? mergeTypes(next, prop.type) : prop.type;
+      const holders = v.kind === 'array' ? v.element.variants : [v];
+      for (const holder of holders) {
+        // A dictionary has every key; its value type is what any of them holds.
+        const found = holder.kind === 'object' ? holder.props.get(seg)?.type : holder.kind === 'record' ? holder.value : undefined;
+        if (!found) continue;
+        // An optional key is NOT nullable: only an explicit null counts (spec decision #3).
+        next = next ? mergeTypes(next, found) : found;
+      }
     }
     if (!next) return null;
     cur = next;
@@ -201,6 +225,10 @@ function formatVariant(v: Variant, limits: FormatLimits, level: number): string 
       return `(${v.params.join(', ')}) => …`;
     case 'unknown':
       return 'unknown';
+    case 'named':
+      return v.name;
+    case 'record':
+      return `Record<string, ${formatNested(v.value, limits, level + 1)}>`;
     case 'array': {
       const inner = formatNested(v.element, limits, level);
       return /[|\s]/.test(inner) && !inner.startsWith('{') ? `(${inner})[]` : `${inner}[]`;
@@ -208,11 +236,13 @@ function formatVariant(v: Variant, limits: FormatLimits, level: number): string 
     case 'object': {
       if (level > limits.depth) return '{…}';
       const entries = [...v.props.entries()];
-      if (!entries.length) return '{}';
+      if (!entries.length) return v.open ? '{…}' : '{}';
       const shown = entries
         .slice(0, limits.keys)
         .map(([key, p]) => `${key}${p.optional ? '?' : ''}: ${formatNested(p.type, limits, level + 1)}`);
       if (entries.length > limits.keys) shown.push(`…+${entries.length - limits.keys}`);
+      // Only part of it was seen: say so rather than pass the listed keys off as all of them.
+      else if (v.open) shown.push('…');
       return `{ ${shown.join(', ')} }`;
     }
   }

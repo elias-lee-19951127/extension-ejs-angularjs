@@ -1,0 +1,2512 @@
+{
+ "capturedWith": "node v20.20.0 (V8 11.3.244.8-node.33), node:inspector, 2026-09-19",
+ "cases": {
+  "big": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": true,
+     "properties": [
+      {
+       "name": "k0",
+       "type": "number",
+       "value": "0"
+      },
+      {
+       "name": "k1",
+       "type": "number",
+       "value": "1"
+      },
+      {
+       "name": "k2",
+       "type": "number",
+       "value": "2"
+      },
+      {
+       "name": "k3",
+       "type": "number",
+       "value": "3"
+      },
+      {
+       "name": "k4",
+       "type": "number",
+       "value": "4"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "k0",
+     "value": {
+      "type": "number",
+      "value": 0,
+      "description": "0"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k1",
+     "value": {
+      "type": "number",
+      "value": 1,
+      "description": "1"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k2",
+     "value": {
+      "type": "number",
+      "value": 2,
+      "description": "2"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k3",
+     "value": {
+      "type": "number",
+      "value": 3,
+      "description": "3"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k4",
+     "value": {
+      "type": "number",
+      "value": 4,
+      "description": "4"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k5",
+     "value": {
+      "type": "number",
+      "value": 5,
+      "description": "5"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k6",
+     "value": {
+      "type": "number",
+      "value": 6,
+      "description": "6"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k7",
+     "value": {
+      "type": "number",
+      "value": 7,
+      "description": "7"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k8",
+     "value": {
+      "type": "number",
+      "value": 8,
+      "description": "8"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k9",
+     "value": {
+      "type": "number",
+      "value": 9,
+      "description": "9"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k10",
+     "value": {
+      "type": "number",
+      "value": 10,
+      "description": "10"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "k11",
+     "value": {
+      "type": "number",
+      "value": 11,
+      "description": "11"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    }
+   ],
+   "children": {}
+  },
+  "rows": {
+   "arg": {
+    "type": "object",
+    "subtype": "array",
+    "className": "Array",
+    "description": "Array(150)",
+    "preview": {
+     "type": "object",
+     "subtype": "array",
+     "description": "Array(150)",
+     "overflow": true,
+     "properties": [
+      {
+       "name": "0",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "1",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "2",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "3",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "4",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "5",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "6",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "7",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "8",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "9",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "10",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "11",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "12",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "13",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "14",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "15",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "16",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "17",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "18",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "19",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "20",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "21",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "22",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "23",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "24",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "25",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "26",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "27",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "28",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "29",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "30",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "31",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "32",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "33",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "34",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "35",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "36",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "37",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "38",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "39",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "40",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "41",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "42",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "43",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "44",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "45",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "46",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "47",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "48",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "49",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "50",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "51",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "52",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "53",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "54",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "55",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "56",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "57",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "58",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "59",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "60",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "61",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "62",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "63",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "64",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "65",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "66",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "67",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "68",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "69",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "70",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "71",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "72",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "73",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "74",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "75",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "76",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "77",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "78",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "79",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "80",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "81",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "82",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "83",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "84",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "85",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "86",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "87",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "88",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "89",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "90",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "91",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "92",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "93",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "94",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "95",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "96",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "97",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "98",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "99",
+       "type": "object",
+       "value": "Object"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "0",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": true,
+       "properties": [
+        {
+         "name": "id",
+         "type": "number",
+         "value": "0"
+        },
+        {
+         "name": "name",
+         "type": "string",
+         "value": "n0"
+        },
+        {
+         "name": "owner",
+         "type": "object",
+         "value": "Object"
+        },
+        {
+         "name": "tags",
+         "type": "object",
+         "value": "Array(1)",
+         "subtype": "array"
+        },
+        {
+         "name": "a",
+         "type": "number",
+         "value": "1"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "1",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": true,
+       "properties": [
+        {
+         "name": "id",
+         "type": "number",
+         "value": "1"
+        },
+        {
+         "name": "name",
+         "type": "string",
+         "value": "n1"
+        },
+        {
+         "name": "owner",
+         "type": "object",
+         "value": "Object"
+        },
+        {
+         "name": "tags",
+         "type": "object",
+         "value": "Array(1)",
+         "subtype": "array"
+        },
+        {
+         "name": "a",
+         "type": "number",
+         "value": "1"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "74",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": true,
+       "properties": [
+        {
+         "name": "id",
+         "type": "number",
+         "value": "74"
+        },
+        {
+         "name": "name",
+         "type": "string",
+         "value": "n74"
+        },
+        {
+         "name": "owner",
+         "type": "object",
+         "value": "Object"
+        },
+        {
+         "name": "tags",
+         "type": "object",
+         "value": "Array(1)",
+         "subtype": "array"
+        },
+        {
+         "name": "a",
+         "type": "number",
+         "value": "1"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "149",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": true,
+       "properties": [
+        {
+         "name": "id",
+         "type": "number",
+         "value": "149"
+        },
+        {
+         "name": "name",
+         "type": "string",
+         "value": "n149"
+        },
+        {
+         "name": "owner",
+         "type": "object",
+         "value": "Object"
+        },
+        {
+         "name": "tags",
+         "type": "object",
+         "value": "Array(1)",
+         "subtype": "array"
+        },
+        {
+         "name": "a",
+         "type": "number",
+         "value": "1"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "length",
+     "value": {
+      "type": "number",
+      "value": 150,
+      "description": "150"
+     },
+     "writable": true,
+     "configurable": false,
+     "enumerable": false,
+     "isOwn": true
+    }
+   ],
+   "children": {
+    "0": [
+     {
+      "name": "id",
+      "value": {
+       "type": "number",
+       "value": 0,
+       "description": "0"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "name",
+      "value": {
+       "type": "string",
+       "value": "n0"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "owner",
+      "value": {
+       "type": "object",
+       "className": "Object",
+       "description": "Object",
+       "preview": {
+        "type": "object",
+        "description": "Object",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "id",
+          "type": "number",
+          "value": "1"
+         },
+         {
+          "name": "name",
+          "type": "string",
+          "value": "x"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "tags",
+      "value": {
+       "type": "object",
+       "subtype": "array",
+       "className": "Array",
+       "description": "Array(1)",
+       "preview": {
+        "type": "object",
+        "subtype": "array",
+        "description": "Array(1)",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "0",
+          "type": "string",
+          "value": "a"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "a",
+      "value": {
+       "type": "number",
+       "value": 1,
+       "description": "1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "b",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     }
+    ],
+    "1": [
+     {
+      "name": "id",
+      "value": {
+       "type": "number",
+       "value": 1,
+       "description": "1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "name",
+      "value": {
+       "type": "string",
+       "value": "n1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "owner",
+      "value": {
+       "type": "object",
+       "className": "Object",
+       "description": "Object",
+       "preview": {
+        "type": "object",
+        "description": "Object",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "id",
+          "type": "number",
+          "value": "1"
+         },
+         {
+          "name": "name",
+          "type": "string",
+          "value": "x"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "tags",
+      "value": {
+       "type": "object",
+       "subtype": "array",
+       "className": "Array",
+       "description": "Array(1)",
+       "preview": {
+        "type": "object",
+        "subtype": "array",
+        "description": "Array(1)",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "0",
+          "type": "string",
+          "value": "a"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "a",
+      "value": {
+       "type": "number",
+       "value": 1,
+       "description": "1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "b",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     }
+    ],
+    "2": [
+     {
+      "name": "id",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "name",
+      "value": {
+       "type": "string",
+       "value": "n2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "owner",
+      "value": {
+       "type": "object",
+       "className": "Object",
+       "description": "Object",
+       "preview": {
+        "type": "object",
+        "description": "Object",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "id",
+          "type": "number",
+          "value": "1"
+         },
+         {
+          "name": "name",
+          "type": "string",
+          "value": "x"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "tags",
+      "value": {
+       "type": "object",
+       "subtype": "array",
+       "className": "Array",
+       "description": "Array(1)",
+       "preview": {
+        "type": "object",
+        "subtype": "array",
+        "description": "Array(1)",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "0",
+          "type": "string",
+          "value": "a"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "a",
+      "value": {
+       "type": "number",
+       "value": 1,
+       "description": "1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "b",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     }
+    ]
+   }
+  },
+  "getter": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": false,
+     "properties": [
+      {
+       "name": "id",
+       "type": "number",
+       "value": "1"
+      },
+      {
+       "name": "total",
+       "type": "accessor"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "id",
+     "value": {
+      "type": "number",
+      "value": 1,
+      "description": "1"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "total",
+     "get": {
+      "type": "function",
+      "className": "Function",
+      "description": "get total() { throw new Error('getter must not run'); }"
+     },
+     "set": {
+      "type": "undefined"
+     },
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    }
+   ],
+   "children": {}
+  },
+  "hashKey": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": false,
+     "properties": [
+      {
+       "name": "$$hashKey",
+       "type": "string",
+       "value": "object:3"
+      },
+      {
+       "name": "id",
+       "type": "number",
+       "value": "1"
+      },
+      {
+       "name": "name",
+       "type": "string",
+       "value": "x"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "$$hashKey",
+     "value": {
+      "type": "string",
+      "value": "object:3"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "id",
+     "value": {
+      "type": "number",
+      "value": 1,
+      "description": "1"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "name",
+     "value": {
+      "type": "string",
+      "value": "x"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    }
+   ],
+   "children": {}
+  },
+  "dict": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": false,
+     "properties": [
+      {
+       "name": "a@b.com",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "c@d.com",
+       "type": "object",
+       "value": "Object"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "a@b.com",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": false,
+       "properties": [
+        {
+         "name": "id",
+         "type": "number",
+         "value": "1"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "c@d.com",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": false,
+       "properties": [
+        {
+         "name": "id",
+         "type": "number",
+         "value": "2"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    }
+   ],
+   "children": {
+    "a@b.com": [
+     {
+      "name": "id",
+      "value": {
+       "type": "number",
+       "value": 1,
+       "description": "1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     }
+    ],
+    "c@d.com": [
+     {
+      "name": "id",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     }
+    ]
+   }
+  },
+  "wide": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": true,
+     "properties": [
+      {
+       "name": "key0",
+       "type": "number",
+       "value": "0"
+      },
+      {
+       "name": "key1",
+       "type": "number",
+       "value": "1"
+      },
+      {
+       "name": "key2",
+       "type": "number",
+       "value": "2"
+      },
+      {
+       "name": "key3",
+       "type": "number",
+       "value": "3"
+      },
+      {
+       "name": "key4",
+       "type": "number",
+       "value": "4"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "key0",
+     "value": {
+      "type": "number",
+      "value": 0,
+      "description": "0"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key1",
+     "value": {
+      "type": "number",
+      "value": 1,
+      "description": "1"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key2",
+     "value": {
+      "type": "number",
+      "value": 2,
+      "description": "2"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key3",
+     "value": {
+      "type": "number",
+      "value": 3,
+      "description": "3"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key4",
+     "value": {
+      "type": "number",
+      "value": 4,
+      "description": "4"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key5",
+     "value": {
+      "type": "number",
+      "value": 5,
+      "description": "5"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key6",
+     "value": {
+      "type": "number",
+      "value": 6,
+      "description": "6"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key7",
+     "value": {
+      "type": "number",
+      "value": 7,
+      "description": "7"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key8",
+     "value": {
+      "type": "number",
+      "value": 8,
+      "description": "8"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key9",
+     "value": {
+      "type": "number",
+      "value": 9,
+      "description": "9"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key10",
+     "value": {
+      "type": "number",
+      "value": 10,
+      "description": "10"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key11",
+     "value": {
+      "type": "number",
+      "value": 11,
+      "description": "11"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key12",
+     "value": {
+      "type": "number",
+      "value": 12,
+      "description": "12"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key13",
+     "value": {
+      "type": "number",
+      "value": 13,
+      "description": "13"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key14",
+     "value": {
+      "type": "number",
+      "value": 14,
+      "description": "14"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key15",
+     "value": {
+      "type": "number",
+      "value": 15,
+      "description": "15"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key16",
+     "value": {
+      "type": "number",
+      "value": 16,
+      "description": "16"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key17",
+     "value": {
+      "type": "number",
+      "value": 17,
+      "description": "17"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key18",
+     "value": {
+      "type": "number",
+      "value": 18,
+      "description": "18"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key19",
+     "value": {
+      "type": "number",
+      "value": 19,
+      "description": "19"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key20",
+     "value": {
+      "type": "number",
+      "value": 20,
+      "description": "20"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key21",
+     "value": {
+      "type": "number",
+      "value": 21,
+      "description": "21"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key22",
+     "value": {
+      "type": "number",
+      "value": 22,
+      "description": "22"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key23",
+     "value": {
+      "type": "number",
+      "value": 23,
+      "description": "23"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key24",
+     "value": {
+      "type": "number",
+      "value": 24,
+      "description": "24"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key25",
+     "value": {
+      "type": "number",
+      "value": 25,
+      "description": "25"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key26",
+     "value": {
+      "type": "number",
+      "value": 26,
+      "description": "26"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key27",
+     "value": {
+      "type": "number",
+      "value": 27,
+      "description": "27"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key28",
+     "value": {
+      "type": "number",
+      "value": 28,
+      "description": "28"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key29",
+     "value": {
+      "type": "number",
+      "value": 29,
+      "description": "29"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key30",
+     "value": {
+      "type": "number",
+      "value": 30,
+      "description": "30"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key31",
+     "value": {
+      "type": "number",
+      "value": 31,
+      "description": "31"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key32",
+     "value": {
+      "type": "number",
+      "value": 32,
+      "description": "32"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key33",
+     "value": {
+      "type": "number",
+      "value": 33,
+      "description": "33"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key34",
+     "value": {
+      "type": "number",
+      "value": 34,
+      "description": "34"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key35",
+     "value": {
+      "type": "number",
+      "value": 35,
+      "description": "35"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key36",
+     "value": {
+      "type": "number",
+      "value": 36,
+      "description": "36"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key37",
+     "value": {
+      "type": "number",
+      "value": 37,
+      "description": "37"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key38",
+     "value": {
+      "type": "number",
+      "value": 38,
+      "description": "38"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key39",
+     "value": {
+      "type": "number",
+      "value": 39,
+      "description": "39"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key40",
+     "value": {
+      "type": "number",
+      "value": 40,
+      "description": "40"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key41",
+     "value": {
+      "type": "number",
+      "value": 41,
+      "description": "41"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key42",
+     "value": {
+      "type": "number",
+      "value": 42,
+      "description": "42"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key43",
+     "value": {
+      "type": "number",
+      "value": 43,
+      "description": "43"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key44",
+     "value": {
+      "type": "number",
+      "value": 44,
+      "description": "44"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key45",
+     "value": {
+      "type": "number",
+      "value": 45,
+      "description": "45"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key46",
+     "value": {
+      "type": "number",
+      "value": 46,
+      "description": "46"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key47",
+     "value": {
+      "type": "number",
+      "value": 47,
+      "description": "47"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key48",
+     "value": {
+      "type": "number",
+      "value": 48,
+      "description": "48"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key49",
+     "value": {
+      "type": "number",
+      "value": 49,
+      "description": "49"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key50",
+     "value": {
+      "type": "number",
+      "value": 50,
+      "description": "50"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key51",
+     "value": {
+      "type": "number",
+      "value": 51,
+      "description": "51"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key52",
+     "value": {
+      "type": "number",
+      "value": 52,
+      "description": "52"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key53",
+     "value": {
+      "type": "number",
+      "value": 53,
+      "description": "53"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key54",
+     "value": {
+      "type": "number",
+      "value": 54,
+      "description": "54"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key55",
+     "value": {
+      "type": "number",
+      "value": 55,
+      "description": "55"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key56",
+     "value": {
+      "type": "number",
+      "value": 56,
+      "description": "56"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key57",
+     "value": {
+      "type": "number",
+      "value": 57,
+      "description": "57"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key58",
+     "value": {
+      "type": "number",
+      "value": 58,
+      "description": "58"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "key59",
+     "value": {
+      "type": "number",
+      "value": 59,
+      "description": "59"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    }
+   ],
+   "children": {}
+  },
+  "nested": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": false,
+     "properties": [
+      {
+       "name": "a",
+       "type": "object",
+       "value": "Object"
+      },
+      {
+       "name": "list",
+       "type": "object",
+       "value": "Array(2)",
+       "subtype": "array"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "a",
+     "value": {
+      "type": "object",
+      "className": "Object",
+      "description": "Object",
+      "preview": {
+       "type": "object",
+       "description": "Object",
+       "overflow": false,
+       "properties": [
+        {
+         "name": "b",
+         "type": "object",
+         "value": "Object"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "list",
+     "value": {
+      "type": "object",
+      "subtype": "array",
+      "className": "Array",
+      "description": "Array(2)",
+      "preview": {
+       "type": "object",
+       "subtype": "array",
+       "description": "Array(2)",
+       "overflow": false,
+       "properties": [
+        {
+         "name": "0",
+         "type": "number",
+         "value": "1"
+        },
+        {
+         "name": "1",
+         "type": "number",
+         "value": "2"
+        }
+       ]
+      }
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    }
+   ],
+   "children": {
+    "a": [
+     {
+      "name": "b",
+      "value": {
+       "type": "object",
+       "className": "Object",
+       "description": "Object",
+       "preview": {
+        "type": "object",
+        "description": "Object",
+        "overflow": false,
+        "properties": [
+         {
+          "name": "c",
+          "type": "number",
+          "value": "1"
+         }
+        ]
+       }
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     }
+    ],
+    "list": [
+     {
+      "name": "0",
+      "value": {
+       "type": "number",
+       "value": 1,
+       "description": "1"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "1",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": true,
+      "enumerable": true,
+      "isOwn": true
+     },
+     {
+      "name": "length",
+      "value": {
+       "type": "number",
+       "value": 2,
+       "description": "2"
+      },
+      "writable": true,
+      "configurable": false,
+      "enumerable": false,
+      "isOwn": true
+     }
+    ]
+   }
+  },
+  "primitives": {
+   "arg": {
+    "type": "object",
+    "subtype": "array",
+    "className": "Array",
+    "description": "Array(3)",
+    "preview": {
+     "type": "object",
+     "subtype": "array",
+     "description": "Array(3)",
+     "overflow": false,
+     "properties": [
+      {
+       "name": "0",
+       "type": "number",
+       "value": "1"
+      },
+      {
+       "name": "1",
+       "type": "string",
+       "value": "x"
+      },
+      {
+       "name": "2",
+       "type": "object",
+       "value": "null",
+       "subtype": "null"
+      }
+     ]
+    }
+   },
+   "props": [
+    {
+     "name": "0",
+     "value": {
+      "type": "number",
+      "value": 1,
+      "description": "1"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "1",
+     "value": {
+      "type": "string",
+      "value": "x"
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "2",
+     "value": {
+      "type": "object",
+      "subtype": "null",
+      "value": null
+     },
+     "writable": true,
+     "configurable": true,
+     "enumerable": true,
+     "isOwn": true
+    },
+    {
+     "name": "length",
+     "value": {
+      "type": "number",
+      "value": 3,
+      "description": "3"
+     },
+     "writable": true,
+     "configurable": false,
+     "enumerable": false,
+     "isOwn": true
+    }
+   ],
+   "children": {}
+  },
+  "nul": {
+   "arg": {
+    "type": "object",
+    "subtype": "null",
+    "value": null
+   }
+  },
+  "undef": {
+   "arg": {
+    "type": "undefined"
+   }
+  },
+  "str": {
+   "arg": {
+    "type": "string",
+    "value": "s"
+   }
+  },
+  "num": {
+   "arg": {
+    "type": "number",
+    "value": 1,
+    "description": "1"
+   }
+  },
+  "bool": {
+   "arg": {
+    "type": "boolean",
+    "value": true
+   }
+  },
+  "fn": {
+   "arg": {
+    "type": "function",
+    "className": "Function",
+    "description": "function load(a, b) {}"
+   }
+  },
+  "arrow": {
+   "arg": {
+    "type": "function",
+    "className": "Function",
+    "description": "(x) => x"
+   }
+  },
+  "arrowMany": {
+   "arg": {
+    "type": "function",
+    "className": "AsyncFunction",
+    "description": "async (a, { b }, c = 1) => a"
+   }
+  },
+  "date": {
+   "arg": {
+    "type": "object",
+    "subtype": "date",
+    "className": "Date",
+    "description": "Thu Jan 01 1970 08:00:00 GMT+0800 (Indochina Time)",
+    "preview": {
+     "type": "object",
+     "subtype": "date",
+     "description": "Thu Jan 01 1970 08:00:00 GMT+0800 (Indochina Time)",
+     "overflow": false,
+     "properties": []
+    }
+   }
+  },
+  "empty": {
+   "arg": {
+    "type": "object",
+    "className": "Object",
+    "description": "Object",
+    "preview": {
+     "type": "object",
+     "description": "Object",
+     "overflow": false,
+     "properties": []
+    }
+   },
+   "props": [],
+   "children": {}
+  }
+ },
+ "note": "rows.props trimmed to indexes 0, 1, 74, 149 and length (V8 returned all 150 + length); everything else verbatim, objectId removed"
+}
