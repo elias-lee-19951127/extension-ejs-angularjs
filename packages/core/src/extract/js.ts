@@ -7,6 +7,7 @@ import type {
   NgDeclaration,
   NgDeclKind,
   ScopeMember,
+  ScopeWrite,
   Span,
   TemplateLink,
   ValueShape,
@@ -29,6 +30,7 @@ export function extractJs(source: string, config: Config): JsFacts {
     kind: 'js',
     declarations: [],
     scopeMembers: [],
+    scopeWrites: [],
     moduleAliases: {},
     events: [],
     bindings: [],
@@ -59,6 +61,7 @@ export function extractJs(source: string, config: Config): JsFacts {
 
   for (const decl of facts.declarations) {
     extractScopeMembers(ast, decl, facts);
+    extractScopeWrites(ast, decl, facts, source);
   }
 
   return facts;
@@ -460,11 +463,125 @@ export function inferShape(node: acorn.Node, depth = 0): ValueShape {
         params: fn.params.map((p) => (p.type === 'Identifier' ? p.name : '_')),
       };
     }
-    case 'Literal':
+    case 'Literal': {
+      const lit = node as acorn.Literal;
+      if (lit.regex || lit.bigint) return { kind: 'primitive' };
+      const v = lit.value;
+      if (v === null) return { kind: 'primitive', primitive: 'null' };
+      if (typeof v === 'string') return { kind: 'primitive', primitive: 'string' };
+      if (typeof v === 'number') return { kind: 'primitive', primitive: 'number' };
+      if (typeof v === 'boolean') return { kind: 'primitive', primitive: 'boolean' };
       return { kind: 'primitive' };
+    }
+    case 'TemplateLiteral':
+      return { kind: 'primitive', primitive: 'string' };
+    case 'Identifier':
+      return (node as acorn.Identifier).name === 'undefined' ? { kind: 'primitive', primitive: 'undefined' } : { kind: 'unknown' };
+    case 'UnaryExpression': {
+      const op = (node as acorn.UnaryExpression).operator;
+      if (op === '!' || op === 'delete') return { kind: 'primitive', primitive: 'boolean' };
+      if (op === 'typeof') return { kind: 'primitive', primitive: 'string' };
+      if (op === 'void') return { kind: 'primitive', primitive: 'undefined' };
+      return { kind: 'primitive', primitive: 'number' }; // - + ~
+    }
+    case 'BinaryExpression': {
+      const bin = node as acorn.BinaryExpression;
+      if (COMPARISON_OPS.has(bin.operator)) return { kind: 'primitive', primitive: 'boolean' };
+      if (bin.operator !== '+') return { kind: 'primitive', primitive: 'number' };
+      // `+` is a string as soon as either side is one; two numbers stay a number; anything else is unknown.
+      const l = inferShape(bin.left as acorn.Node, depth + 1);
+      const r = inferShape(bin.right, depth + 1);
+      if (l.primitive === 'string' || r.primitive === 'string') return { kind: 'primitive', primitive: 'string' };
+      if (l.primitive === 'number' && r.primitive === 'number') return { kind: 'primitive', primitive: 'number' };
+      return { kind: 'unknown' };
+    }
     default:
       return { kind: 'unknown' };
   }
+}
+
+const COMPARISON_OPS = new Set(['==', '!=', '===', '!==', '<', '<=', '>', '>=', 'instanceof', 'in']);
+
+/**
+ * Every assignment onto the declaration's scope, nested ones included — see `ScopeWrite`.
+ *
+ * Recognizes the scope the same way `extractScopeMembers` does (the `$scope` parameter by its DI
+ * position, or `this`), with one difference: `this` inside a non-arrow function nested in the
+ * body is that function's own `this`, not the controller, so it is not counted here.
+ */
+function extractScopeWrites(ast: acorn.Program, decl: NgDeclaration, facts: JsFacts, source: string): void {
+  const fnNode = findFunctionFor(ast, decl);
+  if (!fnNode) return;
+  const scopeParam = scopeParamName(decl, fnNode);
+
+  walkLib.ancestor(fnNode.body as acorn.Node, {
+    AssignmentExpression(node, _state, ancestors) {
+      const target = scopePath(node.left as acorn.Node, scopeParam);
+      if (!target) return;
+
+      // Functions between the declaration's own function and this assignment.
+      const nested = (ancestors as acorn.Node[]).filter(
+        (a) => a.type === 'FunctionExpression' || a.type === 'ArrowFunctionExpression' || a.type === 'FunctionDeclaration',
+      );
+      if (target.via === 'this' && nested.some((f) => f.type !== 'ArrowFunctionExpression')) return;
+
+      let right: acorn.Node = node.right;
+      while (right.type === 'AssignmentExpression') right = (right as acorn.AssignmentExpression).right; // a = b = 0
+      const leaves = valueLeaves(right);
+      const nullish = leaves.filter(isNullish);
+
+      facts.scopeWrites.push({
+        owner: decl.name,
+        via: target.via,
+        path: target.path,
+        span: target.span,
+        shapes: leaves.filter((l) => !isNullish(l)).map((l) => inferShape(l)),
+        nullable: nullish.length > 0,
+        inCallback: nested.length > 0,
+        rhsText: source.slice(right.start, right.end).replace(/\s+/g, ' ').slice(0, 40),
+      });
+    },
+  });
+}
+
+/** `$scope.a.b` / `this.a.b` -> `{ via, path: ['a', 'b'] }`; anything else (computed keys included) -> null. */
+function scopePath(
+  node: acorn.Node,
+  scopeParam: string | null,
+): { via: ScopeWrite['via']; path: string[]; span: Span } | null {
+  const path: string[] = [];
+  let cur = node;
+  let span: Span | null = null;
+  while (cur.type === 'MemberExpression') {
+    const m = cur as acorn.MemberExpression;
+    if (m.computed || m.property.type !== 'Identifier') return null;
+    path.unshift(m.property.name);
+    span ??= { start: m.property.start, end: m.property.end };
+    cur = m.object;
+  }
+  if (!span) return null;
+  if (cur.type === 'ThisExpression') return { via: 'this', path, span };
+  if (scopeParam && cur.type === 'Identifier' && (cur as acorn.Identifier).name === scopeParam) return { via: '$scope', path, span };
+  return null;
+}
+
+/** The values an expression can evaluate to: each branch of `a ? b : c`, both sides of `a || b` / `a ?? b` / `a && b`. */
+function valueLeaves(node: acorn.Node): acorn.Node[] {
+  if (node.type === 'ConditionalExpression') {
+    const c = node as acorn.ConditionalExpression;
+    return [...valueLeaves(c.consequent), ...valueLeaves(c.alternate)];
+  }
+  if (node.type === 'LogicalExpression') {
+    const l = node as acorn.LogicalExpression;
+    return [...valueLeaves(l.left), ...valueLeaves(l.right)];
+  }
+  return [node];
+}
+
+function isNullish(node: acorn.Node): boolean {
+  if (node.type === 'Literal') return (node as acorn.Literal).value === null && !(node as acorn.Literal).regex;
+  if (node.type === 'Identifier') return (node as acorn.Identifier).name === 'undefined';
+  return node.type === 'UnaryExpression' && (node as acorn.UnaryExpression).operator === 'void';
 }
 
 /** $emit / $broadcast / $on — a "string-typed variable" that no IDE tracks. */

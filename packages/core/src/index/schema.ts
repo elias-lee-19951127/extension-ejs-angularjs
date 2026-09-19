@@ -10,8 +10,9 @@
  *
  * 11: fixed the one-character offset bug in attribute value spans (appendix I).
  * 12: JsFacts.templateLinks, and view/key spans on renderCalls (template-roots-config ticket 01).
+ * 13: JsFacts.scopeWrites, and ValueShape.primitive (observed-types ticket 01).
  */
-export const PARSER_VERSION = 12;
+export const PARSER_VERSION = 13;
 
 /** Cache file name inside the .ejsng-cache/ directory. */
 export const INDEX_FILENAME = 'index.ndjson';

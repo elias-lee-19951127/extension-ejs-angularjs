@@ -1,0 +1,123 @@
+/**
+ * observed-types ticket 01: `JsFacts.scopeWrites` records EVERY assignment onto a controller's
+ * scope — nested ones included — with typed primitives, a nullable flag and whether it runs in a
+ * callback. `scopeMembers` keeps only the first assignment, as before.
+ */
+const test = require('node:test');
+const assert = require('node:assert');
+const C = require('../dist');
+
+const extract = (source) => C.extractJs(source, { ...C.DEFAULT_CONFIG, root: '/tmp' });
+const writesOf = (facts, name) => facts.scopeWrites.filter((w) => w.path[0] === name);
+
+test('every assignment is recorded, not just the first — scopeMembers still keeps only the first', () => {
+  const facts = extract(`
+angular.module('app', []).controller('FormCtrl', function ($scope, Api) {
+  $scope.form = { name: '', email: '' };
+  $scope.edit = function (u) { $scope.form = { name: u.name, email: u.email, id: u.id }; };
+  $scope.close = function () { $scope.form = null; };
+});
+`);
+  const writes = writesOf(facts, 'form');
+  assert.strictEqual(writes.length, 3);
+  assert.deepStrictEqual(Object.keys(writes[0].shapes[0].props), ['name', 'email']);
+  assert.deepStrictEqual(Object.keys(writes[1].shapes[0].props), ['name', 'email', 'id']);
+  assert.deepStrictEqual(writes.map((w) => w.nullable), [false, false, true]);
+  assert.deepStrictEqual(writes[2].shapes, []);
+  assert.deepStrictEqual(writes.map((w) => w.inCallback), [false, true, true]);
+  assert.ok(writes.every((w) => w.owner === 'FormCtrl' && w.via === '$scope'));
+
+  assert.strictEqual(facts.scopeMembers.filter((m) => m.name === 'form').length, 1, 'scopeMembers unchanged');
+});
+
+test('nested writes record the full path, spanning the last property name', () => {
+  const src = `
+angular.module('app', []).controller('ListCtrl', function ($scope) {
+  $scope.state = {};
+  $scope.state.filter.text = 'x';
+  $scope.map[key] = 1;
+});
+`;
+  const facts = extract(src);
+  const nested = facts.scopeWrites.find((w) => w.path.length === 3);
+  assert.deepStrictEqual(nested.path, ['state', 'filter', 'text']);
+  assert.strictEqual(src.slice(nested.span.start, nested.span.end), 'text');
+  assert.deepStrictEqual(nested.shapes, [{ kind: 'primitive', primitive: 'string' }]);
+  assert.ok(!facts.scopeWrites.some((w) => w.path[0] === 'map'), 'a computed key is not a static path');
+});
+
+test('each branch of a ternary / logical expression is a shape; an explicit null makes it nullable', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', function ($scope, u) {
+  $scope.user = u ? { name: u.name } : null;
+  $scope.list = u.items || [];
+  $scope.label = u.label || undefined;
+  $scope.plain = u.x;
+});
+`);
+  const [user] = writesOf(facts, 'user');
+  assert.strictEqual(user.nullable, true);
+  assert.deepStrictEqual(user.shapes.map((s) => s.kind), ['object']);
+
+  const [list] = writesOf(facts, 'list');
+  assert.strictEqual(list.nullable, false);
+  assert.deepStrictEqual(list.shapes.map((s) => s.kind), ['unknown', 'array']);
+
+  assert.strictEqual(writesOf(facts, 'label')[0].nullable, true);
+  assert.strictEqual(writesOf(facts, 'plain')[0].nullable, false, 'only an EXPLICIT null/undefined counts');
+});
+
+test('an assignment inside a .then() callback is marked inCallback and keeps its source text', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', ['$scope', '$http', function ($scope, $http) {
+  $http.get('/rows').then(function (res) { $scope.rows =   res.data; });
+}]);
+`);
+  const [rows] = writesOf(facts, 'rows');
+  assert.strictEqual(rows.inCallback, true);
+  assert.deepStrictEqual(rows.shapes, [{ kind: 'unknown' }]);
+  assert.strictEqual(rows.rhsText, 'res.data');
+});
+
+test('array DI with a renamed $scope parameter is still recognized', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', ['$scope', 'aocs', function (s, a) { s.busy = true; }]);
+`);
+  const [busy] = writesOf(facts, 'busy');
+  assert.strictEqual(busy.via, '$scope');
+  assert.deepStrictEqual(busy.shapes, [{ kind: 'primitive', primitive: 'boolean' }]);
+});
+
+test('`this` inside a nested non-arrow function is not the controller; inside an arrow function it is', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', function ($timeout) {
+  this.ready = false;
+  $timeout(function () { this.ready = true; });
+  $timeout(() => { this.ready = true; });
+});
+`);
+  const ready = writesOf(facts, 'ready');
+  assert.strictEqual(ready.length, 2);
+  assert.deepStrictEqual(ready.map((w) => [w.via, w.inCallback]), [['this', false], ['this', true]]);
+});
+
+test('primitives are typed: string, number, boolean, and expressions that obviously yield one', () => {
+  const facts = extract(`
+angular.module('app', []).controller('C', function ($scope, n, a, b) {
+  $scope.s = 'a';
+  $scope.n = 1;
+  $scope.b = !n;
+  $scope.eq = a === b;
+  $scope.msg = 'n=' + n;
+  $scope.t = \`x\${n}\`;
+  $scope.neg = -n;
+  $scope.sum = a + b;
+});
+`);
+  const kind = (name) => writesOf(facts, name)[0].shapes[0];
+  assert.deepStrictEqual(
+    ['s', 'n', 'b', 'eq', 'msg', 't', 'neg'].map((x) => kind(x).primitive),
+    ['string', 'number', 'boolean', 'boolean', 'string', 'string', 'number'],
+  );
+  assert.deepStrictEqual(kind('sum'), { kind: 'unknown' }, 'a + b of unknowns could be either');
+});

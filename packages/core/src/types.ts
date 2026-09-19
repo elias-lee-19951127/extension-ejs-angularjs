@@ -34,6 +34,8 @@ export type NgDeclKind =
  */
 export interface ValueShape {
   kind: 'object' | 'array' | 'function' | 'primitive' | 'unknown';
+  /** Only when kind === 'primitive', and only when the expression says which one. */
+  primitive?: 'string' | 'number' | 'boolean' | 'null' | 'undefined';
   /** Span of the key that declares this value — enables go-to-def into `busy.search`. */
   span?: Span;
   /** Only present when kind === 'object'. */
@@ -101,6 +103,32 @@ export interface ScopeMember {
   isWrite: boolean;
 }
 
+/**
+ * EVERY assignment onto a controller's scope — not just the first, which is all `scopeMembers`
+ * keeps (that one is the "declaration site" go-to-definition and rename rely on). The input the
+ * observed-type feature merges (.scratch/observed-types/spec.md, decision #9).
+ */
+export interface ScopeWrite {
+  /** Name of the Angular declaration whose scope this writes. */
+  owner: string;
+  via: '$scope' | 'this';
+  /** `['form']` for `$scope.form = …`, `['form', 'extra']` for a nested `$scope.form.extra = …`. */
+  path: string[];
+  /** Span of the LAST property name on the left: `extra` in `$scope.form.extra`. */
+  span: Span;
+  /**
+   * Shape of each value the right side can produce, `null`/`undefined` left out: one entry for a
+   * plain value, one per branch for `a ? b : c` and `a || b`. Empty when it only ever assigns null.
+   */
+  shapes: ValueShape[];
+  /** Some branch assigns `null`, `undefined` or `void 0` explicitly. */
+  nullable: boolean;
+  /** Inside a function nested in the declaration's body (a `.then()` callback, a handler) — not run at construction. */
+  inCallback: boolean;
+  /** The right side, whitespace-collapsed and cut to 40 characters — so a hover can say where an unknown shape came from. */
+  rhsText: string;
+}
+
 export type BindingKind = 'var' | 'let' | 'const' | 'function' | 'param' | 'catch' | 'class';
 
 export interface JsBinding {
@@ -116,6 +144,7 @@ export interface JsFacts {
   kind: 'js';
   declarations: NgDeclaration[];
   scopeMembers: ScopeMember[];
+  scopeWrites: ScopeWrite[];
   /** Which variable holds angular.module('x', []). */
   moduleAliases: Record<string, string>;
   events: Array<{ name: string; direction: 'emit' | 'broadcast' | 'on'; span: Span }>;
