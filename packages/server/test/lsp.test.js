@@ -451,3 +451,51 @@ test('LSP: ejsng.typeHints.nullable = false -> no inlay hint; a range without th
   });
   assert.deepStrictEqual(onlyStats, []);
 });
+
+test('LSP: a "Log at runtime" link beside an assignment the index could not type — only for a client that runs the command', async (t) => {
+  const ctrl =
+    "myApp.controller('LogCtrl', function ($scope, $http) {\n" +
+    "  $http.get('/stats').then(function (res) { $scope.stats = res.data; });\n" +
+    "  $scope.pick = function (res) { return $scope.picked = res.data; };\n" +
+    "  $scope.user = { name: 'a' };\n" +
+    '});\n';
+  const page = '<p ng-controller="LogCtrl">{{ stats }} {{ picked }} {{ user.name }}</p>\n';
+  const setup = async (initializationOptions) => {
+    const { conn, root, open } = await startServer(t, CLIENT_CAPS, initializationOptions);
+    mkdirSync(join(root, 'logs'), { recursive: true });
+    writeFileSync(join(root, 'logs', 'ctrl.js'), ctrl);
+    writeFileSync(join(root, 'logs', 'page.html'), page);
+    notifyWatched(conn, root, ['logs', CREATED]);
+    const tpl = open('logs/page.html', 'html');
+    const hoverAt = (needle) =>
+      conn.sendRequest('textDocument/hover', { textDocument: { uri: tpl.uri }, position: positionOf(tpl.text, needle) }).then((h) => h.contents.value);
+    return { root, hoverAt };
+  };
+
+  const vscodeLike = await setup({ commands: ['ejsng.logVariable'] });
+  const stats = await vscodeLike.hoverAt('stats }}');
+  const m = /`res\.data` \(\[logs\/ctrl\.js:2\]\(\S+?\)\) · \[Log at runtime\]\(command:ejsng\.logVariable\?(\S+?)\)/.exec(stats);
+  assert.ok(m, stats);
+  const [args] = JSON.parse(decodeURIComponent(m[1]));
+  // Right after `$scope.stats = res.data;` — inside the one-line callback, on line 2 (0-based 1).
+  const after = ctrl.indexOf('res.data;') + 'res.data;'.length;
+  assert.deepStrictEqual(args, {
+    uri: pathToFileURL(join(vscodeLike.root, 'logs', 'ctrl.js')).href,
+    line: 1,
+    character: after - ctrl.indexOf('\n') - 1,
+    expression: '$scope.stats',
+    logMessage: '$scope.stats = {$scope.stats}',
+  });
+  // Not a statement of its own (`return … = …`): nowhere "right after" it to log — named, no link.
+  const picked = await vscodeLike.hoverAt('picked }}');
+  assert.match(picked, /`res\.data`/, picked);
+  assert.doesNotMatch(picked, /Log at runtime/, picked);
+  // A type the index knows: nothing to log.
+  assert.doesNotMatch(await vscodeLike.hoverAt('user.name'), /Log at runtime/);
+
+  // A client that doesn't declare the command (IntelliJ) gets the same hover, minus the link.
+  const other = await setup(undefined);
+  const plain = await other.hoverAt('stats }}');
+  assert.match(plain, /_Could not be inferred — assigned from_ `res\.data`/, plain);
+  assert.doesNotMatch(plain, /Log at runtime|command:/, plain);
+});

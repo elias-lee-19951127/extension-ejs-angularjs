@@ -94,6 +94,11 @@ let workspace: Workspace | null = null;
 let diagnosticsEnabled = false;
 /** `ejsng.typeHints.nullable`: the "may be empty" inlay hint (observed-types ticket 04). */
 let nullableHintsEnabled = true;
+/**
+ * log-variable spec #9: the client runs `ejsng.logVariable`, so hovers may carry a "Log at runtime"
+ * link. Only a client that says so — elsewhere (IntelliJ) the link would be dead.
+ */
+let logVariableLinks = false;
 
 /**
  * Real connection lifecycle (ticket 02, item 4): the panel used to report `connected` the
@@ -245,6 +250,7 @@ connection.onInitialize((params): InitializeResult => {
   const settings = (params.initializationOptions ?? {}) as Partial<Config> & {
     diagnostics?: { enabled?: boolean };
     typeHints?: { nullable?: boolean };
+    commands?: unknown;
     runtimeLog?: {
       pathMappings?: PathMapping[];
       skipFrames?: string[];
@@ -253,6 +259,7 @@ connection.onInitialize((params): InitializeResult => {
   };
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
   nullableHintsEnabled = settings.typeHints?.nullable ?? true;
+  logVariableLinks = Array.isArray(settings.commands) && settings.commands.includes('ejsng.logVariable');
   // `${workspaceFolder}` is expanded once, here, where the root is known — a mapping's `local` can
   // then be committed to a repo's settings instead of hardcoding one machine's absolute path
   // (ticket 05, item 3). An absolute `local` contains no variable and comes back unchanged.
@@ -526,6 +533,22 @@ connection.languages.inlayHint.on((params): InlayHint[] => {
 
 const MAX_UNKNOWN_SOURCES = 5;
 
+/**
+ * ` · [Log at runtime](command:ejsng.logVariable?…)` after an assignment the index couldn't type
+ * (.scratch/log-variable/spec.md #1–#4): a logpoint right after its statement, logging its left
+ * side. Empty when the client can't run the command, or the assignment isn't a statement of its own.
+ */
+function logVariableLink(u: ObservedTypeResult['unknownFrom'][number]): string {
+  if (!logVariableLinks || !workspace || u.after === undefined || !u.lhsText) return '';
+  const source = workspace.source(u.path);
+  if (source == null) return '';
+  const { line, character } = toRange(source, { start: u.after, end: u.after }).start;
+  const args = { uri: workspaceUri(workspace, u.path), line, character, expression: u.lhsText, logMessage: `${u.lhsText} = {${u.lhsText}}` };
+  // Parentheses too: an unescaped `)` in a path would end the markdown link early.
+  const query = encodeURIComponent(JSON.stringify([args])).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return ` · [Log at runtime](command:ejsng.logVariable?${query})`;
+}
+
 /** `14:03:22`, local time — when a runtime last showed a value. */
 function clockTime(ms: number): string {
   return new Date(ms).toTimeString().slice(0, 8);
@@ -541,7 +564,7 @@ function observedTypeLines(t: ObservedTypeResult): string[] {
   const lines = [`**Observed type** of \`${t.expression}\``];
   const sources = t.unknownFrom
     .slice(0, MAX_UNKNOWN_SOURCES)
-    .map((u) => `\`${u.rhsText || '…'}\` (${fileLink(u.path, u.span)})`)
+    .map((u) => `\`${u.rhsText || '…'}\` (${fileLink(u.path, u.span)})${logVariableLink(u)}`)
     .join(', ');
 
   const fromRuntime = t.runtime.length > 0;

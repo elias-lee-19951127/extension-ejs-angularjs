@@ -70,8 +70,20 @@
       {
         "command": "ejsng.launchBrowser",
         "title": "EJS/NG: Launch Browser and Connect"
+      },
+      {
+        "command": "ejsng.logVariable",
+        "title": "EJS/NG: Log This Variable at Runtime"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "ejsng.logVariable",
+          "when": "false"
+        }
+      ]
+    },
     "configuration": {
       "title": "EJS + AngularJS Navigator",
       "properties": {

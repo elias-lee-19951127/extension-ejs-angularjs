@@ -25,6 +25,7 @@ import {
   type RuntimeStatusSummary,
 } from './runtime-log-state';
 import { logpointsFrom } from './logpoints';
+import { fileNameOf, parseLogVariableArgs, planLogVariable } from './log-variable';
 import { RuntimeLogViewProvider } from './runtime-log-view';
 import {
   appUrlForPort,
@@ -739,7 +740,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     synchronize: {
       fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{js,ejs,html}'),
     },
+    // The hover's "Log at runtime" link (.scratch/log-variable/spec.md #9): trusted for exactly
+    // this one command, nothing else a hover's markdown could name.
+    markdown: { isTrusted: { enabledCommands: [LOG_VARIABLE_COMMAND] } },
     initializationOptions: {
+      // Tells the server it may put that link in hovers — a client that can't run it gets none.
+      commands: [LOG_VARIABLE_COMMAND],
       include: cfg.get('include'),
       exclude: cfg.get('exclude'),
       moduleAliases: cfg.get('moduleAliases'),
@@ -849,6 +855,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       }),
     ),
     vscode.commands.registerCommand('ejsng.disconnectRuntime', disconnectRuntime),
+    vscode.commands.registerCommand(LOG_VARIABLE_COMMAND, logVariable),
     vscode.commands.registerCommand('ejsng.launchBrowser', () => launchBrowser(context, defaultChromeDebugPort())),
     // A split/reopened editor for a file with existing hits starts undecorated otherwise.
     vscode.window.onDidChangeVisibleTextEditors((editors) => {
@@ -918,6 +925,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
   );
 
   return process.env.EJSNG_EXTENSION_TEST === '1' ? testApi : undefined;
+}
+
+const LOG_VARIABLE_COMMAND = 'ejsng.logVariable';
+
+/**
+ * `ejsng.logVariable` — the hover's "Log at runtime" link (.scratch/log-variable/spec.md): an
+ * ordinary VS Code logpoint right after an assignment the index couldn't type. The usual logpoint
+ * sync then sends it to the server; the value it logs becomes the hover's type (R1).
+ */
+function logVariable(raw: unknown): void {
+  const args = parseLogVariableArgs(raw);
+  if (!args) return;
+  const location = new vscode.Location(vscode.Uri.parse(args.uri), new vscode.Position(args.line, args.character));
+  const where = `${fileNameOf(args.uri)}:${args.line + 1}`;
+  const plan = planLogVariable(args, vscode.debug.breakpoints as readonly vscode.SourceBreakpoint[]);
+  if (plan.kind === 'exists') {
+    void vscode.window.showInformationMessage(
+      plan.sameMessage
+        ? `EJS/NG: \`${args.expression}\` is already logged after ${where}.`
+        : `EJS/NG: there is already a breakpoint after ${where} — left as it is.`,
+    );
+    return;
+  }
+  if (plan.kind === 'enable') vscode.debug.removeBreakpoints([vscode.debug.breakpoints[plan.index]!]);
+  vscode.debug.addBreakpoints([new vscode.SourceBreakpoint(location, true, undefined, undefined, args.logMessage)]);
+
+  // Not awaited: the command is done once the logpoint is set, not when the message is dismissed.
+  if (!vscode.workspace.getConfiguration('ejsng').get<boolean>('runtimeLog.logpoints', true)) {
+    const open = 'Open Setting';
+    void vscode.window
+      .showWarningMessage(`EJS/NG: logpoint added after ${where}, but logpoints are turned off (ejsng.runtimeLog.logpoints), so it won't run.`, open)
+      .then((choice) => (choice === open ? vscode.commands.executeCommand('workbench.action.openSettings', 'ejsng.runtimeLog.logpoints') : undefined));
+    return;
+  }
+  const connect = 'Connect Runtime';
+  const show = 'Show';
+  void vscode.window
+    .showInformationMessage(
+      `EJS/NG: logging \`${args.expression}\` after ${where} — hover again once that line runs.`,
+      ...(runtimeLogConnections.size === 0 ? [connect] : []),
+      show,
+    )
+    .then((choice) => {
+      if (choice === connect) return vscode.commands.executeCommand('ejsng.connectRuntime');
+      if (choice === show) return vscode.window.showTextDocument(location.uri, { selection: location.range, preview: true });
+      return undefined;
+    });
 }
 
 export function deactivate(): Thenable<void> | undefined {
