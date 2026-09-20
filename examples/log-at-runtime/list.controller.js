@@ -1,4 +1,5 @@
-// Demo for "Log at runtime" (.scratch/log-variable/spec.md). Runs on plain Node: the `angular`
+// Demo for "Log at runtime" (.scratch/log-variable/spec.md, docs/kien-truc.md 5.3.3). Runs on plain
+// Node: the `angular`
 // below is a stand-in, so the file is at once a controller the index understands and a program
 // you can start with `node --inspect`.
 var angular = {

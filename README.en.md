@@ -192,3 +192,9 @@ Runs the core tests and the LSP tests over stdio (spinning up a real server). Te
 `smart-city` repo skip themselves automatically if that repo isn't present on the machine.
 `spans.test.js` enforces the invariant "every span points exactly at the text it represents" — see
 [Appendix I](docs/architecture.md).
+
+## Trying "Log at runtime"
+
+[`examples/log-at-runtime/`](examples/log-at-runtime/README.md) is a controller that runs under plain
+`node --inspect` (no browser needed): hover a variable the index can't type, click **Log at runtime**, connect
+the runtime, hover again to see the real type. Seven steps in that folder's README.

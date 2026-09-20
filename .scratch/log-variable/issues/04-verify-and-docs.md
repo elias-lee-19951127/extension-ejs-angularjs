@@ -35,7 +35,8 @@ Connect Runtime / Show của thông báo.
 `stats || { … }`, không phải `res.data`. Ví dụ kiểm được ngay: `new-version-2/new-index.js:406`
 (`$scope.voice.voices = data.voices || []`) — đã chạy server thật trên `smart-city` và đọc hover, link có đúng.
 
-Thêm `demo/` (`list.controller.js` + `list.html` + `README.md`): một controller chạy được bằng `node --inspect`
+Thêm `examples/log-at-runtime/` (`list.controller.js` + `list.html` + `README.md`) — **không** đặt trong
+`.scratch/` vì Finder của macOS ẩn thư mục bắt đầu bằng dấu chấm, người dùng không mở được: một controller chạy được bằng `node --inspect`
 (có `angular` giả), không cần trình duyệt. Đã chạy tự động trọn kịch bản của README: hover → tham số của link →
 đặt logpoint → nối runtime → hover ra kiểu thật + *Seen at runtime*, `selected` ra `… | null` + *Seen null at runtime*
 mà **không** sinh inlay hint. Còn lại cho người dùng: bấm chuột vào link và thử các nút của thông báo.

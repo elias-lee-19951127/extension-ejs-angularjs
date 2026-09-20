@@ -1,12 +1,13 @@
 # Demo: "Log at runtime"
 
-Chạy được hoàn toàn trên Node, không cần trình duyệt hay app Angular thật.
+Chạy được hoàn toàn trên Node, không cần trình duyệt hay app Angular thật. Spec:
+`.scratch/log-variable/spec.md`; kiến trúc: `docs/kien-truc.md` mục 5.3.3.
 
 ## Chạy
 
 1. **Mở Extension Development Host:** trong repo này bấm `F5` (cấu hình "Run Extension" ở `.vscode/launch.json`).
    Một cửa sổ VS Code thứ hai mở ra đã cài sẵn extension.
-2. Trong cửa sổ đó: **File → Open Folder…** → chọn chính thư mục này (`.scratch/log-variable/demo`).
+2. Trong cửa sổ đó: **File → Open Folder…** → chọn chính thư mục này (`examples/log-at-runtime`).
 3. Mở terminal trong thư mục này và chạy:
 
 ```bash

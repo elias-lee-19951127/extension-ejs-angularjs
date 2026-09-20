@@ -184,3 +184,9 @@ npm test
 Chạy test core và test LSP qua stdio (khởi động server thật). Các test trên repo `smart-city` tự
 bỏ qua nếu máy không có repo đó. `spans.test.js` giữ bất biến "mọi span trỏ đúng vào chữ nó đại
 diện" — xem [phụ lục I](docs/kien-truc.md).
+
+## Thử nhanh "Log at runtime"
+
+[`examples/log-at-runtime/`](examples/log-at-runtime/README.md) là một controller chạy được bằng `node --inspect`
+(không cần trình duyệt): hover một biến index không suy ra được kiểu → bấm **Log at runtime** → nối runtime →
+hover lại thấy kiểu thật. Bảy bước trong README của thư mục đó.
