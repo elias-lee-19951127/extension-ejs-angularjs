@@ -1,0 +1,135 @@
+/**
+ * expand-log-values ticket 01: a logged value rendered three ways — one line beside the code,
+ * several lines in a hover, valid JSON in a tab. Against real V8 through `node:inspector`, so the
+ * previews, `getProperties` answers and descriptions are the ones a runtime really sends.
+ */
+const test = require('node:test');
+const assert = require('node:assert');
+const inspector = require('node:inspector');
+const C = require('../dist');
+
+/** Log `value` and hand back its CDP argument, plus a `getProperties` bound to this session. */
+async function logged(t, value) {
+  const session = new inspector.Session();
+  session.connect();
+  t.after(() => session.disconnect());
+  const post = (method, params) => new Promise((resolve) => session.post(method, params, (err, res) => resolve(err ? null : res)));
+  const args = [];
+  const onLog = (m) => args.push(m.params.args[0]);
+  session.on('Runtime.consoleAPICalled', onLog);
+  await post('Runtime.enable');
+  console.debug(value);
+  await new Promise((r) => setImmediate(r));
+  session.removeListener('Runtime.consoleAPICalled', onLog); // the assertions log too
+  return {
+    arg: args.at(-1),
+    getProperties: (objectId) => post('Runtime.getProperties', { objectId, ownProperties: true, generatePreview: true }),
+  };
+}
+
+/** As the server will: dig, then render. */
+async function dug(t, value, limits) {
+  const { arg, getProperties } = await logged(t, value);
+  const { value: runtimeValue, requests } = await C.digRuntimeValue(arg, getProperties, limits ?? { depth: 4, keys: 30, samples: 10, requests: 60 });
+  return { runtimeValue, requests, arg };
+}
+
+const ROWS = Array.from({ length: 150 }, (_, i) => ({
+  id: i,
+  title: `Sensor ${i}`,
+  owner: { id: 7, name: 'ops', team: { id: 1, code: 'X' } },
+  tags: ['alarm', 'live'],
+}));
+
+test('an array of objects reads as objects, not as [Object, Object, …]', async (t) => {
+  const { runtimeValue } = await dug(t, ROWS);
+  const inline = C.formatRuntimeValueInline(runtimeValue);
+  assert.doesNotMatch(inline, /\bObject\b/, inline);
+  assert.match(inline, /^\[\{id: 0, title: 'Sensor 0', owner: \{…\}, tags: \[…\]\}/, inline);
+  assert.match(inline, /…\+\d+\]$/, inline); // whatever didn't fit is counted, and the bracket closes
+  assert.ok(inline.length <= 200, `${inline.length} characters`);
+
+  const pretty = C.formatRuntimeValuePretty(runtimeValue);
+  assert.match(pretty, /owner: \{\n\s+id: 7,\n\s+name: 'ops',\n\s+team: \{…\}/, pretty);
+  assert.match(pretty, /tags: \[\n\s+'alarm',\n\s+'live'\n\s+\]/, pretty);
+});
+
+test('the JSON rendering parses, keeps the values, and says where it stopped', async (t) => {
+  const { runtimeValue } = await dug(t, ROWS);
+  const parsed = JSON.parse(C.formatRuntimeValueJson(runtimeValue));
+  assert.strictEqual(parsed.length, 150, 'every element the runtime listed');
+  // Sampled elements were dug all the way; the rest keep the preview the runtime sent with them.
+  assert.deepStrictEqual(parsed[0], { id: 0, title: 'Sensor 0', owner: { id: 7, name: 'ops', team: { id: 1, code: 'X' } }, tags: ['alarm', 'live'] });
+  assert.deepStrictEqual(parsed[1], { id: 1, title: 'Sensor 1', owner: '[not expanded]', tags: '[not expanded]' });
+});
+
+test('what JSON cannot hold becomes a string, and nothing ever runs a getter', async (t) => {
+  let ran = 0;
+  const value = {
+    fn: function load(a, b) { return a + b; },
+    arrow: (x) => x,
+    when: new Date(0),
+    re: /ab+/g,
+    map: new Map([['a', 1]]),
+    nothing: null,
+    missing: undefined,
+    get computed() { ran++; return 1; },
+  };
+  const { runtimeValue } = await dug(t, value);
+  const parsed = JSON.parse(C.formatRuntimeValueJson(runtimeValue));
+  assert.strictEqual(ran, 0, 'a getter must never be evaluated');
+  assert.strictEqual(parsed.fn, '[Function: load]');
+  assert.strictEqual(parsed.arrow, '[Function]');
+  assert.match(parsed.when, /1970/);
+  assert.strictEqual(parsed.re, '/ab+/g');
+  assert.strictEqual(parsed.map, 'Map(1)');
+  assert.strictEqual(parsed.nothing, null);
+  assert.strictEqual(parsed.missing, 'undefined');
+  assert.strictEqual(parsed.computed, '[getter]');
+  const inline = C.formatRuntimeValueInline(runtimeValue);
+  assert.match(inline, /^\{fn: \[Function: load\], arrow: \[Function\]/, inline);
+  assert.match(C.formatRuntimeValuePretty(runtimeValue), /computed: \[getter\]/);
+});
+
+test('a cycle ends at the depth limit — V8 gives no identity to recognise it by', async (t) => {
+  const root = { name: 'root', child: { label: 'c' } };
+  root.self = root;
+  root.child.parent = root;
+  const { runtimeValue, requests } = await dug(t, root, { depth: 3, keys: 30, samples: 10, requests: 20 });
+  // Measured: the same object comes back with a new objectId per reference, so the dig cannot tell
+  // `root.self` from another object. The budget and the depth are what keep it finite.
+  assert.ok(requests <= 20, `${requests} requests`);
+  const parsed = JSON.parse(C.formatRuntimeValueJson(runtimeValue, { ...C.JSON_VALUE_LIMITS, depth: 3 }));
+  assert.strictEqual(parsed.child.label, 'c');
+  assert.strictEqual(parsed.self.self.name, 'root', 'it just repeats');
+  assert.strictEqual(parsed.self.self.self, '[not expanded]', 'and stops at the depth limit');
+});
+
+test('a value that was never dug still shows its first level, and says the rest is not expanded', async (t) => {
+  const { arg } = await logged(t, { id: 1, nested: { deep: true }, list: [1, 2, 3] });
+  const undugValue = { object: arg }; // straight off the log, as when the rate limit skipped it
+  assert.strictEqual(C.formatRuntimeValueInline(undugValue), "{id: 1, nested: {…}, list: […]}");
+  const parsed = JSON.parse(C.formatRuntimeValueJson(undugValue));
+  assert.deepStrictEqual(parsed, { id: 1, nested: '[not expanded]', list: '[not expanded]' });
+});
+
+test('long strings are cut per rendering, and the JSON stays parseable', async (t) => {
+  const { runtimeValue } = await dug(t, { note: 'x'.repeat(5000) });
+  assert.match(C.formatRuntimeValueInline(runtimeValue), /^\{note: 'x{40}…'\}$/);
+  assert.strictEqual(JSON.parse(C.formatRuntimeValueJson(runtimeValue)).note.length, 5000);
+  assert.strictEqual(JSON.parse(C.formatRuntimeValueJson(runtimeValue, { ...C.JSON_VALUE_LIMITS, maxString: 10 })).note, 'xxxxxxxxxx…');
+});
+
+test('a huge value is reduced until its JSON fits, never cut into broken JSON', async (t) => {
+  const { runtimeValue } = await dug(t, ROWS, { depth: 4, keys: 30, samples: 200, requests: 400 });
+  const json = C.formatRuntimeValueJson(runtimeValue, { ...C.JSON_VALUE_LIMITS, maxLength: 2000 });
+  assert.ok(json.length <= 2000, `${json.length} characters`);
+  const parsed = JSON.parse(json);
+  assert.ok(Array.isArray(parsed) && parsed.length > 1);
+  assert.match(String(parsed.at(-1)), /more/);
+});
+
+test('$$hashKey and other Angular noise never appears', async (t) => {
+  const { runtimeValue } = await dug(t, [{ $$hashKey: 'object:3', id: 1 }]);
+  assert.strictEqual(C.formatRuntimeValueInline(runtimeValue), '[{id: 1}]');
+});

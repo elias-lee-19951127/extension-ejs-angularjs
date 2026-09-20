@@ -942,7 +942,7 @@ async function verifyChosenFrame(
   const script = info.scripts.get(frame.scriptId);
   if (!script) return { kind: 'match' };
 
-  const cacheKey = `${frame.scriptId} ${hostPath}`;
+  const cacheKey = `${frame.scriptId}\u0000${hostPath}`;
   const cached = info.verdicts.get(cacheKey);
   if (cached) return cached;
 

@@ -284,7 +284,7 @@ function describeConnection(c: ChecklistConnection): string {
 }
 
 function mappingKey(m: PathMapping): string {
-  return `${m.remote} ${m.local}`;
+  return `${m.remote}\u0000${m.local}`;
 }
 
 function uniqueMappings(mappings: PathMapping[]): PathMapping[] {
