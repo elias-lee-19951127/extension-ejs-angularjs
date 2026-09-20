@@ -172,7 +172,9 @@ export function parseConsoleApiCalled(event: unknown): ParsedConsoleLog | null {
   if (!isConsoleApiCalledEvent(event)) return null;
   let rawFrames = event.stackTrace?.callFrames ?? [];
   // A logpoint's console call runs inside its breakpoint condition, whose own frame (named by the
-  // `sourceURL` the condition carries) sits on top of the line the logpoint is on. Drop it, and
+  // `sourceURL` the condition carries) sits on top of the frame for the line V8 BOUND the logpoint
+  // to — which is not always the line it was set on, so the drawing anchors to `logpointId` rather
+  // than to this frame (packages/server: `logpointAnchorOffset`). Drop the condition's frame, and
   // join the arguments WITHOUT the space console-style joining adds: they are the pieces of one
   // message the user wrote, spacing included.
   const logpointId = rawFrames[0] ? logpointIdFromUrl(rawFrames[0].url) : null;

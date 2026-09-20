@@ -458,6 +458,15 @@ Nên pipeline logpoint giờ mang **cột**: client gửi `character`, server g�
 ở đó thì `this`/`vm` sai chỗ. Logpoint đặt ở lề có cột 0, hành vi như cũ. `setBreakpointByUrl` trả
 `locations: []` khi hàm chưa compile (V8 compile lười) — không phải lỗi, breakpoint bind khi hàm chạy.
 
+**Vẽ theo vị trí ĐẶT, không theo vị trí V8 bind (sửa ở 0.5.1).** V8 bind vào vị trí breakable đầu tiên tại
+hoặc *sau* cột được yêu cầu; ngay sau `;` thì phần còn lại của dòng không còn gì breakable, nên nó bind vào
+**câu lệnh kế tiếp**. Giá trị log ra vẫn đúng (chạy sau câu gán), nhưng stack frame của console call báo về
+dòng đã bind — vẽ theo frame thì giá trị hiện cạnh dòng *dưới* dòng người dùng bấm. Nay log của logpoint neo
+vào vị trí đã yêu cầu (`logpointAnchorOffset`), nhận ra qua `logpointId` trong `sourceURL` của condition;
+`console.*` thường vẫn vẽ tại call site của chính nó. Reply `locations` của `setBreakpointByUrl` không cần
+dùng tới. Test chạy trên `node --inspect` thật, đặt logpoint **có cột** — test cũ chỉ đặt ở lề (cột 0), nơi
+V8 bind đúng dòng nên lỗi không lộ.
+
 Index ghi sẵn cho mỗi lần gán **là cả một câu lệnh** vị trí ngay sau nó (`ScopeWrite.after`, qua cả chuỗi
 `a = b = x;`) và vế trái như viết (`lhsText`). Gán nằm trong biểu thức khác (`return $scope.x = y`, thân arrow
 rút gọn) → không có link: không có "ngay sau" để đặt.

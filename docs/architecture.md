@@ -487,6 +487,16 @@ function's line lies *outside* the callback, where `this`/`vm` would resolve wro
 column 0 and behaves as before. `setBreakpointByUrl` answers `locations: []` for a function not compiled yet
 (V8 compiles lazily) — not a failure; the breakpoint binds when the function runs.
 
+**Drawn where it was SET, not where V8 bound it (fixed in 0.5.1).** V8 binds to the first breakable position
+at or *after* the requested column; right after a `;` nothing further along that line is breakable, so it
+binds on the **next statement**. The logged value stays correct (it runs after the assignment), but the
+console call's stack frame reports the bound line — drawing from the frame put the value beside the line
+*below* the one the user clicked. A logpoint's log is now anchored at the position it was asked for
+(`logpointAnchorOffset`), recognised through the `logpointId` in the condition's `sourceURL`; an ordinary
+`console.*` is still drawn at its own call site. `setBreakpointByUrl`'s `locations` reply is not needed for
+this. Pinned by a test on a real `node --inspect` that sets a logpoint **with a column** — the earlier tests
+all set them from the gutter (column 0), where V8 binds on the line asked for and the bug cannot show.
+
 The index records, for each assignment that **is a whole statement**, the position right after it
 (`ScopeWrite.after`, through chains like `a = b = x;`) and its left side as written (`lhsText`). An assignment
 inside another expression (`return $scope.x = y`, a concise arrow body) gets no link: there is no "right after"

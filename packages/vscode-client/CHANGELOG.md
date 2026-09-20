@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1
+
+**An inline value now appears on the line the logpoint was set on.** A logpoint placed from the
+CodeLens, the hover link or `Cmd+Alt+L` is set at the column right after the assignment's `;`, so
+the value it logs is the one just assigned. V8 binds such a breakpoint to the first breakable
+position at or after that column — which is the *next* statement — and the log was drawn from the
+stack frame that came back, so the value appeared beside the line below the one clicked. Logs from
+logpoints are now anchored where the logpoint was asked for. Ordinary `console.*` calls are
+unchanged: they are still drawn at their own call site.
+
 ## 0.5.0
 
 **Types seen at runtime.** Hovering a scope variable shows the type the running app actually produced,

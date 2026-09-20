@@ -1152,7 +1152,10 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
   // still decorates correctly the moment the user opens the file (ticket 08, item 3).
   const label = inWorkspace ? relPath : hostPath;
   record(label);
-  const offset = offsetForLocation(source, frame.lineNumber, frame.columnNumber);
+  // A logpoint is drawn where it was ASKED for, not where its frame says it ran (see
+  // `logpointAnchorOffset`); every other console call is drawn at its own call site.
+  const offset = logpointAnchorOffset(log, relPath, hostPath, source) ?? offsetForLocation(source, frame.lineNumber, frame.columnNumber);
+  const range = toRange(source, { start: offset, end: offset });
   info.drawn++;
   // Ticket 09: remember which container mount carried a drawn log — the same first-match-wins
   // lookup `mapContainerPath` did — so the checklist offers exactly that mapping for saving.
@@ -1167,7 +1170,7 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
   const logId = expandLogValues ? nextLogId++ : undefined;
   void connection.sendNotification('ejsng/runtimeLog', {
     uri: inWorkspace ? workspaceUri(workspace, relPath) : URI.file(hostPath).toString(),
-    range: toRange(source, { start: offset, end: offset }),
+    range,
     value: stripAnsi(log.value),
     ...(logId !== undefined ? { logId } : {}),
     severity: log.severity,
@@ -1178,7 +1181,7 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     endpoint: info.meta.endpoint,
   });
   if (inWorkspace) collectTypeEvidence(key, info, log, relPath, offset);
-  if (logId !== undefined) expandLoggedValue(key, info, log, logId, `${relPath}\u0000${frame.lineNumber}`);
+  if (logId !== undefined) expandLoggedValue(key, info, log, logId, `${relPath}\u0000${range.start.line}`);
 }
 
 /**
@@ -1494,16 +1497,50 @@ interface LogpointParams {
 }
 
 /**
- * What each part of a logpoint's message reads, evaluated where the logpoint runs: its column when
- * it has one, else the first non-blank character of its line. The column matters: in a one-line
- * `function (res) { $scope.rows = res.data; }`, the line starts OUTSIDE the callback. `undefined`
- * when no expression reads a scope variable.
+ * The offset a logpoint runs at: its column when it has one, else the first non-blank character of
+ * its line. The column matters: in a one-line `function (res) { $scope.rows = res.data; }`, the
+ * line starts OUTSIDE the callback, so expressions resolved there would read the wrong scope.
+ */
+function logpointOffsetIn(source: string, line: number, character: number | undefined): number {
+  const lineStart = offsetForLocation(source, line, 0);
+  return character !== undefined ? lineStart + character : lineStart + (/^\s*/.exec(source.slice(lineStart))?.[0].length ?? 0);
+}
+
+/**
+ * Where a logpoint's log is drawn: the position it was set at, NOT the one its stack frame reports.
+ *
+ * `Debugger.setBreakpointByUrl` binds to the first breakable position at or AFTER the requested
+ * column, and the column this server asks for is the one right after an assignment's `;`, so that
+ * the value logged is the one just assigned (docs/kien-truc.md 5.3.3). Nothing further along that
+ * line is breakable, so V8 binds on the NEXT statement — and the console call's stack frame, all
+ * the drawing path would otherwise have, reports that. Drawn from the frame, a value logged from
+ * one assignment appears beside the one below it.
+ *
+ * Anchoring here also keeps the drawing, the hover's source link and the Type Evidence site on the
+ * one line, since `logpointTargets` resolved the expressions at this same offset.
+ *
+ * `null` — draw from the frame — when the log is not a logpoint's, when the logpoint has since been
+ * replaced, or when it ran in a file other than the one it was set on.
+ */
+function logpointAnchorOffset(log: ParsedConsoleLog, relPath: string | null, hostPath: string, source: string): number | null {
+  if (log.logpointId === undefined) return null;
+  const lp = logpoints.find((l) => l.id === log.logpointId);
+  if (!lp) return null;
+  const sameFile = lp.relPath !== null
+    ? lp.relPath === relPath
+    : lp.hostPaths.includes(hostPath) || lp.hostPaths.includes(realpathOr(hostPath));
+  if (!sameFile) return null;
+  return logpointOffsetIn(source, lp.line, lp.character);
+}
+
+/**
+ * What each part of a logpoint's message reads, evaluated where the logpoint runs. `undefined` when
+ * no expression reads a scope variable.
  */
 function logpointTargets(relPath: string, line: number, character: number | undefined, logMessage: string): Array<ScopeTarget | null> | undefined {
   const source = workspace?.source(relPath);
   if (!workspace || source == null || !relPath.endsWith('.js')) return undefined;
-  const lineStart = offsetForLocation(source, line, 0);
-  const offset = character !== undefined ? lineStart + character : lineStart + (/^\s*/.exec(source.slice(lineStart))?.[0].length ?? 0);
+  const offset = logpointOffsetIn(source, line, character);
   const targets = parseLogMessage(logMessage).map((part) => (part.kind === 'expr' ? workspace!.scopeTargetAt(relPath, offset, part.expr) : null));
   return targets.some((t) => t) ? targets : undefined;
 }

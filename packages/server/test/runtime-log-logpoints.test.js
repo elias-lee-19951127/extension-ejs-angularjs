@@ -143,6 +143,51 @@ test('LSP + real node --inspect: logpoints draw inline on their lines, never pau
   assert.strictEqual(runtimeLogs.length, settled);
 });
 
+test('LSP + real node --inspect: a logpoint set at a column draws on its OWN line, not on the one V8 binds it to', async (t) => {
+  // The regression this pins: `setBreakpointByUrl` binds to the first breakable position at or
+  // AFTER the requested column. The column asked for here is the one right after `;` — so the
+  // value logged is the one just assigned — and nothing further along that line is breakable, so
+  // V8 binds on the NEXT statement. Drawing from the resulting stack frame put the value a line
+  // below the assignment the user clicked. The existing tests above all set logpoints from the
+  // gutter (no column), where V8 binds on the line asked for and the bug cannot show.
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-logpoints-column-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lines = [
+    'let n = 0;',
+    'setInterval(() => {',
+    '  n++;',
+    '  const rows = [n];',
+    '  const other = n * 2;',
+    "  console.log('plain', other);",
+    '}, 50);',
+    '',
+  ];
+  writeFileSync(join(root, 'app.js'), lines.join('\n'));
+  const ROWS_LINE = 3;
+  const PLAIN_LINE = 5;
+  // Right after the `;` of `  const rows = [n];` — the position the CodeLens and `logHere` ask for.
+  const afterSemicolon = lines[ROWS_LINE].length;
+
+  const { port } = await startInspectedNode(t, root, 'app.js');
+  const { conn, runtimeLogs } = await startServer(t, root);
+  conn.sendNotification('ejsng/setLogpoints', {
+    logpoints: [{ uri: pathToFileURL(join(root, 'app.js')).href, line: ROWS_LINE, character: afterSemicolon, logMessage: 'rows = {rows}' }],
+  });
+  const result = await conn.sendRequest('ejsng/connectRuntime', { host: '127.0.0.1', port });
+  assert.strictEqual(result.status, 'connected');
+
+  const logpointLogs = () => runtimeLogs.filter((l) => /^rows = \[\d+\]$/.test(l.value));
+  const plainLogs = () => runtimeLogs.filter((l) => /^plain \d+$/.test(l.value));
+  await waitUntil(() => logpointLogs().length >= 2 && plainLogs().length >= 2);
+
+  for (const l of logpointLogs()) {
+    assert.strictEqual(l.range.start.line, ROWS_LINE, `drawn on the assignment, not on line ${l.range.start.line}`);
+  }
+  // A plain console call is still drawn where its own frame says it ran — only logpoints are
+  // re-anchored, so this must not have moved with them.
+  for (const l of plainLogs()) assert.strictEqual(l.range.start.line, PLAIN_LINE);
+});
+
 /**
  * A fake browser page that records every CDP command, answers each one, and reports one script
  * by URL — enough to see WHICH breakpoints the server sets and removes.
