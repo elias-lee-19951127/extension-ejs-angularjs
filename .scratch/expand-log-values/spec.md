@@ -1,6 +1,6 @@
 # Spec: Log hiện rõ object/array, bấm để xem đầy đủ
 
-**Ngày viết:** 2026-09-20 · **Trạng thái:** đã chốt 2026-09-20 (người dùng chọn: hover + tab JSON; đào sẵn có giới hạn, sâu hơn khi bấm)
+**Ngày viết:** 2026-09-20 · **Trạng thái:** đã triển khai 2026-09-20 — ticket 01–04 done; còn verify tay trong VS Code thật
 **Nối tiếp:** `.scratch/inline-runtime-log/spec.md` (log vẽ inline) và `.scratch/observed-types-r1/spec.md`
 (đã có sẵn `digRuntimeValue` — đào giá trị bằng `Runtime.getProperties` theo tầng, có ngân sách).
 

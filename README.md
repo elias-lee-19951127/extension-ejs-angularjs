@@ -144,6 +144,7 @@ dẫn cụ thể bằng biến môi trường `EJSNG_NODE`.
 | `ejsng.templateRoots` | `[]` | Map `templateUrl` sang file: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — template được nối với controller của directive/component/route/state dùng nó |
 | `ejsng.expressViewsDir` | `"views"` | Thư mục view của Express cho `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Mặc định tắt** để tránh hàng nghìn cảnh báo giả trên code cũ |
+| `ejsng.runtimeLog.expandValues` | `true` | Trải object/mảng trong log inline thay vì `[Object]`; hỏi app đang chạy, có chặn tần suất mỗi dòng |
 | `ejsng.typeHints.nullable` | `true` | Chú thích inline `may be empty` sau biến có lần gán `null`/`undefined`. Hover không có setting. Đổi xong reload window |
 | `ejsng.include` / `exclude` | | Glob quét file |
 
@@ -184,6 +185,14 @@ npm test
 Chạy test core và test LSP qua stdio (khởi động server thật). Các test trên repo `smart-city` tự
 bỏ qua nếu máy không có repo đó. `spans.test.js` giữ bất biến "mọi span trỏ đúng vào chữ nó đại
 diện" — xem [phụ lục I](docs/kien-truc.md).
+
+## Log hiện rõ object
+
+Giá trị object/mảng trong log inline hiện ra **thật**, không còn `[Object]`: extension hỏi app đang chạy các
+thuộc tính của giá trị đó (`Runtime.getProperties`), tối đa 1 lần mỗi dòng mỗi 300 ms. Hover cho bản trải ra
+nhiều dòng; bấm **Show full value** mở một tab JSON chỉ đọc với toàn bộ giá trị — gập/mở, tìm kiếm, copy đều là
+sẵn có của VS Code. Đo trên Chrome thật: app log 33 lần/giây chạy **y như khi tắt** tính năng này.
+Tắt bằng `ejsng.runtimeLog.expandValues`.
 
 ## Thử nhanh "Log at runtime"
 

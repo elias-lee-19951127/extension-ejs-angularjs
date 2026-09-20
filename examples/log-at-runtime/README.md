@@ -43,6 +43,18 @@ Toàn bộ các bước trên đã được chạy tự động một lần (kh�
 đặt logpoint đúng bằng tham số mà link mang, nối `node --inspect`, 8 log được vẽ, 4 bằng chứng kiểu, và hover
 ra đúng các dòng nêu trên. Phần duy nhất chỉ bạn kiểm được là **bấm chuột vào link** và các nút của thông báo.
 
+## Xem giá trị log đầy đủ
+
+`list.controller.js` có sẵn một `console.log('rows', $scope.rows)`. Khi đang nối runtime:
+
+8. Mở `list.controller.js`. Cạnh dòng `console.log` có giá trị vẽ inline — là object thật, không phải `[Object]`:
+   `rows [{id: 1, title: 'Sensor A', owner: {…}, tags: […]}, …]`.
+9. **Hover** vào dòng đó: giá trị trải ra nhiều dòng, kèm link **Show full value**.
+10. Bấm link → mở một tab JSON chỉ đọc với **toàn bộ** giá trị (sâu hơn bản inline). Tab này gập/mở từng nhánh,
+    tìm kiếm và copy được — đều là sẵn có của VS Code.
+
+Tắt bằng setting `ejsng.runtimeLog.expandValues` nếu không muốn extension hỏi app về giá trị.
+
 ## Dọn
 
 Xoá logpoint trong Breakpoints view của VS Code, tắt tiến trình Node.

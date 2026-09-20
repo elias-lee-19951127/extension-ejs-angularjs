@@ -507,6 +507,46 @@ second one (same file, line and column; a disabled one is turned back on).
 Covered end to end in a real VS Code: the link taken from the hover, the trusted markdown, the logpoint at the
 right column, and the `columnNumber` reaching the runtime.
 
+#### 5.3.4 Logged objects and arrays, shown as themselves (2026-09-20)
+
+Spec: `.scratch/expand-log-values/spec.md`. `console.log('rows', $scope.rows)` with an array of 150 objects used
+to draw as `rows [Object, Object, …]` — a hundred times the word "Object". Same cause as 5.3.2: a CDP preview
+carries one level.
+
+**Three renderings, one dig.**
+
+| Where | Depth | Limits |
+|---|---|---|
+| Inline beside the code | 2 | one line, 200 characters, strings at 40 |
+| Hover | 3 | several lines, 30 keys per level, 10 elements, 8 KB |
+| JSON tab (**Show full value**) | 6 | 50 keys, 200 elements, strings at 10,000, 2 MB |
+
+The first two are dug **as the log is drawn**, the third only **when asked**, from the `objectId`s the server
+still holds (the 200 most recent logs per connection). Digging runs **after** the log has been sent and off the
+drawing queue; the result arrives milliseconds later as a second notification, `ejsng/runtimeLogExpanded` for the
+same `logId`, and the client replaces the text of that one line. Waiting for the dig would slow every log down —
+over Docker or Chrome each level is a round trip.
+
+**Rate limited to one dig per (file, line) per 300 ms.** Measured against a real Chrome 153 page logging an array
+of 150 objects every 30 ms for 5 seconds: the app ran **33.4 loops a second with expanding on, exactly as with it
+off**; the server drew all 167 logs and dug 16 times. So the digging costs the app nothing measurable, and no log
+is ever dropped for it.
+
+**A JSON tab rather than a tree of our own.** The link opens a read-only `TextDocumentContentProvider`
+(`ejsng-log:`) holding valid JSON, so folding, search, copy and diff are VS Code's own. What JSON cannot hold
+becomes a string: `"[Function: load]"`, `"[getter]"`, `"undefined"`, `"[not expanded]"` for a branch outside the
+budget — which is not pretended to be empty. A value the runtime has released comes back as much as was kept, as
+`jsonc` with a `//` line saying so.
+
+**Cycles cannot be recognised** (see 5.3.2): depth is what stops them. **Getters are never run.** A string
+argument prints as text (`rows [...]`) while a string inside a value keeps its quotes — the way a console prints.
+
+**V8 replays the console entries buffered before the client attached, and a replayed one carries no preview**
+(found while testing): the first logs after Connect read `Array(150)`; they are dug and expanded right after.
+
+`ejsng.runtimeLog.expandValues` (on by default) turns it off entirely: no requests to the app, inline text as
+before.
+
 ---
 
 ## 6. The big fork: hand-written resolver vs. virtual-TS (Volar-style)

@@ -13,9 +13,10 @@ var angular = {
   },
 };
 
-/** A fake $http.get: answers a different shape every few seconds, to show the hover keeping up. */
+/** A fake $http.get: answers a different shape on each call, to show the hover keeping up. */
+var calls = 0;
 function fakeGet(url) {
-  var tick = Math.floor(Date.now() / 3000) % 3;
+  var tick = calls++ % 3;
   var rows =
     tick === 0
       ? [{ id: 1, title: 'Sensor A', owner: { id: 7, name: 'ops' }, tags: ['alarm'] }]
@@ -35,6 +36,8 @@ angular.module('demoApp', []).controller('DemoListCtrl', function ($scope, $http
       // The index cannot type either of these: hover them and the link appears.
       $scope.rows = res.data.rows;
       $scope.selected = res.data.selected;
+      // Logged so the inline value can show what an expanded object looks like.
+      console.log('rows', $scope.rows);
     });
   };
 

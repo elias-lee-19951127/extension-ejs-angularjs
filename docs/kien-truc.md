@@ -475,6 +475,43 @@ Bấm lại không sinh cái thứ hai (đúng `(file, dòng, cột)`; đang t�
 Có test e2e trong VS Code thật: link lấy từ hover, markdown được tin cậy, logpoint ở đúng cột, `columnNumber`
 tới runtime.
 
+#### 5.3.4 Log hiện rõ object/array (2026-09-20)
+
+Spec: `.scratch/expand-log-values/spec.md`. `console.log('rows', $scope.rows)` với một mảng 150 object trước đây
+vẽ inline thành `rows [Object, Object, …]` — 100 chữ "Object", vô dụng. Cùng nguyên nhân với 5.3.2: preview của CDP
+chỉ có một cấp.
+
+**Ba mức hiển thị, một lần đào.**
+
+| Ở đâu | Sâu | Giới hạn |
+|---|---|---|
+| Inline cạnh code | 2 cấp | một dòng, 200 ký tự, chuỗi 40 ký tự |
+| Hover | 3 cấp | nhiều dòng, 30 key/cấp, 10 phần tử, 8 KB |
+| Tab JSON (bấm **Show full value**) | 6 cấp | 50 key, 200 phần tử, chuỗi 10 000 ký tự, 2 MB |
+
+Hai mức đầu đào **lúc log được vẽ**, mức thứ ba chỉ đào **khi bấm**, từ `objectId` server còn giữ (200 log gần
+nhất mỗi kết nối). Việc đào chạy **sau** khi log đã gửi đi và ngoài hàng đợi vẽ; kết quả về sau vài ms dưới dạng
+notification thứ hai `ejsng/runtimeLogExpanded` cho cùng `logId`, và client thay chữ của đúng dòng đó. Chờ đào xong
+rồi mới vẽ sẽ làm chậm mọi log — qua Docker/Chrome mỗi tầng là một lượt đi-về.
+
+**Chặn tần suất: 1 lần đào mỗi (file, dòng) mỗi 300 ms.** Đo trên Chrome 153 thật (trang log mảng 150 object mỗi
+30 ms, 5 giây): app chạy **33.4 vòng/giây khi bật, y hệt khi tắt**; server vẽ đủ 167 log và chỉ đào 16 lần. Tức là
+việc đào không làm app chậm đi ở mức đo được, và log không bao giờ bị bỏ.
+
+**Tab JSON thay vì cây tự viết.** Bấm link mở một `TextDocumentContentProvider` chỉ đọc (`ejsng-log:`) chứa JSON
+hợp lệ, nên gập/mở từng nhánh, tìm kiếm, copy, so sánh đều là của VS Code. Thứ JSON không biểu diễn được thành
+chuỗi: `"[Function: load]"`, `"[getter]"`, `"undefined"`, `"[not expanded]"` (nhánh ngoài ngân sách — không giả vờ
+là rỗng). Giá trị runtime đã bị thả (trang điều hướng, console bị xoá) → trả về phần còn giữ được, ngôn ngữ `jsonc`
+và một dòng `//` nói rõ.
+
+**Không nhận ra vòng lặp tham chiếu được** (xem 5.3.2): độ sâu là thứ chặn. **Getter không bao giờ chạy.** Chuỗi ở
+mức đối số in như văn bản (`rows [...]`), chuỗi bên trong giá trị vẫn có nháy — đúng như console thật.
+
+**V8 phát lại console entry đệm trước khi client kết nối, và bản phát lại không có preview** (thấy khi test): vài
+log đầu sau khi Connect hiện `Array(150)`; chúng vẫn được đào và trải ra ngay sau đó.
+
+Setting `ejsng.runtimeLog.expandValues` (mặc định bật) tắt hẳn: không lệnh nào gửi cho app, inline về như cũ.
+
 ---
 
 ## 6. Ngã rẽ lớn: tự viết resolver vs. virtual-TS (kiểu Volar)
