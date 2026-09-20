@@ -25,7 +25,10 @@ We measured this on a real `node --inspect` (Node 20.20) before deciding:
 - A condition that returns `false` never pauses. A condition that throws doesn't pause either.
 - A `urlRegex` breakpoint binds to a module that is loaded later.
 - The log's stack trace shows the condition as its top frame, named by a `//# sourceURL` we add,
-  with the logpoint's line directly below it.
+  with the logpoint's line directly below it. **Corrected 2026-09-20:** the frame below is the line
+  V8 *bound* the breakpoint to, which for a logpoint placed at a column after a statement's `;` is
+  the next statement — not the line the logpoint was set on. Drawing now anchors on the requested
+  position instead (`logpointAnchorOffset`); see docs/kien-truc.md 5.3.3.
 - `node:inspector`'s `console` reaches every attached client without printing to the app's stdout.
 - Two CDP clients on one Node target both receive the log.
 
