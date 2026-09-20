@@ -25,7 +25,7 @@ test('the hover offers "Log at runtime" for an untyped assignment; the command s
     return null;
   }, 'the "Log at runtime" link in the hover');
   const { args } = link;
-  assert.strictEqual(args.logMessage, '$scope.rows = {$scope.rows}');
+  assert.strictEqual(args.logMessage, 'rows = {$scope.rows}');
   // Untrusted markdown renders a `command:` link that does nothing when clicked. The list is
   // exactly the extension's own commands — never blanket trust.
   assert.ok(link.content.isTrusted.enabledCommands.includes('ejsng.logVariable'));

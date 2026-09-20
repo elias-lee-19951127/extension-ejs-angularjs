@@ -566,7 +566,9 @@ function logVariableLink(u: ObservedTypeResult['unknownFrom'][number]): string {
   const source = workspace.source(u.path);
   if (source == null) return '';
   const { line, character } = toRange(source, { start: u.after, end: u.after }).start;
-  const args = { uri: workspaceUri(workspace, u.path), line, character, expression: u.lhsText, logMessage: `${u.lhsText} = {${u.lhsText}}` };
+  // The same message the CodeLens builds for this spot (log-lens), so the two never collide.
+  const name = u.lhsText.slice(u.lhsText.lastIndexOf('.') + 1);
+  const args = { uri: workspaceUri(workspace, u.path), line, character, expression: u.lhsText, logMessage: `${name} = {${u.lhsText}}` };
   // Parentheses too: an unescaped `)` in a path would end the markdown link early.
   const query = encodeURIComponent(JSON.stringify([args])).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
   return ` · [Log at runtime](command:ejsng.logVariable?${query})`;
@@ -725,6 +727,15 @@ async function publishDiagnostics(doc: TextDocument): Promise<void> {
 
   await connection.sendDiagnostics({ uri: doc.uri, diagnostics });
 }
+
+/**
+ * log-lens: every place in a JS file a CodeLens can offer a logpoint for. The client filters by its
+ * own setting and knows which logpoints already exist, so everything here is just positions.
+ */
+connection.onRequest('ejsng/logTargets', (params: { uri?: string }) => {
+  const r = typeof params?.uri === 'string' ? rel(params.uri) : null;
+  return { targets: workspace && r ? workspace.logTargets(r) : [] };
+});
 
 connection.onRequest('ejsng/reindex', () => {
   if (!workspace) return null;

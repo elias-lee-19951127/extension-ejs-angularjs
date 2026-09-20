@@ -54,6 +54,53 @@ export function planLogVariable(args: LogVariableArgs, breakpoints: readonly Bre
   return { kind: 'exists', index, sameMessage };
 }
 
+/** A place the server says a logpoint can be set, with its message already written (log-lens). */
+export interface LogTarget {
+  lensLine: number;
+  line: number;
+  character: number;
+  expression: string;
+  logMessage: string;
+  /** The index knows what the assignment holds; `false` is where logging teaches the most. */
+  inferred: boolean;
+}
+
+/** `ejsng.logLens`: which assignments get a lens (log-lens spec #2). */
+export type LogLensMode = 'unknown' | 'all' | 'off';
+
+/** One lens: where it goes, what it says, and the command's argument. */
+export interface LogLens {
+  line: number;
+  title: string;
+  args: LogVariableArgs & { toggle: true };
+}
+
+/**
+ * The lenses for a file: none when off, only the assignments the index cannot type by default
+ * (measured: a lens on every assignment lands on 15–18% of a controller's lines, against ~3% for
+ * these). A line that already carries this logpoint says so and removes it instead.
+ */
+export function logLenses(
+  targets: readonly LogTarget[],
+  mode: LogLensMode,
+  uri: string,
+  breakpoints: readonly BreakpointLike[],
+): LogLens[] {
+  if (mode === 'off') return [];
+  return targets
+    .filter((t) => mode === 'all' || !t.inferred)
+    .map((t) => {
+      const args = { uri, line: t.line, character: t.character, expression: t.expression, logMessage: t.logMessage, toggle: true as const };
+      const name = t.logMessage.slice(0, t.logMessage.indexOf(' ')) || t.expression;
+      const set = planLogVariable(args, breakpoints);
+      return {
+        line: t.lensLine,
+        title: set.kind === 'exists' && set.sameMessage ? `$(debug-breakpoint-log) Logging ${name} — click to remove` : `$(debug-breakpoint-log) Log ${name} at runtime`,
+        args,
+      };
+    });
+}
+
 /** The file name of a URI, for messages: `list.controller.js`. */
 export function fileNameOf(uri: string): string {
   const path = uri.replace(/[?#].*$/, '');

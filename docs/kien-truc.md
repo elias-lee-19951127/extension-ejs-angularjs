@@ -475,6 +475,30 @@ Bấm lại không sinh cái thứ hai (đúng `(file, dòng, cột)`; đang t�
 Có test e2e trong VS Code thật: link lấy từ hover, markdown được tin cậy, logpoint ở đúng cột, `columnNumber`
 tới runtime.
 
+#### 5.3.5 CodeLens đặt logpoint bằng một click (2026-09-20)
+
+Spec: `.scratch/log-lens/spec.md`. **VS Code không có API điền sẵn ô *Add Logpoint…* của nó**, nên muốn dev khỏi
+gõ tay thì extension phải tự tạo logpoint. Chỗ bấm là một CodeLens ngay trên dòng gán vào scope; nội dung
+(`rows = {$scope.rows}`) và vị trí (ngay sau câu lệnh, xem 5.3.3) đều lấy từ index.
+
+**Mặc định hiện ở đâu — đo trên `smart-city`:**
+
+| Lens đặt ở | `product2/…/index.js` (1568 dòng) | `new-version-2/new-index.js` (845 dòng) | Toàn repo |
+|---|---|---|---|
+| mọi lần gán vào scope | 240 (15%) | 143 (17%) | 587 |
+| chỉ lần gán **không suy ra được kiểu** | 46 (2.9%) | 26 (3.1%) | 105 |
+
+Mỗi CodeLens chiếm một dòng hiển thị, nên "mọi lần gán" làm file dài thêm ~15% — quá rối. Mặc định
+`ejsng.logLens = "unknown"`: chỉ những lần gán index bó tay, tức đúng chỗ log dạy được điều gì đó. `all` và
+`off` vẫn có cho ai muốn.
+
+**Lens dựng ở client**, vị trí lấy từ server qua `ejsng/logTargets`. Lý do: chỉ client biết breakpoint nào đang
+có (để đổi nhãn thành *Logging rows — click to remove* và bấm là gỡ) và setting hiện tại (đổi setting không cần
+reload). Server vẫn là nơi duy nhất biết "ngay sau câu lệnh" nằm ở đâu.
+
+Nội dung logpoint của lens và của link trong hover được **thống nhất** (`rows = {$scope.rows}`) — trước đó hover
+dùng `$scope.rows = {…}`, hai chỗ sinh hai logpoint khác nhau ở cùng một vị trí.
+
 #### 5.3.4 Log hiện rõ object/array (2026-09-20)
 
 Spec: `.scratch/expand-log-values/spec.md`. `console.log('rows', $scope.rows)` với một mảng 150 object trước đây

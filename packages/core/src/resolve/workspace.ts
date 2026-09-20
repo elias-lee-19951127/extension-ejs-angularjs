@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import fg from 'fast-glob';
 import type { AttrCandidate, Config, ConsoleCall, FileFacts, ScopeFrame, ScopeTarget, Span, TemplateExpression, TemplateFacts } from '../types';
 import { DEFAULT_CONFIG } from '../types';
-import { consoleCallAt, extractJs, scopeTargetAt } from '../extract/js';
+import { consoleCallAt, extractJs, logTargetsIn, scopeTargetAt, type LogTarget } from '../extract/js';
 import { extractTemplate } from '../extract/template';
 import { hashContent, IndexStore, type SymbolRow } from '../index/store';
 import { INDEX_FILENAME, PARSER_VERSION } from '../index/schema';
@@ -714,6 +714,13 @@ export class Workspace implements FactSource, RenameSource {
   consoleCallAt(relPath: string, offset: number): ConsoleCall | null {
     const facts = this.facts(relPath);
     return facts?.kind === 'js' ? consoleCallAt(facts, offset) : null;
+  }
+
+  /** Every place in a JS file where a logpoint can be set with its message already written (log-lens). */
+  logTargets(relPath: string): LogTarget[] {
+    const facts = this.facts(relPath);
+    const source = this.source(relPath);
+    return facts?.kind === 'js' && source !== null ? logTargetsIn(facts, source) : [];
   }
 
   /** The scope variable a logpoint expression reads when it runs at `offset` in a JS file (observed-types-r1). */

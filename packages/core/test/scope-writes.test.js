@@ -200,3 +200,45 @@ angular.module('app', []).controller('C', ['$scope', function (s) {
 `);
   assert.deepStrictEqual(facts.scopeWrites.map((w) => w.lhsText), ['s.rows', 'vm.form', 'this.form.owner']);
 });
+
+// ---------------------------------------------------------------- log-lens ticket 01
+
+test('logTargets: one per line, right after the statement, with the message already written', () => {
+  const src = `
+angular.module('app', []).controller('C', ['$scope', function (s) {
+  var vm = this;
+  s.rows = [];
+  s.rows = load();
+  vm.form.extra = { a: 1 };
+  s.a = 1; s.b = 2;
+  return s.skipped = 1;
+}]);
+`;
+  const targets = C.logTargetsIn(extract(src), src);
+  assert.deepStrictEqual(
+    targets.map((t) => [t.lensLine, t.line, t.expression, t.logMessage, t.inferred]),
+    [
+      [3, 3, 's.rows', 'rows = {s.rows}', true],
+      [4, 4, 's.rows', 'rows = {s.rows}', false], // from a call: what logging is for
+      [5, 5, 'vm.form.extra', 'extra = {vm.form.extra}', true],
+      [6, 6, 's.a', 'a = {s.a}', true], // two assignments on one line: one lens
+    ],
+    JSON.stringify(targets, null, 1),
+  );
+  // The character is right past the statement, so the logpoint runs after the assignment.
+  const lines = src.split('\n');
+  assert.strictEqual(lines[3].slice(targets[0].character - 3, targets[0].character), '[];');
+  assert.strictEqual(lines[6].slice(targets[3].character - 2, targets[3].character), '1;', 'after the FIRST statement of the line');
+});
+
+test('logTargets: nothing where a logpoint could not run after the assignment', () => {
+  const src = `
+angular.module('app', []).controller('C', function ($scope) {
+  function load() { return $scope.r = 1; }
+  if (($scope.i = next())) {}
+  var go = () => $scope.arrow = 1;
+  for (var k = 0; k < 2; $scope.k = k++) {}
+});
+`;
+  assert.deepStrictEqual(C.logTargetsIn(extract(src), src), []);
+});

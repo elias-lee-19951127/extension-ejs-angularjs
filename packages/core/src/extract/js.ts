@@ -625,6 +625,55 @@ function extractConsoleCalls(ast: acorn.Program, decl: NgDeclaration, facts: JsF
   });
 }
 
+/** A place a logpoint can be set with its message already written (log-lens spec #1). */
+export interface LogTarget {
+  /** Line of the assignment — where the CodeLens goes (0-based). */
+  lensLine: number;
+  /** Right after the assignment's statement, where the logpoint runs AFTER it (0-based). */
+  line: number;
+  character: number;
+  /** The left side as written: `$scope.rows`. */
+  expression: string;
+  /** `rows = {$scope.rows}`. */
+  logMessage: string;
+  /**
+   * The index worked out what this assignment holds. `false` — assigned from a call, a response —
+   * is where logging teaches the most, and is what the lens shows by default (spec #2).
+   */
+  inferred: boolean;
+}
+
+/**
+ * Every assignment to a scope in a file that a logpoint could follow (log-lens ticket 01). One per
+ * line: two assignments on one line would put two lenses on top of each other. Assignments with no
+ * "right after" (`return $scope.x = y`, a concise arrow body) are left out — there is nowhere for
+ * the logpoint to run after them.
+ */
+export function logTargetsIn(facts: JsFacts, source: string): LogTarget[] {
+  const byLine = new Map<number, LogTarget>();
+  for (const w of facts.scopeWrites) {
+    if (w.after === undefined || !w.lhsText) continue;
+    const lensLine = lineOf(source, w.span.start);
+    if (byLine.has(lensLine)) continue;
+    const after = lineOf(source, w.after);
+    byLine.set(lensLine, {
+      lensLine,
+      line: after,
+      character: w.after - (source.lastIndexOf('\n', w.after - 1) + 1),
+      expression: w.lhsText,
+      logMessage: `${w.path[w.path.length - 1] ?? w.lhsText} = {${w.lhsText}}`,
+      inferred: !w.shapes.some((sh) => sh.kind === 'unknown'),
+    });
+  }
+  return [...byLine.values()];
+}
+
+function lineOf(source: string, offset: number): number {
+  let line = 0;
+  for (let i = 0; i < offset && i < source.length; i++) if (source[i] === '\n') line++;
+  return line;
+}
+
 /** The `console.*` call whose method name starts at `offset` — where V8 puts the frame of a console call. */
 export function consoleCallAt(facts: JsFacts, offset: number): ConsoleCall | null {
   return (facts.consoleCalls ?? []).find((c) => c.method.start === offset) ?? null;

@@ -25,7 +25,7 @@ import {
   type RuntimeStatusSummary,
 } from './runtime-log-state';
 import { logpointsFrom } from './logpoints';
-import { fileNameOf, parseLogVariableArgs, planLogVariable } from './log-variable';
+import { fileNameOf, logLenses, parseLogVariableArgs, planLogVariable, type LogLensMode, type LogTarget } from './log-variable';
 import { RuntimeLogViewProvider } from './runtime-log-view';
 import {
   appUrlForPort,
@@ -872,6 +872,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     vscode.commands.registerCommand('ejsng.disconnectRuntime', disconnectRuntime),
     vscode.commands.registerCommand(LOG_VARIABLE_COMMAND, logVariable),
     vscode.commands.registerCommand(SHOW_LOG_VALUE_COMMAND, showLogValue),
+    vscode.languages.registerCodeLensProvider({ scheme: 'file', language: 'javascript' }, logLensProvider),
+    // A lens says whether the line is already logging, so it follows the breakpoints and the setting.
+    vscode.debug.onDidChangeBreakpoints(() => logLensChanged.fire()),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('ejsng.logLens')) logLensChanged.fire();
+    }),
     vscode.workspace.registerTextDocumentContentProvider(LOG_VALUE_SCHEME, logValueProvider),
     vscode.commands.registerCommand('ejsng.launchBrowser', () => launchBrowser(context, defaultChromeDebugPort())),
     // A split/reopened editor for a file with existing hits starts undecorated otherwise.
@@ -955,6 +961,31 @@ const LOG_VARIABLE_COMMAND = 'ejsng.logVariable';
 const SHOW_LOG_VALUE_COMMAND = 'ejsng.showLogValue';
 /** Read-only documents holding a logged value, so VS Code's own JSON folding and search apply. */
 const LOG_VALUE_SCHEME = 'ejsng-log';
+
+const logLensChanged = new vscode.EventEmitter<void>();
+
+/**
+ * log-lens: one click on the line that assigns a scope variable sets the logpoint for it — right
+ * after the statement, with the message already written. VS Code offers no way to prefill its own
+ * "Add Logpoint" box, so this is the affordance that replaces typing one.
+ */
+const logLensProvider: vscode.CodeLensProvider = {
+  onDidChangeCodeLenses: logLensChanged.event,
+  async provideCodeLenses(document) {
+    const mode = vscode.workspace.getConfiguration('ejsng').get<LogLensMode>('logLens', 'unknown');
+    if (mode === 'off' || !client) return [];
+    const uri = document.uri.toString();
+    const result = await client.sendRequest<{ targets: LogTarget[] }>('ejsng/logTargets', { uri });
+    return logLenses(result?.targets ?? [], mode, uri, vscode.debug.breakpoints as readonly vscode.SourceBreakpoint[]).map(
+      (lens) =>
+        new vscode.CodeLens(new vscode.Range(lens.line, 0, lens.line, 0), {
+          title: lens.title,
+          command: LOG_VARIABLE_COMMAND,
+          arguments: [lens.args],
+        }),
+    );
+  },
+};
 const logValues = new Map<string, string>();
 const logValueChanged = new vscode.EventEmitter<vscode.Uri>();
 const logValueProvider: vscode.TextDocumentContentProvider = {
@@ -996,9 +1027,15 @@ async function showLogValue(raw: unknown): Promise<void> {
 function logVariable(raw: unknown): void {
   const args = parseLogVariableArgs(raw);
   if (!args) return;
+  const toggle = (raw as { toggle?: unknown }).toggle === true;
   const location = new vscode.Location(vscode.Uri.parse(args.uri), new vscode.Position(args.line, args.character));
   const where = `${fileNameOf(args.uri)}:${args.line + 1}`;
   const plan = planLogVariable(args, vscode.debug.breakpoints as readonly vscode.SourceBreakpoint[]);
+  // From a lens (log-lens spec #8): clicking the line that already logs this takes it back off.
+  if (toggle && plan.kind === 'exists' && plan.sameMessage) {
+    vscode.debug.removeBreakpoints([vscode.debug.breakpoints[plan.index]!]);
+    return;
+  }
   if (plan.kind === 'exists') {
     void vscode.window.showInformationMessage(
       plan.sameMessage

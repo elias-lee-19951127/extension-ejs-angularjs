@@ -18,7 +18,10 @@ Node in ra `Debugger listening on ws://127.0.0.1:9229/...` — cổng 9229 là m
 
 ## Kiểm
 
-1. Mở `list.html`, **hover** vào `rows` trong `ng-repeat="row in rows"`.
+1. Mở `list.controller.js`: ngay trên dòng `$scope.rows = res.data.rows;` có một dòng chữ nhỏ
+   **Log at runtime** (CodeLens). Bấm một cái là xong — không gõ gì. Bấm lại thì gỡ. Cách này và cách hover
+   dưới đây tạo ra cùng một logpoint.
+2. Hoặc mở `list.html`, **hover** vào `rows` trong `ng-repeat="row in rows"`.
    Hover ghi `unknown[]` và `Could not be inferred — assigned from res.data.rows`, kèm link **Log at runtime**.
 2. **Bấm link.** `list.controller.js` có thêm một logpoint ở lề, ngay sau `$scope.rows = res.data.rows;`.
    Thông báo hiện ra với nút **Connect Runtime** và **Show**.

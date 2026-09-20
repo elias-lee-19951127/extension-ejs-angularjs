@@ -1,6 +1,6 @@
 # Spec: CodeLens "Log at runtime" — đặt logpoint bằng một click
 
-**Ngày viết:** 2026-09-20 · **Trạng thái:** đã chốt 2026-09-20 (người dùng chọn CodeLens)
+**Ngày viết:** 2026-09-20 · **Trạng thái:** đã triển khai 2026-09-20 — ticket 01–03 done
 **Nối tiếp:** `.scratch/log-variable/spec.md` (link *Log at runtime* trong hover, đã làm) và
 `.scratch/expand-log-values/spec.md` (log hiện rõ object, đã làm).
 

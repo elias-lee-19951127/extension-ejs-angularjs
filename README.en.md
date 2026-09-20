@@ -49,7 +49,7 @@ assigned in a callback (nearly all async-loaded data), in JS files, or for EJS l
 `ejsng.typeHints.nullable`.
 
 **Types seen at runtime.** Where the index can't tell (`$scope.rows = res.data`), let the runtime show
-it: click **Log at runtime** right in the hover (beside "Could not be inferred — assigned from
+it: click **Log at runtime** — on the **CodeLens** above the assignment in the controller, or in the hover (beside "Could not be inferred — assigned from
 `res.data`") — VS Code sets an ordinary logpoint right after that assignment, even inside a one-line
 callback; clicking again never adds a second one, and it's removed through the usual breakpoint UI. A
 logpoint `{vm.rows}` of your own, or an existing `console.log($scope.rows)`, works too. While Runtime Log
@@ -151,6 +151,7 @@ inherit the shell's PATH. Force a specific path with the `EJSNG_NODE` environmen
 | `ejsng.expressViewsDir` | `"views"` | Express views directory for `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Off by default** to avoid thousands of false warnings on legacy code |
 | `ejsng.runtimeLog.expandValues` | `true` | Expand objects and arrays in inline logs instead of `[Object]`; asks the running app, rate limited per line |
+| `ejsng.logLens` | `"unknown"` | The **Log at runtime** CodeLens above an assignment: `unknown` only where the index can't type it (~3% of lines), `all` on every assignment (15-18%), `off` for none |
 | `ejsng.typeHints.nullable` | `true` | Inline `may be empty` hint after a variable assigned `null`/`undefined` somewhere. Hover has no setting. Reload the window after changing it |
 | `ejsng.include` / `exclude` | | Glob patterns for file scanning |
 

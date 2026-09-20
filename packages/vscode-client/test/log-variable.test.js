@@ -46,3 +46,32 @@ test('planLogVariable: another breakpoint at that spot is never replaced, even a
 test('fileNameOf: the last path segment, decoded', () => {
   assert.strictEqual(fileNameOf('file:///app/my%20list.controller.js'), 'my list.controller.js');
 });
+
+// ---------------------------------------------------------------- log-lens ticket 02
+
+const { logLenses } = require('../out/log-variable');
+
+const TARGETS = [
+  { lensLine: 1, line: 1, character: 20, expression: '$scope.rows', logMessage: 'rows = {$scope.rows}', inferred: true },
+  { lensLine: 2, line: 2, character: 61, expression: '$scope.rows', logMessage: 'rows = {$scope.rows}', inferred: false },
+];
+
+test('logLenses: by default only the assignments the index could not type', () => {
+  const lenses = logLenses(TARGETS, 'unknown', ARGS.uri, []);
+  assert.deepStrictEqual(lenses.map((l) => l.line), [2]);
+  assert.match(lenses[0].title, /Log rows at runtime$/);
+  assert.deepStrictEqual(lenses[0].args, { ...ARGS, line: 2, character: 61, logMessage: 'rows = {$scope.rows}', toggle: true });
+
+  assert.deepStrictEqual(logLenses(TARGETS, 'all', ARGS.uri, []).map((l) => l.line), [1, 2]);
+  assert.deepStrictEqual(logLenses(TARGETS, 'off', ARGS.uri, []), []);
+});
+
+test('logLenses: a line already logging says so, and its click removes it', () => {
+  const existing = bp(2, 61, { logMessage: 'rows = {$scope.rows}' });
+  const [lens] = logLenses(TARGETS, 'unknown', ARGS.uri, [existing]);
+  assert.match(lens.title, /Logging rows — click to remove$/);
+  assert.strictEqual(lens.args.toggle, true);
+  // Another breakpoint at that spot is someone else's: the lens still offers to log.
+  const other = bp(2, 61, { logMessage: 'something else' });
+  assert.match(logLenses(TARGETS, 'unknown', ARGS.uri, [other])[0].title, /Log rows at runtime$/);
+});

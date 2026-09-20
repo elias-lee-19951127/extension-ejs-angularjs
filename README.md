@@ -47,7 +47,7 @@ có lần gán tường minh `null`/`undefined`/`void 0`. Không inline cho bi�
 `ejsng.typeHints.nullable`.
 
 **Kiểu thấy lúc chạy.** Chỗ index bó tay (`$scope.rows = res.data`) thì cho runtime xem: bấm
-**Log at runtime** ngay trong hover (cạnh dòng "Could not be inferred — assigned from `res.data`") — VS Code
+**Log at runtime** — trên **CodeLens** ngay trên dòng gán trong file controller, hoặc trong hover (cạnh dòng "Could not be inferred — assigned from `res.data`") — VS Code
 đặt một logpoint bình thường ngay sau câu gán đó, kể cả khi nó nằm trong callback viết một dòng; bấm lại
 không sinh logpoint thứ hai, xoá bằng giao diện breakpoint sẵn có. Cũng có thể tự đặt logpoint `{vm.rows}`
 hoặc có sẵn `console.log($scope.rows)`. Khi đang nối Runtime Log, lần sau dòng đó chạy, hover trên `vm.rows` trong template có kiểu thật, kèm dòng *Seen at runtime* (bao nhiêu lần, lúc
@@ -145,6 +145,7 @@ dẫn cụ thể bằng biến môi trường `EJSNG_NODE`.
 | `ejsng.expressViewsDir` | `"views"` | Thư mục view của Express cho `res.render('user/profile')` |
 | `ejsng.diagnostics.enabled` | `false` | **Mặc định tắt** để tránh hàng nghìn cảnh báo giả trên code cũ |
 | `ejsng.runtimeLog.expandValues` | `true` | Trải object/mảng trong log inline thay vì `[Object]`; hỏi app đang chạy, có chặn tần suất mỗi dòng |
+| `ejsng.logLens` | `"unknown"` | CodeLens **Log at runtime** trên dòng gán: `unknown` chỉ ở lần gán không suy ra được kiểu (~3% số dòng), `all` ở mọi lần gán (15–18%), `off` tắt |
 | `ejsng.typeHints.nullable` | `true` | Chú thích inline `may be empty` sau biến có lần gán `null`/`undefined`. Hover không có setting. Đổi xong reload window |
 | `ejsng.include` / `exclude` | | Glob quét file |
 

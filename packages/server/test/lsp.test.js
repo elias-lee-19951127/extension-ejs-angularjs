@@ -484,7 +484,7 @@ test('LSP: a "Log at runtime" link beside an assignment the index could not type
     line: 1,
     character: after - ctrl.indexOf('\n') - 1,
     expression: '$scope.stats',
-    logMessage: '$scope.stats = {$scope.stats}',
+    logMessage: 'stats = {$scope.stats}',
   });
   // Not a statement of its own (`return … = …`): nowhere "right after" it to log — named, no link.
   const picked = await vscodeLike.hoverAt('picked }}');
@@ -498,4 +498,31 @@ test('LSP: a "Log at runtime" link beside an assignment the index could not type
   const plain = await other.hoverAt('stats }}');
   assert.match(plain, /_Could not be inferred — assigned from_ `res\.data`/, plain);
   assert.doesNotMatch(plain, /Log at runtime|command:/, plain);
+});
+
+test('LSP: ejsng/logTargets lists where a logpoint can be set with its message already written', async (t) => {
+  const { conn, root, open } = await startServer(t);
+  mkdirSync(join(root, 'lens'), { recursive: true });
+  const ctrl =
+    "myApp.controller('LensCtrl', function ($scope, $http) {\n" +
+    '  $scope.rows = [];\n' +
+    "  $http.get('/rows').then(function (res) { $scope.rows = res.data; });\n" +
+    '});\n';
+  writeFileSync(join(root, 'lens', 'ctrl.js'), ctrl);
+  notifyWatched(conn, root, ['lens', CREATED]);
+  const doc = open('lens/ctrl.js', 'javascript');
+
+  const { targets } = await conn.sendRequest('ejsng/logTargets', { uri: doc.uri });
+  assert.deepStrictEqual(
+    targets.map((t) => [t.lensLine, t.line, t.expression, t.logMessage, t.inferred]),
+    [
+      [1, 1, '$scope.rows', 'rows = {$scope.rows}', true],
+      [2, 2, '$scope.rows', 'rows = {$scope.rows}', false],
+    ],
+  );
+  // The position is inside the one-line callback, right after `res.data;`.
+  assert.strictEqual(ctrl.split('\n')[2].slice(targets[1].character - 9, targets[1].character), 'res.data;');
+
+  const { targets: none } = await conn.sendRequest('ejsng/logTargets', { uri: 'file:///nowhere/x.js' });
+  assert.deepStrictEqual(none, []);
 });

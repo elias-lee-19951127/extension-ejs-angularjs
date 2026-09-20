@@ -507,6 +507,32 @@ second one (same file, line and column; a disabled one is turned back on).
 Covered end to end in a real VS Code: the link taken from the hover, the trusted markdown, the logpoint at the
 right column, and the `columnNumber` reaching the runtime.
 
+#### 5.3.5 A CodeLens that sets the logpoint (2026-09-20)
+
+Spec: `.scratch/log-lens/spec.md`. **VS Code has no API to prefill its own *Add Logpoint…* box**, so sparing the
+developer the typing means the extension has to create the logpoint itself. The place to click is a CodeLens on
+the line that assigns a scope variable; the message (`rows = {$scope.rows}`) and the position (right after the
+statement, see 5.3.3) both come from the index.
+
+**Where it shows by default — measured on `smart-city`:**
+
+| A lens on | `product2/…/index.js` (1568 lines) | `new-version-2/new-index.js` (845 lines) | Whole repo |
+|---|---|---|---|
+| every assignment to a scope | 240 (15%) | 143 (17%) | 587 |
+| only assignments the index **cannot type** | 46 (2.9%) | 26 (3.1%) | 105 |
+
+Each lens takes a display line, so "every assignment" makes a controller ~15% longer to read. The default is
+`ejsng.logLens = "unknown"`: the assignments the index gave up on, which is where logging teaches something.
+`all` and `off` are there for those who want them.
+
+**The lenses are built client-side**, from positions the server returns through `ejsng/logTargets`. Only the
+client knows which logpoints already exist (so the lens can read *Logging rows — click to remove* and remove it)
+and what the setting currently is (so changing it needs no reload). The server remains the only place that knows
+where "right after the statement" is.
+
+The lens and the hover link now write the **same** message (`rows = {$scope.rows}`); the hover used to write
+`$scope.rows = {…}`, so the two would have produced different logpoints at the same position.
+
 #### 5.3.4 Logged objects and arrays, shown as themselves (2026-09-20)
 
 Spec: `.scratch/expand-log-values/spec.md`. `console.log('rows', $scope.rows)` with an array of 150 objects used
