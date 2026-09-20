@@ -623,6 +623,8 @@ interface RuntimeLogNotification {
   severity: 'log' | 'warning' | 'error';
   source?: string;
   endpoint?: string;
+  /** expand-log-values: set while the server still holds this value's handles. */
+  logId?: number;
 }
 
 /** ANSI theme colors so the decoration matches the severity at a glance, in any color theme. */
@@ -635,7 +637,13 @@ const SEVERITY_COLOR: Record<RuntimeLogEntry['severity'], string> = {
 /** The hover for one line: where the latest value came from, the value in full, then the earlier ones. */
 function runtimeLogHover(line: RuntimeLogLine): vscode.MarkdownString {
   const latest = line.history[0]!;
-  const md = new vscode.MarkdownString().appendText(formatRuntimeLogHoverTitle(latest)).appendCodeblock(latest.value, 'text');
+  const md = new vscode.MarkdownString().appendText(formatRuntimeLogHoverTitle(latest));
+  // The dug rendering reads as objects; `value` is the runtime's own one-level preview.
+  md.appendCodeblock(latest.expanded ?? latest.value, latest.expanded ? 'js' : 'text');
+  if (latest.logId !== undefined) {
+    const args = encodeURIComponent(JSON.stringify([{ logId: latest.logId, title: logValueTitle(line) }])).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+    md.appendMarkdown(`\n\n[Show full value](command:${SHOW_LOG_VALUE_COMMAND}?${args})\n`);
+  }
   const earlier = formatRuntimeLogHistory(line);
   if (earlier.length > 0) {
     md.appendMarkdown(`\n\n**${line.count} hits** — earlier, most recent first:\n\n`);
@@ -671,12 +679,18 @@ function redrawRuntimeLogDecorations(uri: string): void {
   );
   renderedHovers.set(
     uri,
-    lines.map((l) => ({ line: l.line, title: formatRuntimeLogHoverTitle(l.history[0]!), history: formatRuntimeLogHistory(l) })),
+    lines.map((l) => ({
+      line: l.line,
+      title: formatRuntimeLogHoverTitle(l.history[0]!),
+      history: formatRuntimeLogHistory(l),
+      // The whole markdown, so a test can see the laid-out value and the "Show full value" link.
+      markdown: runtimeLogHover(l).value,
+    })),
   );
 }
 
 /** The hover last drawn per line, per file — like `renderedDecorations`, for tests only. */
-const renderedHovers = new Map<string, Array<{ line: number; title: string; history: string[] }>>();
+const renderedHovers = new Map<string, Array<{ line: number; title: string; history: string[]; markdown: string }>>();
 
 /**
  * What was last handed to `setDecorations`, per file — VS Code offers no API to read decorations
@@ -692,8 +706,8 @@ const renderedDecorations = new Map<string, Array<{ line: number; text: string }
  */
 export interface EjsngTestApi {
   decorations(uri: string): Array<{ line: number; text: string }>;
-  /** The first line of each drawn log's hover — its source, severity and time. */
-  hovers(uri: string): Array<{ line: number; title: string; history: string[] }>;
+  /** Each drawn log's hover: its first line (source, severity, time), its history, and the whole markdown. */
+  hovers(uri: string): Array<{ line: number; title: string; history: string[]; markdown: string }>;
   statusBarText(): string;
   /** The last `status` message posted to the panel's webview, or `undefined` if it never resolved. */
   panelState(): unknown;
@@ -742,7 +756,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     },
     // The hover's "Log at runtime" link (.scratch/log-variable/spec.md #9): trusted for exactly
     // this one command, nothing else a hover's markdown could name.
-    markdown: { isTrusted: { enabledCommands: [LOG_VARIABLE_COMMAND] } },
+    markdown: { isTrusted: { enabledCommands: [LOG_VARIABLE_COMMAND, SHOW_LOG_VALUE_COMMAND] } },
     initializationOptions: {
       // Tells the server it may put that link in hovers — a client that can't run it gets none.
       commands: [LOG_VARIABLE_COMMAND],
@@ -857,6 +871,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     ),
     vscode.commands.registerCommand('ejsng.disconnectRuntime', disconnectRuntime),
     vscode.commands.registerCommand(LOG_VARIABLE_COMMAND, logVariable),
+    vscode.commands.registerCommand(SHOW_LOG_VALUE_COMMAND, showLogValue),
+    vscode.workspace.registerTextDocumentContentProvider(LOG_VALUE_SCHEME, logValueProvider),
     vscode.commands.registerCommand('ejsng.launchBrowser', () => launchBrowser(context, defaultChromeDebugPort())),
     // A split/reopened editor for a file with existing hits starts undecorated otherwise.
     vscode.window.onDidChangeVisibleTextEditors((editors) => {
@@ -893,8 +909,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       source: params.source,
       at: Date.now(),
       ...(params.endpoint ? { endpoint: params.endpoint } : {}),
+      ...(params.logId !== undefined ? { logId: params.logId } : {}),
     });
     redrawRuntimeLogDecorations(params.uri);
+  });
+
+  // expand-log-values: the dig for a log came back — the line's text becomes the readable one.
+  client.onNotification('ejsng/runtimeLogExpanded', (params: { logId: number; inline: string; expanded: string }) => {
+    const uri = runtimeLogState.expand(params.logId, params);
+    if (uri) redrawRuntimeLogDecorations(uri);
   });
 
   // The REAL connecting -> connected/failed transition (ticket 02, item 4) — pushed so the
@@ -929,6 +952,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
 }
 
 const LOG_VARIABLE_COMMAND = 'ejsng.logVariable';
+const SHOW_LOG_VALUE_COMMAND = 'ejsng.showLogValue';
+/** Read-only documents holding a logged value, so VS Code's own JSON folding and search apply. */
+const LOG_VALUE_SCHEME = 'ejsng-log';
+const logValues = new Map<string, string>();
+const logValueChanged = new vscode.EventEmitter<vscode.Uri>();
+const logValueProvider: vscode.TextDocumentContentProvider = {
+  onDidChange: logValueChanged.event,
+  provideTextDocumentContent: (uri) => logValues.get(uri.toString()) ?? 'null',
+};
+
+/** `rows — list.controller.js:36`: what the tab is called, and which line it came from. */
+function logValueTitle(line: RuntimeLogLine): string {
+  const first = (line.history[0]?.value ?? 'value').split(/\s+/)[0]!.slice(0, 40);
+  return `${first} L${line.line + 1}`;
+}
+
+/**
+ * `ejsng.showLogValue` — the hover's "Show full value" link (.scratch/expand-log-values/spec.md #3):
+ * ask the server to dig the whole value, then open it as a read-only JSON tab, where folding,
+ * search and copy are VS Code's own.
+ */
+async function showLogValue(raw: unknown): Promise<void> {
+  const args = raw as { logId?: unknown; title?: unknown } | null;
+  if (!args || typeof args.logId !== 'number') return;
+  const title = typeof args.title === 'string' && args.title.trim() ? args.title.replace(/[/\\:?#]/g, '_') : 'value';
+  const result = await client?.sendRequest<{ json: string; stale: boolean }>('ejsng/expandRuntimeLog', { logId: args.logId });
+  if (!result) return;
+  const uri = vscode.Uri.parse(`${LOG_VALUE_SCHEME}:${encodeURIComponent(title)}.json`);
+  const stale = result.stale ? '// The runtime no longer holds this value — this is as much as was kept.\n' : '';
+  logValues.set(uri.toString(), stale + result.json);
+  logValueChanged.fire(uri);
+  const doc = await vscode.workspace.openTextDocument(uri);
+  await vscode.languages.setTextDocumentLanguage(doc, result.stale ? 'jsonc' : 'json');
+  await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+}
 
 /**
  * `ejsng.logVariable` — the hover's "Log at runtime" link (.scratch/log-variable/spec.md): an

@@ -89,6 +89,8 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
   });
   const state = { socket: null, scriptsDelivered: false, closed: false };
   const commands = [];
+  /** objectId -> the property descriptors `Runtime.getProperties` answers with. */
+  const objects = new Map();
   let nextBreakpoint = 1;
   const wss = new WebSocketServer({ server });
   wss.on('connection', (socket, req) => {
@@ -126,6 +128,8 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
   function resultFor(msg) {
     if (msg.method === 'Debugger.getScriptSource') return scriptSource(msg);
     if (msg.method === 'Debugger.setBreakpointByUrl') return { breakpointId: `bp${nextBreakpoint++}`, locations: [] };
+    // expand-log-values: the properties of an object this runtime "holds", as V8 would answer.
+    if (msg.method === 'Runtime.getProperties') return { result: objects.get(msg.params.objectId) ?? [] };
     return {};
   }
   function scriptSource(msg) {
@@ -147,6 +151,52 @@ async function startFakeRuntime({ id = 'target', title = 'node app', scripts = [
      * `value` may be an array: one string argument each. `logpointId` puts that logpoint's
      * condition frame on top of the stack, the way V8 reports a logpoint's console call.
      */
+    /**
+     * Log one object argument the runtime "holds": `tree` is plain data, turned into the
+     * `RemoteObject` + `getProperties` answers V8 would give (one level of preview, the rest only
+     * when asked). Returns nothing; the value is found through the log's `logId`.
+     */
+    sendObjectLog(label, tree, { url, line = 0, scriptId }) {
+      let next = 1;
+      const remote = (value) => {
+        if (value === null) return { type: 'object', subtype: 'null', value: null };
+        if (Array.isArray(value) || typeof value === 'object') {
+          const objectId = `obj${next++}`;
+          const entries = Array.isArray(value) ? value.map((v, i) => [String(i), v]) : Object.entries(value);
+          objects.set(
+            objectId,
+            entries.map(([name, v]) => ({ name, value: remote(v), enumerable: true, isOwn: true, configurable: true, writable: true })),
+          );
+          return {
+            type: 'object',
+            ...(Array.isArray(value) ? { subtype: 'array', className: 'Array', description: `Array(${value.length})` } : { className: 'Object', description: 'Object' }),
+            objectId,
+            // One level, like a real console preview: nested objects show no keys at all.
+            preview: {
+              type: 'object',
+              ...(Array.isArray(value) ? { subtype: 'array' } : {}),
+              description: Array.isArray(value) ? `Array(${value.length})` : 'Object',
+              overflow: entries.length > 5,
+              properties: entries.slice(0, 5).map(([name, v]) => ({
+                name,
+                ...(v !== null && typeof v === 'object'
+                  ? { type: 'object', value: Array.isArray(v) ? `Array(${v.length})` : 'Object', ...(Array.isArray(v) ? { subtype: 'array' } : {}) }
+                  : { type: typeof v, value: String(v) }),
+              })),
+            },
+          };
+        }
+        return { type: typeof value, value, description: String(value) };
+      };
+      const frame = { url, lineNumber: line, columnNumber: 0 };
+      if (scriptId) frame.scriptId = scriptId;
+      state.socket.send(
+        JSON.stringify({
+          method: 'Runtime.consoleAPICalled',
+          params: { type: 'log', args: [{ type: 'string', value: label }, remote(tree)], stackTrace: { callFrames: [frame] } },
+        }),
+      );
+    },
     sendLog(value, { url, line = 0, scriptId, logpointId }) {
       const frame = { url, lineNumber: line, columnNumber: 0 };
       if (scriptId) frame.scriptId = scriptId;

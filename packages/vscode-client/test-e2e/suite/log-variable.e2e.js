@@ -26,8 +26,10 @@ test('the hover offers "Log at runtime" for an untyped assignment; the command s
   }, 'the "Log at runtime" link in the hover');
   const { args } = link;
   assert.strictEqual(args.logMessage, '$scope.rows = {$scope.rows}');
-  // Untrusted markdown renders a `command:` link that does nothing when clicked.
-  assert.deepStrictEqual(link.content.isTrusted, { enabledCommands: ['ejsng.logVariable'] });
+  // Untrusted markdown renders a `command:` link that does nothing when clicked. The list is
+  // exactly the extension's own commands — never blanket trust.
+  assert.ok(link.content.isTrusted.enabledCommands.includes('ejsng.logVariable'));
+  assert.ok(link.content.isTrusted.enabledCommands.every((c) => c.startsWith('ejsng.')), JSON.stringify(link.content.isTrusted));
 
   const target = vscode.Uri.parse(args.uri).toString();
   const ours = () => vscode.debug.breakpoints.filter((b) => b.location && b.location.uri.toString() === target && b.logMessage === args.logMessage);

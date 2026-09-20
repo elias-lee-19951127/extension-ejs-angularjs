@@ -499,3 +499,22 @@ test('RuntimeLogState.applyEdit: lines below move with inserted/removed lines; l
   // Typing within one line changes nothing.
   assert.strictEqual(state.applyEdit('file:///a.js', 1, 1, 1), false);
 });
+
+test('expand: the dug rendering replaces the line text in place, and the hover keeps the rest', () => {
+  const state = new RuntimeLogState();
+  state.record('file:///a.js', { line: 3, character: 0, value: 'rows [Object]', severity: 'log', logId: 7 });
+  state.record('file:///a.js', { line: 3, character: 0, value: 'rows [Object]', severity: 'log', logId: 8 });
+  const [line] = state.linesFor('file:///a.js');
+  assert.strictEqual(formatRuntimeLogInline(line), '  » rows [Object] (×2)', 'the preview text until the dig comes back');
+
+  // The newest log is history[0]; an older one expanding must not become the drawn text.
+  assert.strictEqual(state.expand(7, { inline: 'rows [{id: 1}]', expanded: 'rows\n[\n  {id: 1}\n]' }), 'file:///a.js');
+  assert.strictEqual(formatRuntimeLogInline(state.linesFor('file:///a.js')[0]), '  » rows [Object] (×2)');
+  state.expand(8, { inline: 'rows [{id: 2}]', expanded: 'rows\n[\n  {id: 2}\n]' });
+  const expanded = state.linesFor('file:///a.js')[0];
+  assert.strictEqual(formatRuntimeLogInline(expanded), '  » rows [{id: 2}] (×2)');
+  assert.strictEqual(expanded.history[0].expanded, 'rows\n[\n  {id: 2}\n]');
+  assert.strictEqual(expanded.history[1].inline, 'rows [{id: 1}]', 'the older one kept its own');
+
+  assert.strictEqual(state.expand(999, { inline: 'x', expanded: 'x' }), null, 'a log no longer held');
+});

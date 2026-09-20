@@ -10,6 +10,15 @@ export interface RuntimeLogEntry {
   at?: number;
   /** `host:port` of the connection it came from — what a reconnect resets. */
   endpoint?: string;
+  /**
+   * expand-log-values: this log's id on the server, while it still holds the value's handles —
+   * what "Show full value" asks to dig (spec #5).
+   */
+  logId?: number;
+  /** The value with its objects expanded, one line (spec #1); `value` until the dig comes back. */
+  inline?: string;
+  /** The same, laid out over several lines, for the hover (spec #2). */
+  expanded?: string;
 }
 
 /**
@@ -286,6 +295,24 @@ export class RuntimeLogState {
     return [...(this.byUri.get(uri)?.entries() ?? [])].map(([line, l]) => ({ line, history: [...l.history], count: total(l) }));
   }
 
+  /**
+   * expand-log-values: the dig for `logId` came back. The log was drawn first with its preview
+   * text, so this only replaces that text — in place, wherever it ended up in the history.
+   * Returns the file to redraw, or `null` when that log is no longer held.
+   */
+  expand(logId: number, rendering: { inline: string; expanded: string }): string | null {
+    for (const [uri, lines] of this.byUri) {
+      for (const state of lines.values()) {
+        const entry = state.history.find((e) => e.logId === logId);
+        if (!entry) continue;
+        entry.inline = rendering.inline;
+        entry.expanded = rendering.expanded;
+        return uri;
+      }
+    }
+    return null;
+  }
+
   /** Drop all state for a file. */
   clear(uri: string): void {
     this.byUri.delete(uri);
@@ -341,7 +368,9 @@ export class RuntimeLogState {
 
 /** The inline text for a line: its latest value, and how many hits when there were several. */
 export function formatRuntimeLogInline(line: RuntimeLogLine): string {
-  const value = line.history[0]?.value ?? '';
+  const latest = line.history[0];
+  // The expanded rendering when the dig has come back, the preview text until then.
+  const value = latest?.inline ?? latest?.value ?? '';
   return line.count > 1 ? `  » ${value} (×${line.count})` : `  » ${value}`;
 }
 

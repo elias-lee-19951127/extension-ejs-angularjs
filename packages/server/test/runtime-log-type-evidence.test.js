@@ -292,3 +292,25 @@ test('LSP + real node --inspect: logging in a loop is rate limited per line, and
   assert.deepStrictEqual(quiet.expanded, []);
   assert.strictEqual(quiet.runtimeLogs[0].logId, undefined, 'nothing to ask to expand');
 });
+
+test('LSP + real node --inspect: ejsng/expandRuntimeLog digs the whole value as JSON, and says when the runtime lost it', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-expand-full-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { conn, runtimeLogs, expanded } = await startWithLogs(t, root);
+  await waitFor(() => expanded.length > 0, 'a log whose value the server still holds');
+
+  const logId = expanded[0].logId;
+  const full = await conn.sendRequest('ejsng/expandRuntimeLog', { logId });
+  assert.strictEqual(full.stale, false);
+  const parsed = JSON.parse(full.json);
+  assert.ok(Array.isArray(parsed), 'two arguments: the label and the array');
+  assert.strictEqual(parsed[0], 'rows');
+  assert.strictEqual(parsed[1].length, 150, 'every element, not a sample');
+  assert.deepStrictEqual(parsed[1][149], { id: 149, title: 'Sensor 149', owner: { id: 7, name: 'ops' } });
+  // Deeper than what was dug at draw time: `owner` is an object there, not "[not expanded]".
+  const drawn = runtimeLogs.find((l) => l.logId === logId);
+  assert.ok(drawn);
+
+  const unknown = await conn.sendRequest('ejsng/expandRuntimeLog', { logId: 999999 });
+  assert.deepStrictEqual(unknown, { json: 'null', stale: true });
+});

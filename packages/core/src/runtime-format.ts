@@ -229,6 +229,13 @@ export function formatRuntimeValueJson(value: RuntimeValue, limits: FormatValueL
  * Compact text, stopping when `budget.left` runs out: the parts that did not fit join the `…+N`
  * at the end of their own object or array, so the brackets always close.
  */
+/** A console call's arguments as one JSON document: the value itself, or an array of them. */
+export function formatRuntimeArgsJson(values: RuntimeValue[], limits: FormatValueLimits = JSON_VALUE_LIMITS): string {
+  if (values.length === 1) return formatRuntimeValueJson(values[0]!, limits);
+  const share = { ...limits, maxLength: Math.max(1000, Math.floor(limits.maxLength / Math.max(1, values.length))) };
+  return `[\n${values.map((v) => formatRuntimeValueJson(v, share).replace(/^/gm, '  ')).join(',\n')}\n]`;
+}
+
 function writeCompact(n: Node, budget: { left: number }): string {
   if (n.kind === 'scalar') {
     budget.left -= n.text.length;

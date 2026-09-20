@@ -33,6 +33,7 @@ import {
   Workspace,
   digRuntimeValue,
   formatRuntimeArgsInline,
+  formatRuntimeArgsJson,
   formatRuntimeArgsPretty,
   parseLogMessage,
   RuntimeEvidenceStore,
@@ -1186,6 +1187,28 @@ function expandLoggedValue(key: string, info: RuntimeLogConnectionInfo, log: Par
     });
   });
 }
+
+/** How far "Show full value" digs (spec #3) — everything, within reason, and only when asked. */
+const FULL_DIG_LIMITS = { depth: 6, keys: 50, samples: 200, requests: 200 };
+
+/**
+ * expand-log-values (spec #3, #5): the whole value behind a drawn log, as JSON for the tab that
+ * opens on "Show full value". Dug only now, and only this once. `stale` when the runtime no longer
+ * holds the objects (the page navigated, the console was cleared, the connection went): what comes
+ * back is then only as much as the preview still carries, and the client says so.
+ */
+connection.onRequest('ejsng/expandRuntimeLog', async (params: { logId?: number }) => {
+  const logId = params?.logId;
+  if (typeof logId !== 'number') return { json: 'null', stale: true };
+  const entry = [...runtimeLogConnections.values()].find((info) => info.loggedArgs.has(logId));
+  if (!entry) return { json: 'null', stale: true };
+  const args = entry.loggedArgs.get(logId)!;
+  const dug = await Promise.all(args.map((arg) => digRuntimeValue(arg, getPropertiesOn(entry), FULL_DIG_LIMITS)));
+  // A handle the runtime has released answers nothing, so nothing was dug where something should
+  // have been — that, not an error, is how a released value shows up.
+  const stale = dug.some((d, i) => args[i]!.objectId !== undefined && d.value.properties === undefined);
+  return { json: formatRuntimeArgsJson(dug.map((d) => d.value)), stale };
+});
 
 /** `Runtime.getProperties` on one connection, as `digRuntimeValue` wants it. */
 function getPropertiesOn(info: RuntimeLogConnectionInfo): (objectId: string) => Promise<unknown> {

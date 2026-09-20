@@ -74,12 +74,20 @@
       {
         "command": "ejsng.logVariable",
         "title": "EJS/NG: Log This Variable at Runtime"
+      },
+      {
+        "command": "ejsng.showLogValue",
+        "title": "EJS/NG: Show Full Logged Value"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "ejsng.logVariable",
+          "when": "false"
+        },
+        {
+          "command": "ejsng.showLogValue",
           "when": "false"
         }
       ]
