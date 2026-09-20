@@ -191,6 +191,26 @@ export function formatRuntimeValuePretty(value: RuntimeValue, limits: FormatValu
 }
 
 /**
+ * A console call's arguments, the way a console prints them: a string argument on its own is text,
+ * not a quoted string, while a string INSIDE a value keeps its quotes. `separator` is the one the
+ * call itself used — a space for `console.log(a, b)`, nothing for a logpoint's message parts.
+ */
+export function formatRuntimeArgsInline(values: RuntimeValue[], separator: string, limits: FormatValueLimits = INLINE_VALUE_LIMITS): string {
+  const share = { ...limits, maxLength: Math.max(40, Math.floor(limits.maxLength / Math.max(1, values.length))) };
+  return cut(values.map((v) => bareString(v) ?? formatRuntimeValueInline(v, share)).join(separator), limits.maxLength);
+}
+
+/** The same arguments for a hover: each on its own, laid out, blank line between them. */
+export function formatRuntimeArgsPretty(values: RuntimeValue[], limits: FormatValueLimits = HOVER_VALUE_LIMITS): string {
+  return cut(values.map((v) => bareString(v) ?? formatRuntimeValuePretty(v, limits)).join('\n\n'), limits.maxLength);
+}
+
+/** A top-level string argument, as text. `null` for anything else. */
+function bareString(value: RuntimeValue): string | null {
+  return value.object.type === 'string' ? String(value.object.value ?? value.object.description ?? '') : null;
+}
+
+/**
  * Valid JSON for the tab that opens on "Show full value" — so VS Code's own folding, search and
  * copy work on it. What JSON can't hold becomes a string: `"[Function: f]"`, `"[Circular]"`,
  * `"[getter]"`, `"undefined"`, `"[not expanded]"`.

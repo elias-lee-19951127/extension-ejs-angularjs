@@ -192,6 +192,11 @@
           "default": 9222,
           "description": "--remote-debugging-port the panel's 'Launch browser' button starts the browser with, and connects to."
         },
+        "ejsng.runtimeLog.expandValues": {
+          "type": "boolean",
+          "default": true,
+          "description": "Expand objects and arrays in inline runtime logs, instead of showing [Object]. Asks the running app for the value's properties, rate limited per line."
+        },
         "ejsng.runtimeLog.logpoints": {
           "type": "boolean",
           "default": true,

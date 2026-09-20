@@ -15,7 +15,7 @@ const rpc = require('vscode-jsonrpc/node');
 
 const SERVER = join(__dirname, '..', 'dist', 'index.js');
 
-async function startServer(t, root) {
+async function startServer(t, root, initializationOptions = undefined) {
   const child = spawn(process.execPath, [SERVER, '--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] });
   const conn = rpc.createMessageConnection(new rpc.StreamMessageReader(child.stdout), new rpc.StreamMessageWriter(child.stdin));
   const runtimeLogs = [];
@@ -42,6 +42,7 @@ async function startServer(t, root) {
     rootUri,
     workspaceFolders: [{ uri: rootUri, name: 'tmp' }],
     capabilities: {},
+    initializationOptions,
   });
   conn.sendNotification('initialized', {});
   await conn.sendRequest('ejsng/stats');
@@ -55,6 +56,15 @@ async function waitForStatus(conn, predicate, timeoutMs = 5000) {
     if (predicate(status)) return status;
     if (Date.now() - start > timeoutMs) throw new Error(`timed out; last status: ${JSON.stringify(status)}`);
     await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+}
+
+async function waitFor(predicate, what, timeoutMs = 8000) {
+  const start = Date.now();
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
 
@@ -224,4 +234,61 @@ test('LSP + real node --inspect: a logpoint at a column right after an assignmen
   conn.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: 'javascript', version: 1, text: ONE_LINER } });
   const hover = await conn.sendRequest('textDocument/hover', { textDocument: { uri }, position: positionOf(ONE_LINER, 'rows = res', 1) });
   assert.match(hover.contents.value, /```ts\n\{ id: number \}\[\]\n```/, hover.contents.value);
+});
+
+// ---------------------------------------------------------------- expand-log-values ticket 02
+
+const LOOPING = [
+  'var rows = Array.from({ length: 150 }, function (_, i) { return { id: i, title: "Sensor " + i, owner: { id: 7, name: "ops" } }; });',
+  'setInterval(function () {',
+  '  console.log("rows", rows);',
+  '}, 30);',
+  '',
+].join('\n');
+
+async function startWithLogs(t, root, options) {
+  writeFileSync(join(root, 'loop.js'), LOOPING);
+  const { port } = await startInspectedNode(t, root, 'loop.js');
+  const { conn, runtimeLogs } = await startServer(t, root, options);
+  const expanded = [];
+  conn.onNotification('ejsng/runtimeLogExpanded', (p) => expanded.push(p));
+  assert.strictEqual((await conn.sendRequest('ejsng/connectRuntime', { host: '127.0.0.1', port })).status, 'connected');
+  return { conn, runtimeLogs, expanded };
+}
+
+test('LSP + real node --inspect: a logged array of objects is expanded into readable text, without delaying the log', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-expand-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { runtimeLogs, expanded } = await startWithLogs(t, root);
+
+  await waitFor(() => expanded.length > 0, 'the expanded rendering');
+  // The log itself was drawn first, unexpanded. (V8 replays the console entries buffered before
+  // the client attached, and a replayed one carries no preview at all — hence `Array(150)` there.)
+  const drawn = runtimeLogs.find((l) => l.logId === expanded[0].logId);
+  assert.ok(drawn, 'the expansion belongs to a log that was already drawn');
+  assert.match(drawn.value, /^rows (\[Object|Array\(150\))/, drawn.value);
+
+  const first = expanded[0];
+  assert.doesNotMatch(first.inline, /\bObject\b/, first.inline);
+  assert.match(first.inline, /^rows \[\{id: 0, title: 'Sensor 0', owner: \{…\}\}/, first.inline);
+  assert.ok(first.inline.length <= 210, `${first.inline.length} characters`);
+  assert.match(first.expanded, /owner: \{\n\s+id: 7,\n\s+name: 'ops'\n\s+\}/, first.expanded);
+});
+
+test('LSP + real node --inspect: logging in a loop is rate limited per line, and the setting turns it off', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-expand-rate-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { runtimeLogs, expanded } = await startWithLogs(t, root);
+
+  await waitFor(() => runtimeLogs.length >= 30, 'plenty of logs from the same line');
+  // ~30 logs/second from one line over ~1 s: at one dig per 300 ms, a handful of expansions.
+  assert.ok(expanded.length <= 1 + Math.ceil(runtimeLogs.length / 9), `${expanded.length} expansions for ${runtimeLogs.length} logs`);
+
+  const off = mkdtempSync(join(tmpdir(), 'ejsng-expand-off-'));
+  t.after(() => rmSync(off, { recursive: true, force: true }));
+  const quiet = await startWithLogs(t, off, { runtimeLog: { expandValues: false } });
+  await waitFor(() => quiet.runtimeLogs.length >= 5, 'logs with expanding turned off');
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.deepStrictEqual(quiet.expanded, []);
+  assert.strictEqual(quiet.runtimeLogs[0].logId, undefined, 'nothing to ask to expand');
 });

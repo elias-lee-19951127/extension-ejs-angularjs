@@ -32,10 +32,13 @@ import {
   offsetForLocation,
   Workspace,
   digRuntimeValue,
+  formatRuntimeArgsInline,
+  formatRuntimeArgsPretty,
   parseLogMessage,
   RuntimeEvidenceStore,
   typeOfRuntimeValue,
   typeSignature,
+  type RemoteObject,
   type ScopeTarget,
   type Config,
   type ObservedTypeResult,
@@ -99,6 +102,15 @@ let nullableHintsEnabled = true;
  * link. Only a client that says so — elsewhere (IntelliJ) the link would be dead.
  */
 let logVariableLinks = false;
+/** `ejsng.runtimeLog.expandValues` — dig logged objects so they read as objects (expand-log-values spec #10). */
+let expandLogValues = true;
+/** How far a drawn log is dug (spec #4): enough for the inline line and the hover, not the whole tree. */
+const DRAW_DIG_LIMITS = { depth: 3, keys: 30, samples: 10, requests: 40 };
+/** One dig per line per this many ms — a hot loop must not flood the runtime (spec #4). */
+const EXPAND_INTERVAL_MS = 300;
+/** Drawn logs whose arguments are kept for "Show full value" (spec #5). */
+const MAX_LOGGED_ARGS = 200;
+let nextLogId = 1;
 
 /**
  * Real connection lifecycle (ticket 02, item 4): the panel used to report `connected` the
@@ -185,6 +197,14 @@ interface RuntimeLogConnectionInfo {
    * as long as the connection: replaced on reconnect, dropped on disconnect, cleared on failure.
    */
   typeEvidence: RuntimeEvidenceStore;
+  /**
+   * expand-log-values — the arguments of recently drawn logs, by `logId`, so "Show full value" can
+   * dig them further (spec #5). Only the handles; the runtime holds the objects, and both go when
+   * the connection does.
+   */
+  loggedArgs: Map<number, RemoteObject[]>;
+  /** When each `(file, line)` was last dug, so a hot loop can't flood the runtime (spec #4). */
+  lastExpandedAt: Map<string, number>;
 }
 
 /** What `applyLogpoints` has set on one connection, so the next call can take it all back. */
@@ -252,6 +272,7 @@ connection.onInitialize((params): InitializeResult => {
     typeHints?: { nullable?: boolean };
     commands?: unknown;
     runtimeLog?: {
+      expandValues?: boolean;
       pathMappings?: PathMapping[];
       skipFrames?: string[];
       environment?: { remoteName?: string | null; clientPlatform?: string | null };
@@ -260,6 +281,7 @@ connection.onInitialize((params): InitializeResult => {
   diagnosticsEnabled = settings.diagnostics?.enabled ?? false;
   nullableHintsEnabled = settings.typeHints?.nullable ?? true;
   logVariableLinks = Array.isArray(settings.commands) && settings.commands.includes('ejsng.logVariable');
+  expandLogValues = settings.runtimeLog?.expandValues ?? true;
   // `${workspaceFolder}` is expanded once, here, where the root is known — a mapping's `local` can
   // then be committed to a repo's settings instead of hardcoding one machine's absolute path
   // (ticket 05, item 3). An absolute `local` contains no variable and comes back unchanged.
@@ -993,7 +1015,11 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
   info.state = state;
   info.reason = reason;
   // What a dead connection saw is no longer being seen (observed-types-r1 decision #6).
-  if (state === 'failed') info.typeEvidence.clear();
+  if (state === 'failed') {
+    info.typeEvidence.clear();
+    info.loggedArgs.clear();
+    info.lastExpandedAt.clear();
+  }
   void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason, endpoint: info.meta.endpoint });
 }
 
@@ -1108,10 +1134,14 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
   if (!inWorkspace && info.outsideWorkspaceDirs.size < MAX_OUTSIDE_WORKSPACE_DIRS) {
     info.outsideWorkspaceDirs.add(dirname(hostPath));
   }
+  // expand-log-values: the id is what a later `ejsng/runtimeLogExpanded` and "Show full value"
+  // refer to. Only when expanding is on — otherwise there is nothing to ask for.
+  const logId = expandLogValues ? nextLogId++ : undefined;
   void connection.sendNotification('ejsng/runtimeLog', {
     uri: inWorkspace ? workspaceUri(workspace, relPath) : URI.file(hostPath).toString(),
     range: toRange(source, { start: offset, end: offset }),
     value: stripAnsi(log.value),
+    ...(logId !== undefined ? { logId } : {}),
     severity: log.severity,
     // Which connection this came from — with two containers running the same code, the same
     // line can be hit by either, and the hover is where the user tells them apart.
@@ -1120,6 +1150,46 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
     endpoint: info.meta.endpoint,
   });
   if (inWorkspace) collectTypeEvidence(key, info, log, relPath, offset);
+  if (logId !== undefined) expandLoggedValue(key, info, log, logId, `${relPath}\u0000${frame.lineNumber}`);
+}
+
+/**
+ * expand-log-values (spec #1, #2, #4): a CDP preview stops at one level, so an object inside a
+ * logged value reads `[Object]`. Dig the arguments and send the readable renderings as a second
+ * notification for the same `logId` — the log itself was already drawn, so nothing waits for the
+ * runtime to answer, and the line simply gets better text a few milliseconds later.
+ *
+ * Rate limited per line: a log inside a hot loop must not turn into hundreds of CDP calls a second.
+ * A skipped one still draws, with the preview text it always had.
+ */
+function expandLoggedValue(key: string, info: RuntimeLogConnectionInfo, log: ParsedConsoleLog, logId: number, line: string): void {
+  const expandable = log.args.filter((a) => typeof a.objectId === 'string');
+  if (!expandable.length) return; // primitives already read fine
+  const now = Date.now();
+  const last = info.lastExpandedAt.get(line);
+  if (last !== undefined && now - last < EXPAND_INTERVAL_MS) return;
+  info.lastExpandedAt.set(line, now);
+  if (info.lastExpandedAt.size > MAX_LOGGED_ARGS) {
+    for (const [k, at] of info.lastExpandedAt) if (now - at >= EXPAND_INTERVAL_MS) info.lastExpandedAt.delete(k);
+  }
+  // Kept for "Show full value", which digs deeper on demand (spec #5).
+  info.loggedArgs.set(logId, log.args);
+  if (info.loggedArgs.size > MAX_LOGGED_ARGS) info.loggedArgs.delete(info.loggedArgs.keys().next().value!);
+
+  const separator = log.logpointId !== undefined ? '' : ' ';
+  void Promise.all(log.args.map((arg) => digRuntimeValue(arg, getPropertiesOn(info), DRAW_DIG_LIMITS))).then((dug) => {
+    if (runtimeLogConnections.get(key) !== info) return;
+    void connection.sendNotification('ejsng/runtimeLogExpanded', {
+      logId,
+      inline: stripAnsi(formatRuntimeArgsInline(dug.map((d) => d.value), separator)),
+      expanded: stripAnsi(formatRuntimeArgsPretty(dug.map((d) => d.value))),
+    });
+  });
+}
+
+/** `Runtime.getProperties` on one connection, as `digRuntimeValue` wants it. */
+function getPropertiesOn(info: RuntimeLogConnectionInfo): (objectId: string) => Promise<unknown> {
+  return (objectId) => info.request('Runtime.getProperties', { objectId, ownProperties: true, generatePreview: true });
 }
 
 /**
@@ -1150,9 +1220,7 @@ function collectTypeEvidence(key: string, info: RuntimeLogConnectionInfo, log: P
     // then `null`) must be dug and recorded, not counted as more of the first. The preview costs no request.
     const place = `${relPath}\u0000${offset}\u0000${i}\u0000${typeSignature(typeOfRuntimeValue({ object: arg }))}`;
     if (!info.typeEvidence.claim(place, Date.now())) return;
-    const getProperties = (objectId: string): Promise<unknown> =>
-      info.request('Runtime.getProperties', { objectId, ownProperties: true, generatePreview: true });
-    void digRuntimeValue(arg, getProperties).then(({ value }) => {
+    void digRuntimeValue(arg, getPropertiesOn(info)).then(({ value }) => {
       if (runtimeLogConnections.get(key) !== info) return;
       info.typeEvidence.record(place, target, typeOfRuntimeValue(value), site, Date.now());
     });
@@ -1196,6 +1264,8 @@ function startRuntimeLogConnection(
     request: () => Promise.resolve(null), // replaced right below, before any callback fires
     logpoints: { generation: 0, breakpointIds: [], regexes: [], exactUrls: new Set() },
     typeEvidence: new RuntimeEvidenceStore(runtimeSourceLabel(meta)),
+    loggedArgs: new Map(),
+    lastExpandedAt: new Map(),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a

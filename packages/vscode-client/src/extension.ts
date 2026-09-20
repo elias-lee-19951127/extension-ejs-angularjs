@@ -756,6 +756,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       diagnostics: { enabled: cfg.get('diagnostics.enabled') },
       typeHints: { nullable: cfg.get('typeHints.nullable') },
       runtimeLog: {
+        expandValues: cfg.get('runtimeLog.expandValues'),
         pathMappings: cfg.get('runtimeLog.pathMappings'),
         skipFrames: cfg.get('runtimeLog.skipFrames'),
         // Ticket 09, decision #15: only the client knows where it runs; the server never guesses.

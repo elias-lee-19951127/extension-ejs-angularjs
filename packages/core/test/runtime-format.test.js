@@ -133,3 +133,13 @@ test('$$hashKey and other Angular noise never appears', async (t) => {
   const { runtimeValue } = await dug(t, [{ $$hashKey: 'object:3', id: 1 }]);
   assert.strictEqual(C.formatRuntimeValueInline(runtimeValue), '[{id: 1}]');
 });
+
+test('a string argument prints as text; a string inside a value keeps its quotes', async (t) => {
+  const { arg: label } = await logged(t, 'rows');
+  const { runtimeValue } = await dug(t, [{ title: 'Sensor 0' }]);
+  const args = [{ object: label }, runtimeValue];
+  assert.strictEqual(C.formatRuntimeArgsInline(args, ' '), "rows [{title: 'Sensor 0'}]");
+  assert.strictEqual(C.formatRuntimeArgsPretty(args).split('\n')[0], 'rows');
+  // A logpoint's parts carry their own spacing, so they join with nothing.
+  assert.strictEqual(C.formatRuntimeArgsInline([{ object: label }, { object: label }], ''), 'rowsrows');
+});
