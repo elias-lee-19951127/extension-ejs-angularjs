@@ -526,3 +526,50 @@ test('LSP: ejsng/logTargets lists where a logpoint can be set with its message a
   const { targets: none } = await conn.sendRequest('ejsng/logTargets', { uri: 'file:///nowhere/x.js' });
   assert.deepStrictEqual(none, []);
 });
+
+test('LSP: ejsng/logHere answers what the cursor asks to log, or why it cannot', async (t) => {
+  const { conn, root, open } = await startServer(t);
+  mkdirSync(join(root, 'here'), { recursive: true });
+  const ctrl =
+    "myApp.controller('HereCtrl', function ($scope, $http) {\n" +
+    "  $http.get('/rows').then(function (res) {\n" +
+    '    var local = res.data;\n' +
+    '    $scope.rows = local;\n' +
+    '  });\n' +
+    '  $scope.reload = function () { load(); };\n' +
+    '});\n';
+  writeFileSync(join(root, 'here', 'ctrl.js'), ctrl);
+  notifyWatched(conn, root, ['here', CREATED]);
+  const doc = open('here/ctrl.js', 'javascript');
+  const ask = (needle, offset = 0, selection) => {
+    const idx = ctrl.indexOf(needle) + offset;
+    const before = ctrl.slice(0, idx);
+    return conn.sendRequest('ejsng/logHere', {
+      uri: doc.uri,
+      line: before.split('\n').length - 1,
+      character: idx - before.lastIndexOf('\n') - 1,
+      selection,
+    });
+  };
+
+  // A local read by the line: logged at the start of that line, before it runs.
+  const local = await ask('local;', 0);
+  assert.deepStrictEqual(
+    [local.target.line, local.target.expression, local.target.logMessage],
+    [3, 'local', 'local = {local}'],
+  );
+  assert.strictEqual(ctrl.split('\n')[3].slice(local.target.character, local.target.character + 6), '$scope');
+
+  // The assignment target: logged right after the statement, so the value is the new one.
+  const rows = await ask('$scope.rows = local', 2);
+  assert.strictEqual(ctrl.split('\n')[rows.target.line].slice(rows.target.character - 6, rows.target.character), 'local;');
+  assert.strictEqual(rows.target.logMessage, 'rows = {$scope.rows}');
+  assert.match(rows.target.uri, /here\/ctrl\.js$/);
+
+  // A selection wins over the cursor.
+  const selected = await ask('res.data;', 0, 'res.data');
+  assert.strictEqual(selected.target.logMessage, 'data = {res.data}');
+
+  assert.deepStrictEqual(await ask('load();', 0), { reason: 'call' });
+  assert.deepStrictEqual(await conn.sendRequest('ejsng/logHere', { uri: 'file:///x/page.html', line: 0, character: 0 }), { reason: 'not-js' });
+});

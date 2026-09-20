@@ -533,6 +533,18 @@ where "right after the statement" is.
 The lens and the hover link now write the **same** message (`rows = {$scope.rows}`); the hover used to write
 `$scope.rows = {…}`, so the two would have produced different logpoints at the same position.
 
+**A context menu entry and a keybinding** (`.scratch/log-here/spec.md`): the lens only reaches assignments to a
+scope, while the values worth watching are often a local, a parameter, `res.data`. The `ejsng.logHere` command —
+on the editor's context menu and on `Cmd+Alt+L` / `Ctrl+Alt+L` — logs **what the cursor is on**, in order: the
+selection, the property chain under the cursor, what the line assigns. Placement: after the statement for that
+statement's assignment target, at the start of the line otherwise (the value the line is about to use). Doing it
+again in the same place removes it, and all three affordances write the same message, so they never collide.
+
+**It refuses rather than guessing:** pointing at a call (`load()`, including at the name being called) is
+refused, because `{load()}` would **run the function** on every hit; `this` inside a nested non-arrow function is
+refused with a hint to use `vm` or `$scope`, since `this` there is no longer the controller. Each reason has its
+own code, which the client turns into a sentence.
+
 #### 5.3.4 Logged objects and arrays, shown as themselves (2026-09-20)
 
 Spec: `.scratch/expand-log-values/spec.md`. `console.log('rows', $scope.rows)` with an array of 150 objects used

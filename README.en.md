@@ -203,6 +203,19 @@ out; **Show full value** opens a read-only JSON tab with the whole thing, where 
 Code's own. Measured against a real Chrome page logging 33 times a second: the app runs **exactly as fast** as
 with the feature off. Turn it off with `ejsng.runtimeLog.expandValues`.
 
+### Three ways to set a logpoint, none of them typing
+
+| Way | When |
+|---|---|
+| The **CodeLens** above an assignment | reading a controller, after the value it just assigned |
+| **Right-click → EJS/NG: Log This at Runtime** | any line, any expression: a local, a parameter, `res.data` |
+| **`Cmd+Alt+L`** (`Ctrl+Alt+L` on Windows/Linux) | the same, once it's in your fingers |
+
+All three produce the **same** logpoint: the message `rows = {$scope.rows}`, placed right after the assignment
+(so the value is the new one) or at the start of the line (so it is the value the line is about to use). Doing it
+again in the same place removes it. The extension **refuses, with a reason**, to log a function call (which would
+run on every hit) or `this` inside a callback (which is no longer the controller).
+
 ## Trying "Log at runtime"
 
 [`examples/log-at-runtime/`](examples/log-at-runtime/README.md) is a controller that runs under plain

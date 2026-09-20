@@ -46,6 +46,13 @@ Toàn bộ các bước trên đã được chạy tự động một lần (kh�
 đặt logpoint đúng bằng tham số mà link mang, nối `node --inspect`, 8 log được vẽ, 4 bằng chứng kiểu, và hover
 ra đúng các dòng nêu trên. Phần duy nhất chỉ bạn kiểm được là **bấm chuột vào link** và các nút của thông báo.
 
+## Log một biến cục bộ bằng phím tắt
+
+7b. Trong `list.controller.js`, đặt con trỏ vào `res.data.rows` ở dòng `$scope.rows = res.data.rows;` rồi bấm
+    **`Cmd+Alt+L`** (`Ctrl+Alt+L` trên Windows/Linux) — hoặc chuột phải → *EJS/NG: Log This at Runtime*.
+    Logpoint `rows = {res.data.rows}` xuất hiện ở đầu dòng đó; bấm lại thì gỡ. Thử trỏ vào `fakeGet(...)`:
+    extension từ chối và nói vì sao (log một lời gọi sẽ gọi hàm đó thật mỗi lần dòng chạy).
+
 ## Xem giá trị log đầy đủ
 
 `list.controller.js` có sẵn một `console.log('rows', $scope.rows)`. Khi đang nối runtime:

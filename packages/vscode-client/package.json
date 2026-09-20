@@ -78,9 +78,28 @@
       {
         "command": "ejsng.showLogValue",
         "title": "EJS/NG: Show Full Logged Value"
+      },
+      {
+        "command": "ejsng.logHere",
+        "title": "EJS/NG: Log This at Runtime"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ejsng.logHere",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "editorTextFocus && editorLangId == javascript"
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "ejsng.logHere",
+          "when": "editorLangId == javascript",
+          "group": "debug@1"
+        }
+      ],
       "commandPalette": [
         {
           "command": "ejsng.logVariable",

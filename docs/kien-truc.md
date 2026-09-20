@@ -499,6 +499,16 @@ reload). Server vẫn là nơi duy nhất biết "ngay sau câu lệnh" nằm �
 Nội dung logpoint của lens và của link trong hover được **thống nhất** (`rows = {$scope.rows}`) — trước đó hover
 dùng `$scope.rows = {…}`, hai chỗ sinh hai logpoint khác nhau ở cùng một vị trí.
 
+**Chuột phải và phím tắt** (`.scratch/log-here/spec.md`): lens chỉ mọc trên dòng gán vào scope, nhưng thứ hay
+muốn xem lại là biến cục bộ, tham số, `res.data`. Lệnh `ejsng.logHere` — trong menu chuột phải của editor và trên
+`Cmd+Alt+L` / `Ctrl+Alt+L` — log **thứ đang ở dưới con trỏ**, theo thứ tự: phần bôi đen → chuỗi property dưới con
+trỏ → biến được gán trên dòng. Vị trí: vế trái của câu gán → ngay sau câu lệnh; còn lại → đầu dòng (giá trị mà
+dòng sắp dùng). Bấm lại chỗ cũ thì gỡ, và cả ba chỗ bấm sinh cùng một nội dung nên không bao giờ chồng nhau.
+
+**Từ chối chứ không đoán bừa:** trỏ vào một lời gọi (`load()`, kể cả trỏ đúng vào tên hàm) → từ chối, vì
+`{load()}` sẽ **gọi hàm thật** mỗi lần dòng chạy; `this` trong hàm lồng non-arrow → từ chối kèm gợi ý dùng `vm`
+hoặc `$scope`, vì ở đó `this` không còn là controller. Mỗi lý do có mã riêng, client đổi thành câu tiếng Anh.
+
 #### 5.3.4 Log hiện rõ object/array (2026-09-20)
 
 Spec: `.scratch/expand-log-values/spec.md`. `console.log('rows', $scope.rows)` với một mảng 150 object trước đây

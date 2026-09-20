@@ -737,6 +737,22 @@ connection.onRequest('ejsng/logTargets', (params: { uri?: string }) => {
   return { targets: workspace && r ? workspace.logTargets(r) : [] };
 });
 
+/**
+ * log-here: what the cursor is asking to log, and where the logpoint goes — or why it can't
+ * (a call would run on every hit; `this` in a callback is not the controller).
+ */
+connection.onRequest('ejsng/logHere', (params: { uri?: string; line?: number; character?: number; selection?: string }) => {
+  const r = typeof params?.uri === 'string' ? rel(params.uri) : null;
+  const doc = typeof params?.uri === 'string' ? documents.get(params.uri) : undefined;
+  if (!workspace || !r || !r.endsWith('.js')) return { reason: 'not-js' };
+  const source = doc?.getText() ?? workspace.source(r);
+  if (source == null || !Number.isInteger(params.line) || !Number.isInteger(params.character)) return { reason: 'nothing-here' };
+  const offset = offsetForLocation(source, params.line!, params.character!);
+  const result = workspace.logHereAt(r, offset, params.selection);
+  if ('reason' in result) return result;
+  return { target: { ...result.target, uri: workspaceUri(workspace, r) } };
+});
+
 connection.onRequest('ejsng/reindex', () => {
   if (!workspace) return null;
   return workspace.index();

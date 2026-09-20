@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
 import fg from 'fast-glob';
 import type { AttrCandidate, Config, ConsoleCall, FileFacts, ScopeFrame, ScopeTarget, Span, TemplateExpression, TemplateFacts } from '../types';
 import { DEFAULT_CONFIG } from '../types';
-import { consoleCallAt, extractJs, logTargetsIn, scopeTargetAt, type LogTarget } from '../extract/js';
+import { consoleCallAt, extractJs, logHereAt, logTargetsIn, scopeTargetAt, type LogHereResult, type LogTarget } from '../extract/js';
 import { extractTemplate } from '../extract/template';
 import { hashContent, IndexStore, type SymbolRow } from '../index/store';
 import { INDEX_FILENAME, PARSER_VERSION } from '../index/schema';
@@ -721,6 +721,14 @@ export class Workspace implements FactSource, RenameSource {
     const facts = this.facts(relPath);
     const source = this.source(relPath);
     return facts?.kind === 'js' && source !== null ? logTargetsIn(facts, source) : [];
+  }
+
+  /** What to log for a cursor position in a JS file, or why nothing can be (log-here). */
+  logHereAt(relPath: string, offset: number, selection?: string): LogHereResult {
+    const facts = this.facts(relPath);
+    const source = this.source(relPath);
+    if (facts?.kind !== 'js' || source === null) return { reason: 'unparsable' };
+    return logHereAt(source, facts, offset, selection);
   }
 
   /** The scope variable a logpoint expression reads when it runs at `offset` in a JS file (observed-types-r1). */

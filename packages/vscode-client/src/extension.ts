@@ -25,7 +25,7 @@ import {
   type RuntimeStatusSummary,
 } from './runtime-log-state';
 import { logpointsFrom } from './logpoints';
-import { fileNameOf, logLenses, parseLogVariableArgs, planLogVariable, type LogLensMode, type LogTarget } from './log-variable';
+import { fileNameOf, logLenses, parseLogVariableArgs, planLogVariable, type LogLensMode, type LogTarget, type LogVariableArgs } from './log-variable';
 import { RuntimeLogViewProvider } from './runtime-log-view';
 import {
   appUrlForPort,
@@ -872,6 +872,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     vscode.commands.registerCommand('ejsng.disconnectRuntime', disconnectRuntime),
     vscode.commands.registerCommand(LOG_VARIABLE_COMMAND, logVariable),
     vscode.commands.registerCommand(SHOW_LOG_VALUE_COMMAND, showLogValue),
+    vscode.commands.registerCommand(LOG_HERE_COMMAND, logHere),
     vscode.languages.registerCodeLensProvider({ scheme: 'file', language: 'javascript' }, logLensProvider),
     // A lens says whether the line is already logging, so it follows the breakpoints and the setting.
     vscode.debug.onDidChangeBreakpoints(() => logLensChanged.fire()),
@@ -961,6 +962,39 @@ const LOG_VARIABLE_COMMAND = 'ejsng.logVariable';
 const SHOW_LOG_VALUE_COMMAND = 'ejsng.showLogValue';
 /** Read-only documents holding a logged value, so VS Code's own JSON folding and search apply. */
 const LOG_VALUE_SCHEME = 'ejsng-log';
+
+const LOG_HERE_COMMAND = 'ejsng.logHere';
+
+/** Why the server refused, in words — each says what to do instead (log-here spec #4). */
+const LOG_HERE_REASON: Record<string, string> = {
+  call: 'that is a function call — logging it would run it on every hit. Point at a variable instead.',
+  'this-in-callback': '`this` inside a callback is not the controller. Use `vm` or `$scope`.',
+  unparsable: "that selection isn't an expression this can log.",
+  'nothing-here': 'there is no variable here to log.',
+  'not-js': 'logpoints go in .js files; this is not one.',
+};
+
+/**
+ * `ejsng.logHere` — the editor's context menu and `Cmd+Alt+L` (.scratch/log-here/spec.md): log what
+ * the cursor is on. The server decides what and where; this sets (or removes) the logpoint.
+ */
+async function logHere(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !client) return;
+  const { document, selection } = editor;
+  const result = await client.sendRequest<{ target?: LogVariableArgs; reason?: string }>('ejsng/logHere', {
+    uri: document.uri.toString(),
+    line: selection.active.line,
+    character: selection.active.character,
+    selection: selection.isEmpty ? undefined : document.getText(selection),
+  });
+  if (!result?.target) {
+    const reason = LOG_HERE_REASON[result?.reason ?? 'nothing-here'] ?? LOG_HERE_REASON['nothing-here']!;
+    void vscode.window.showInformationMessage(`EJS/NG: ${reason}`);
+    return;
+  }
+  logVariable({ ...result.target, toggle: true });
+}
 
 const logLensChanged = new vscode.EventEmitter<void>();
 

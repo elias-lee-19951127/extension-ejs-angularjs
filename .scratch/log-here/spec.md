@@ -1,6 +1,6 @@
 # Spec: "Log this at runtime" — chuột phải và phím tắt
 
-**Ngày viết:** 2026-09-20 · **Trạng thái:** đã chốt 2026-09-20 (người dùng: làm cả menu chuột phải lẫn phím tắt)
+**Ngày viết:** 2026-09-20 · **Trạng thái:** đã triển khai 2026-09-20 — ticket 01–03 done
 **Nối tiếp:** `.scratch/log-lens/spec.md` (CodeLens, đã làm) và `.scratch/log-variable/spec.md` (link trong hover, đã làm).
 
 ## Vấn đề

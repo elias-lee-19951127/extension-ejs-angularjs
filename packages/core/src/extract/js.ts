@@ -674,6 +674,163 @@ function lineOf(source: string, offset: number): number {
   return line;
 }
 
+/** Why there is nothing to log at a position (log-here spec #4) — the client turns these into sentences. */
+export type LogHereReason = 'call' | 'this-in-callback' | 'unparsable' | 'nothing-here';
+
+export type LogHereResult =
+  | { target: Omit<LogTarget, 'lensLine' | 'inferred'> }
+  | { reason: LogHereReason };
+
+/**
+ * What to log for the cursor (log-here ticket 01): the selection if there is one, else the property
+ * chain under the cursor, else whatever the line assigns. Placed right after the statement when it
+ * is that statement's assignment target — so the value logged is the one just assigned — and at the
+ * start of the line otherwise, where it is the value the line is about to use.
+ *
+ * Refuses, rather than logging something misleading: a call would RUN on every hit, and `this`
+ * inside a nested non-arrow function is not the controller any more.
+ */
+export function logHereAt(source: string, facts: JsFacts, offset: number, selection?: string): LogHereResult {
+  const ast = parseJsTolerant(source);
+  if (!ast) return { reason: 'unparsable' };
+  const lineStart = source.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const lineEnd = source.indexOf('\n', offset) === -1 ? source.length : source.indexOf('\n', offset);
+
+  const picked = pickExpression(ast, source, offset, lineStart, lineEnd, selection);
+  if ('reason' in picked) return picked;
+  const { expression, node } = picked;
+  // A call would RUN on every hit. Both when the cursor is inside one and when it is on the name
+  // being called — pointing at `load` in `load()` means the call, not the function object.
+  if (/\(/.test(expression) || (node && isCallee(ast, node))) return { reason: 'call' };
+
+  // `this` only means the controller in the declaration's own body (same rule as scopeWrites).
+  if (/^\s*this\b/.test(expression) && node && inNestedFunction(ast, node.start)) return { reason: 'this-in-callback' };
+
+  const after = node ? statementEndFor(ast, node) : null;
+  const at = after ?? lineStart + (/^\s*/.exec(source.slice(lineStart, lineEnd))?.[0].length ?? 0);
+  const name = expression.slice(expression.lastIndexOf('.') + 1).trim() || expression;
+  return {
+    target: {
+      line: countLines(source, at),
+      character: at - (source.lastIndexOf('\n', Math.max(0, at - 1)) + 1),
+      expression,
+      logMessage: `${name} = {${expression}}`,
+    },
+  };
+}
+
+/** The selection, the chain under the cursor, or what the line assigns — in that order (spec #2). */
+function pickExpression(
+  ast: acorn.Program,
+  source: string,
+  offset: number,
+  lineStart: number,
+  lineEnd: number,
+  selection?: string,
+): { expression: string; node: acorn.Node | null } | { reason: LogHereReason } {
+  const selected = selection?.trim();
+  if (selected) {
+    try {
+      const expr = acorn.parseExpressionAt(selected, 0, { ecmaVersion: 'latest' });
+      if (selected.slice(expr.end).trim()) return { reason: 'unparsable' };
+    } catch {
+      return { reason: 'unparsable' };
+    }
+    // Anchored at the cursor: that is where the selection sits, and what decides its placement.
+    return { expression: selected, node: nodeAt(ast, offset) };
+  }
+
+  const chain = chainAt(ast, offset);
+  if (chain) return { expression: source.slice(chain.start, chain.end), node: chain };
+
+  // Nothing under the cursor: fall back to what this line assigns, like the CodeLens.
+  const write = assignmentOnLine(ast, lineStart, lineEnd);
+  if (write) return { expression: source.slice(write.left.start, write.left.end), node: write.left as acorn.Node };
+  return { reason: 'nothing-here' };
+}
+
+/** The outermost `a.b.c` (or bare identifier) covering `offset`, computed keys and calls aside. */
+function chainAt(ast: acorn.Program, offset: number): acorn.Node | null {
+  let found: acorn.Node | null = null;
+  walkLib.full(ast, (node) => {
+    if (node.start > offset || node.end < offset) return;
+    if (node.type === 'Identifier' || node.type === 'ThisExpression') {
+      if (!found || node.start <= found.start) found = node;
+      return;
+    }
+    if (node.type !== 'MemberExpression') return;
+    const m = node as acorn.MemberExpression;
+    if (m.computed || m.property.type !== 'Identifier') return;
+    // Prefer the longest chain that still ends at or before the cursor's own segment.
+    if (!found || (node.start <= found.start && node.end >= found.end)) found = node;
+  });
+  return found;
+}
+
+/** The innermost node covering `offset`, for placement when a selection gave no node of its own. */
+function nodeAt(ast: acorn.Program, offset: number): acorn.Node | null {
+  let found: acorn.Node | null = null;
+  walkLib.full(ast, (node) => {
+    if (node.start <= offset && node.end >= offset && (!found || node.start >= found.start)) found = node;
+  });
+  return found;
+}
+
+/** An assignment whose left side is on this line — what the line is "about". */
+function assignmentOnLine(ast: acorn.Program, lineStart: number, lineEnd: number): acorn.AssignmentExpression | null {
+  let found: acorn.AssignmentExpression | null = null;
+  walkLib.simple(ast, {
+    AssignmentExpression(node) {
+      if (found || node.left.start < lineStart || node.left.start > lineEnd) return;
+      found = node;
+    },
+  });
+  return found;
+}
+
+/** End of the statement `node` belongs to, when `node` is that statement's assignment target. */
+function statementEndFor(ast: acorn.Program, node: acorn.Node): number | null {
+  let end: number | null = null;
+  walkLib.ancestor(ast, {
+    AssignmentExpression(assignment, _state, ancestors) {
+      if (assignment.left.start !== node.start || assignment.left.end !== node.end) return;
+      end = statementEnd([...(ancestors as acorn.Node[])]);
+    },
+  });
+  return end;
+}
+
+/** Is `node` the thing being called in `f()` / `a.b()`? */
+function isCallee(ast: acorn.Program, node: acorn.Node): boolean {
+  let callee = false;
+  walkLib.simple(ast, {
+    CallExpression(call) {
+      if (call.callee.start <= node.start && call.callee.end >= node.end) callee = true;
+    },
+  });
+  return callee;
+}
+
+/** Is `offset` inside a non-arrow function nested in the file — where `this` is that function's? */
+function inNestedFunction(ast: acorn.Program, offset: number): boolean {
+  let nested = false;
+  walkLib.ancestor(ast, {
+    ThisExpression(node, _state, ancestors) {
+      if (node.start !== offset && !(node.start <= offset && node.end >= offset)) return;
+      const functions = (ancestors as acorn.Node[]).filter((a) => a.type === 'FunctionExpression' || a.type === 'FunctionDeclaration');
+      // The declaration's own function is the first; anything further in owns its own `this`.
+      if (functions.length > 1) nested = true;
+    },
+  });
+  return nested;
+}
+
+function countLines(source: string, offset: number): number {
+  let line = 0;
+  for (let i = 0; i < offset && i < source.length; i++) if (source[i] === '\n') line++;
+  return line;
+}
+
 /** The `console.*` call whose method name starts at `offset` — where V8 puts the frame of a console call. */
 export function consoleCallAt(facts: JsFacts, offset: number): ConsoleCall | null {
   return (facts.consoleCalls ?? []).find((c) => c.method.start === offset) ?? null;

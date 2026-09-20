@@ -195,6 +195,19 @@ nhiều dòng; bấm **Show full value** mở một tab JSON chỉ đọc với 
 sẵn có của VS Code. Đo trên Chrome thật: app log 33 lần/giây chạy **y như khi tắt** tính năng này.
 Tắt bằng `ejsng.runtimeLog.expandValues`.
 
+### Ba cách đặt logpoint, không cách nào phải gõ
+
+| Cách | Dùng khi |
+|---|---|
+| **CodeLens** trên dòng gán | đang đọc controller, muốn xem biến vừa được gán |
+| **Chuột phải → EJS/NG: Log This at Runtime** | mọi dòng, mọi biểu thức: biến cục bộ, tham số, `res.data` |
+| **`Cmd+Alt+L`** (`Ctrl+Alt+L` trên Windows/Linux) | như trên, khi đã quen tay |
+
+Cả ba tạo ra **cùng một** logpoint: nội dung `rows = {$scope.rows}`, đặt ngay sau câu gán (để thấy giá trị mới)
+hoặc ở đầu dòng (để thấy giá trị dòng sắp dùng). Bấm lại chỗ cũ thì gỡ. Extension **từ chối kèm lý do** khi bạn
+trỏ vào một lời gọi hàm (log nó sẽ gọi hàm thật mỗi lần dòng chạy) hay `this` trong callback (không còn là
+controller).
+
 ## Thử nhanh "Log at runtime"
 
 [`examples/log-at-runtime/`](examples/log-at-runtime/README.md) là một controller chạy được bằng `node --inspect`
