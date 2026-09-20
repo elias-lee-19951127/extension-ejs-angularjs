@@ -1,0 +1,7 @@
+<div ng-controller="DemoListCtrl">
+  <h1>{{ title }}</h1>
+  <ul>
+    <li ng-repeat="row in rows">{{ row.title }} — {{ row.owner.name }}</li>
+  </ul>
+  <p>{{ selected.label }}</p>
+</div>

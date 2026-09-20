@@ -29,3 +29,13 @@ lần hai vẫn một, `columnNumber` tới runtime.
 **Còn lại cho người dùng (2 mục đầu của checklist):** trong VS Code thật với `smart-city` — bấm link bằng chuột,
 thấy logpoint ở lề đúng chỗ, nối Runtime Log vào Chrome, dòng đó chạy → hover có kiểu + *Seen at runtime*; thử nút
 Connect Runtime / Show của thông báo.
+
+**2026-09-20 — demo để verify tay.** Người dùng không tìm thấy ca `res.data` trong `smart-city`. Đo lại: repo đó có
+**105** lần gán không suy ra được kiểu, **tất cả** đều có link — dạng hay gặp là `data.voices || []`, `item.voiceId`,
+`stats || { … }`, không phải `res.data`. Ví dụ kiểm được ngay: `new-version-2/new-index.js:406`
+(`$scope.voice.voices = data.voices || []`) — đã chạy server thật trên `smart-city` và đọc hover, link có đúng.
+
+Thêm `demo/` (`list.controller.js` + `list.html` + `README.md`): một controller chạy được bằng `node --inspect`
+(có `angular` giả), không cần trình duyệt. Đã chạy tự động trọn kịch bản của README: hover → tham số của link →
+đặt logpoint → nối runtime → hover ra kiểu thật + *Seen at runtime*, `selected` ra `… | null` + *Seen null at runtime*
+mà **không** sinh inlay hint. Còn lại cho người dùng: bấm chuột vào link và thử các nút của thông báo.
