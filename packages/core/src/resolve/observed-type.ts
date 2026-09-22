@@ -257,6 +257,60 @@ function formatNested(type: ObservedType, limits: FormatLimits, level: number): 
   return parts.length ? parts.join(' | ') : 'unknown';
 }
 
+/** The hover's laid-out type: deeper and wider than the one-liner, since it has lines to spend. */
+export const BLOCK_LIMITS: FormatLimits = { depth: 4, keys: 30 };
+
+/** An object that fits in this many characters stays on one line inside a laid-out type. */
+const BLOCK_INLINE_WIDTH = 60;
+
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * The type as a TypeScript declaration laid out over lines — `type rows = { id: number; … }[]` —
+ * for a hover's `ts` code block. Written as a declaration on purpose: a code block that starts
+ * with `{` is read by the TypeScript grammar as a block of statements, its keys as labels, and
+ * none of it gets colored. `name` is the alias, usually the expression's last segment.
+ */
+export function formatTypeBlock(type: ObservedType, name: string, limits: FormatLimits = BLOCK_LIMITS): string | null {
+  if (formatType(type, limits) === null) return null;
+  const alias = IDENTIFIER.test(name) ? name : 'T';
+  return `type ${alias} = ${blockNested(type, limits, 1, '')};`;
+}
+
+function blockNested(type: ObservedType, limits: FormatLimits, level: number, indent: string): string {
+  const parts = type.variants.map((v) => blockVariant(v, limits, level, indent));
+  if (type.nullable) parts.push('null');
+  return parts.length ? parts.join(' | ') : 'unknown';
+}
+
+function blockVariant(v: Variant, limits: FormatLimits, level: number, indent: string): string {
+  switch (v.kind) {
+    case 'record':
+      return `Record<string, ${blockNested(v.value, limits, level + 1, indent)}>`;
+    case 'array': {
+      const inner = blockNested(v.element, limits, level, indent);
+      return /[|\s]/.test(inner) && !inner.startsWith('{') ? `(${inner})[]` : `${inner}[]`;
+    }
+    case 'object': {
+      if (level > limits.depth) return '{…}';
+      const entries = [...v.props.entries()];
+      if (!entries.length) return v.open ? '{…}' : '{}';
+      const one = formatVariant(v, limits, level);
+      if (indent.length + one.length <= BLOCK_INLINE_WIDTH && entries.every(([key]) => IDENTIFIER.test(key))) return one;
+      const inner = `${indent}  `;
+      const lines = entries
+        .slice(0, limits.keys)
+        .map(([key, p]) => `${inner}${IDENTIFIER.test(key) ? key : `'${key}'`}${p.optional ? '?' : ''}: ${blockNested(p.type, limits, level + 1, inner)};`);
+      // Comments, so what was left out reads as a note and not as part of the type.
+      if (entries.length > limits.keys) lines.push(`${inner}// …and ${entries.length - limits.keys} more`);
+      else if (v.open) lines.push(`${inner}// … seen only in part`);
+      return `{\n${lines.join('\n')}\n${indent}}`;
+    }
+    default:
+      return formatVariant(v, limits, level);
+  }
+}
+
 // ---------------------------------------------------------------- query
 
 /** What `observedTypeOf` needs from Workspace. */
@@ -281,6 +335,8 @@ export interface ObservedTypeResult {
   expression: string;
   /** TypeScript-like text within the hover limits, or `null` when nothing is known. */
   text: string | null;
+  /** The same type laid out as a declaration, deeper and wider — what the hover shows. */
+  block: string | null;
   /**
    * Some assignment explicitly sets it to null/undefined (spec decision #3). Static only: what a
    * runtime happened to log never makes it here, so the inline hint stays put (r1 decision #9).
@@ -371,6 +427,7 @@ export function observedTypeOf(
   return {
     expression,
     text: type ? formatType(type) : null,
+    block: type ? formatTypeBlock(type, expression.slice(expression.lastIndexOf('.') + 1)) : null,
     nullable: staticType?.nullable ?? false,
     partial: type?.partial ?? false,
     onlyInCallback: sites.length > 0 && sites.every((s) => s.inCallback),

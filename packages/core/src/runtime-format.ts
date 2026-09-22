@@ -28,15 +28,18 @@ export const HOVER_VALUE_LIMITS: FormatValueLimits = { depth: 3, keys: 30, items
 /** In the JSON tab: everything, within reason (spec #3). */
 export const JSON_VALUE_LIMITS: FormatValueLimits = { depth: 6, keys: 50, items: 200, maxString: 10_000, maxLength: 2_000_000 };
 
+/** What a scalar is, so the Values panel can color it the way a debugger's variables view does. */
+export type ScalarKind = 'string' | 'number' | 'boolean' | 'null' | 'undefined' | 'function' | 'unexpanded' | 'other';
+
 /** What a value renders to, before it is written out in one style or another. */
 type Node =
-  | { kind: 'scalar'; text: string; json: unknown }
-  | { kind: 'object'; entries: Array<[string, Node]>; more: number }
-  | { kind: 'array'; items: Node[]; more: number };
+  | { kind: 'scalar'; text: string; json: unknown; type: ScalarKind }
+  | { kind: 'object'; entries: Array<[string, Node]>; more: number; className?: string }
+  | { kind: 'array'; items: Node[]; more: number; length?: number };
 
-const scalar = (text: string, json: unknown = text): Node => ({ kind: 'scalar', text, json });
+const scalar = (text: string, json: unknown = text, type: ScalarKind = 'other'): Node => ({ kind: 'scalar', text, json, type });
 /** A branch the dig never reached — not the same as an empty one (spec #1). */
-const unexpanded = (array: boolean): Node => ({ kind: 'scalar', text: array ? '[…]' : '{…}', json: '[not expanded]' });
+const unexpanded = (array: boolean): Node => scalar(array ? '[…]' : '{…}', '[not expanded]', 'unexpanded');
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const NOISE = (name: string): boolean => name.startsWith('$$') || name === '__proto__';
@@ -72,32 +75,41 @@ function nodeOf(value: RuntimeValue, depth: number, ctx: Ctx): Node {
   const o = value.object;
   switch (o.type) {
     case 'string':
-      return scalar(`'${cut(String(o.value ?? o.description ?? ''), ctx.limits.maxString)}'`, cut(String(o.value ?? ''), ctx.limits.maxString));
+      return scalar(`'${cut(String(o.value ?? o.description ?? ''), ctx.limits.maxString)}'`, cut(String(o.value ?? ''), ctx.limits.maxString), 'string');
     case 'number': {
       // NaN and Infinity arrive without a `value`, and have no JSON form.
       const text = o.value !== undefined ? String(o.value) : (o.description ?? 'NaN');
-      return scalar(text, o.value !== undefined ? (o.value as number) : text);
+      return scalar(text, o.value !== undefined ? (o.value as number) : text, 'number');
     }
     case 'boolean':
-      return scalar(String(o.value), o.value as boolean);
+      return scalar(String(o.value), o.value as boolean, 'boolean');
     case 'undefined':
-      return scalar('undefined', 'undefined');
+      return scalar('undefined', 'undefined', 'undefined');
     case 'function':
-      return scalar(functionText(o.description));
+      return scalar(functionText(o.description), functionText(o.description), 'function');
     case 'bigint':
     case 'symbol':
       return scalar(o.description ?? o.type);
     case 'object': {
-      if (o.subtype === 'null') return scalar('null', null);
+      if (o.subtype === 'null') return scalar('null', null, 'null');
       if (o.objectId !== undefined && ctx.seen.has(o.objectId)) return scalar('[Circular]');
       if (o.subtype !== undefined && o.subtype !== 'array') return scalar(describedText(o));
       const isArray = o.subtype === 'array';
       if (depth > ctx.limits.depth) return unexpanded(isArray);
       const seen = o.objectId !== undefined ? new Set([...ctx.seen, o.objectId]) : ctx.seen;
       const inner: Ctx = { ...ctx, seen };
-      if (value.properties) return fromProperties(value.properties, isArray, depth, inner);
-      if (o.preview) return fromPreview(o.preview, isArray, depth, inner);
-      return unexpanded(isArray);
+      const n = value.properties
+        ? fromProperties(value.properties, isArray, depth, inner)
+        : o.preview
+          ? fromPreview(o.preview, isArray, depth, inner)
+          : unexpanded(isArray);
+      // What the runtime calls it — `Object`, `Doc`, `Array(150)` — for the panel's `{Doc}` tag.
+      if (n.kind === 'object' && o.className) n.className = o.className;
+      if (n.kind === 'array') {
+        const length = /\((\d+)\)$/.exec(o.description ?? '');
+        if (length) n.length = Number(length[1]);
+      }
+      return n;
     }
     default:
       return scalar(o.description ?? o.type);
@@ -144,17 +156,17 @@ function nodeOfPreviewProperty(p: PropertyPreview, depth: number, ctx: Ctx): Nod
     case 'accessor':
       return scalar('[getter]');
     case 'string':
-      return scalar(`'${cut(p.value ?? '', ctx.limits.maxString)}'`, cut(p.value ?? '', ctx.limits.maxString));
+      return scalar(`'${cut(p.value ?? '', ctx.limits.maxString)}'`, cut(p.value ?? '', ctx.limits.maxString), 'string');
     case 'number':
-      return scalar(p.value ?? 'NaN', Number.isFinite(Number(p.value)) ? Number(p.value) : (p.value ?? 'NaN'));
+      return scalar(p.value ?? 'NaN', Number.isFinite(Number(p.value)) ? Number(p.value) : (p.value ?? 'NaN'), 'number');
     case 'boolean':
-      return scalar(p.value ?? 'false', p.value === 'true');
+      return scalar(p.value ?? 'false', p.value === 'true', 'boolean');
     case 'undefined':
-      return scalar('undefined', 'undefined');
+      return scalar('undefined', 'undefined', 'undefined');
     case 'function':
-      return scalar(functionText(p.value));
+      return scalar(functionText(p.value), functionText(p.value), 'function');
     case 'object': {
-      if (p.subtype === 'null') return scalar('null', null);
+      if (p.subtype === 'null') return scalar('null', null, 'null');
       if (p.subtype !== undefined && p.subtype !== 'array') return scalar(p.value ?? p.subtype);
       const isArray = p.subtype === 'array';
       if (depth + 1 > ctx.limits.depth) return unexpanded(isArray);
@@ -200,9 +212,88 @@ export function formatRuntimeArgsInline(values: RuntimeValue[], separator: strin
   return cut(values.map((v) => bareString(v) ?? formatRuntimeValueInline(v, share)).join(separator), limits.maxLength);
 }
 
-/** The same arguments for a hover: each on its own, laid out, blank line between them. */
+/**
+ * The same arguments for a hover: each on its own, laid out, blank line between them — except that
+ * a label ending in `=` or `:` (a logpoint's `version = {version}`, or `console.log('rows:', rows)`)
+ * stays on the line of the value it names. That reads as it was written, and it is what lets the
+ * hover's JavaScript highlighting see an object literal: a `{` opening a line is a block to the
+ * grammar, and its keys labels, which no theme colors.
+ */
 export function formatRuntimeArgsPretty(values: RuntimeValue[], limits: FormatValueLimits = HOVER_VALUE_LIMITS): string {
-  return cut(values.map((v) => bareString(v) ?? formatRuntimeValuePretty(v, limits)).join('\n\n'), limits.maxLength);
+  let out = '';
+  values.forEach((v, i) => {
+    const text = bareString(v) ?? formatRuntimeValuePretty(v, limits);
+    const previous = i > 0 ? bareString(values[i - 1]!) : null;
+    if (i === 0) out = text;
+    else if (previous !== null && labelOf(previous) !== null && bareString(v) === null) out = `${out.trimEnd()} ${text}`;
+    else out += `\n\n${text}`;
+  });
+  return cut(out, limits.maxLength);
+}
+
+/** `'version = '` → `'version'`; `', b = '` → `'b'`; `'rows:'` → `'rows'`. `null` when the text names nothing. */
+function labelOf(text: string): string | null {
+  const m = /^[\s,;]*(.{1,60}?)\s*[=:]\s*$/s.exec(text);
+  return m && !m[1]!.includes('\n') ? m[1]! : null;
+}
+
+/**
+ * One node of the Values panel's tree — a debugger's variables view, `name = {Type} preview`.
+ * Leaves carry `json`, so any subtree can be copied back as JSON without asking the runtime again.
+ */
+export interface ValueTreeNode {
+  name: string;
+  kind: ScalarKind | 'object' | 'array' | 'more';
+  /** What the runtime calls it, for an object or array: `Object`, `Doc`, `Array(150)`. */
+  type?: string;
+  /** A leaf's text, or a one-line preview of an object or array. */
+  text: string;
+  /** A leaf's value as JSON would hold it. */
+  json?: unknown;
+  children?: ValueTreeNode[];
+}
+
+/** How long an object's one-line preview runs in the panel before `…+N`. */
+const TREE_PREVIEW_LENGTH = 100;
+
+/**
+ * A console call's arguments as the panel's tree roots. A string that labels the value after it
+ * — `version = ` before a logpoint's `{version}` — becomes that value's name instead of a node of
+ * its own; any other argument is named by its position, as a debugger names an array's elements.
+ */
+export function formatRuntimeArgsTree(values: RuntimeValue[], limits: FormatValueLimits = JSON_VALUE_LIMITS): ValueTreeNode[] {
+  const roots: ValueTreeNode[] = [];
+  values.forEach((v, i) => {
+    const text = bareString(v);
+    const next = values[i + 1];
+    const label = text !== null && next !== undefined && bareString(next) === null ? labelOf(text) : null;
+    if (label !== null) return;
+    const previous = i > 0 ? bareString(values[i - 1]!) : null;
+    const name = (bareString(v) === null && previous !== null ? labelOf(previous) : null) ?? `arg${roots.length}`;
+    roots.push(treeOf(name, node(v, limits)));
+  });
+  return roots;
+}
+
+function treeOf(name: string, n: Node): ValueTreeNode {
+  if (n.kind === 'scalar') return { name, kind: n.type, text: n.text, json: n.json };
+  const preview = formatNodeInline(n);
+  if (n.kind === 'array') {
+    const children = n.items.map((item, i) => treeOf(String(i), item));
+    if (n.more > 0) children.push({ name: '…', kind: 'more', text: `${n.more} more not shown` });
+    return { name, kind: 'array', type: `Array(${n.length ?? n.items.length + n.more})`, text: preview, children };
+  }
+  const children = n.entries.map(([key, value]) => treeOf(key, value));
+  if (n.more > 0) children.push({ name: '…', kind: 'more', text: `${n.more} more not shown` });
+  return { name, kind: 'object', type: n.className ?? 'Object', text: preview, children };
+}
+
+function formatNodeInline(n: Node): string {
+  for (let budget = TREE_PREVIEW_LENGTH; budget > 20; budget -= 16) {
+    const text = writeCompact(n, { left: budget });
+    if (text.length <= TREE_PREVIEW_LENGTH) return text;
+  }
+  return cut(writeCompact(n, { left: 20 }), TREE_PREVIEW_LENGTH);
 }
 
 /** A top-level string argument, as text. `null` for anything else. */

@@ -143,3 +143,53 @@ test('a string argument prints as text; a string inside a value keeps its quotes
   // A logpoint's parts carry their own spacing, so they join with nothing.
   assert.strictEqual(C.formatRuntimeArgsInline([{ object: label }, { object: label }], ''), 'rowsrows');
 });
+
+test('a label ending in = or : stays on the line of the value it names, so the hover colors it as an object', async (t) => {
+  const { arg: label } = await logged(t, 'version = ');
+  const { runtimeValue } = await dug(t, { versionNo: 2, note: 'Re-chunked' });
+  const text = C.formatRuntimeArgsPretty([{ object: label }, runtimeValue]);
+  assert.strictEqual(text, "version = {\n  versionNo: 2,\n  note: 'Re-chunked'\n}");
+  // A string that names nothing still stands apart from the value after it.
+  const { arg: plain } = await logged(t, 'loaded');
+  assert.match(C.formatRuntimeArgsPretty([{ object: plain }, runtimeValue]), /^loaded\n\n\{/);
+});
+
+test('the Values panel tree: names from labels, kinds for coloring, class names, and JSON on every leaf', async (t) => {
+  class Doc {
+    constructor() {
+      this.id = 'DOC-1';
+      this.versionNo = 2;
+      this.active = false;
+      this.error = null;
+      this.tags = ['a', 'b', 'c'];
+      this.load = function load() {};
+    }
+  }
+  const { arg: label } = await logged(t, 'doc = ');
+  const { runtimeValue } = await dug(t, new Doc());
+  const roots = C.formatRuntimeArgsTree([{ object: label }, runtimeValue]);
+  assert.strictEqual(roots.length, 1, 'the label names the value instead of being a node');
+  const [doc] = roots;
+  assert.strictEqual(doc.name, 'doc');
+  assert.strictEqual(doc.kind, 'object');
+  assert.strictEqual(doc.type, 'Doc');
+  const byName = Object.fromEntries(doc.children.map((c) => [c.name, c]));
+  assert.deepStrictEqual(
+    [byName.id.kind, byName.versionNo.kind, byName.active.kind, byName.error.kind, byName.load.kind],
+    ['string', 'number', 'boolean', 'null', 'function'],
+  );
+  assert.strictEqual(byName.id.json, 'DOC-1');
+  assert.strictEqual(byName.versionNo.json, 2);
+  assert.strictEqual(byName.tags.type, 'Array(3)');
+  assert.deepStrictEqual(byName.tags.children.map((c) => [c.name, c.json]), [['0', 'a'], ['1', 'b'], ['2', 'c']]);
+  assert.match(doc.text, /^\{id: 'DOC-1', versionNo: 2/);
+});
+
+test('the Values panel tree: arguments without a label are named by position, and what was cut says how much', async (t) => {
+  const { runtimeValue } = await dug(t, ROWS, { depth: 2, keys: 30, samples: 10, requests: 60 });
+  const [rows] = C.formatRuntimeArgsTree([runtimeValue], { ...C.JSON_VALUE_LIMITS, items: 5 });
+  assert.strictEqual(rows.name, 'arg0');
+  assert.strictEqual(rows.type, 'Array(150)');
+  assert.strictEqual(rows.children.length, 6);
+  assert.deepStrictEqual(rows.children.at(-1), { name: '…', kind: 'more', text: '145 more not shown' });
+});

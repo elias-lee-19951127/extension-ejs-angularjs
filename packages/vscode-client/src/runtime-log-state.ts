@@ -318,6 +318,18 @@ export class RuntimeLogState {
     this.byUri.delete(uri);
   }
 
+  /** Every file holding at least one logged line — what the Values panel lists. */
+  files(): string[] {
+    return [...this.byUri.keys()];
+  }
+
+  /** Forget every file's values (the Values panel's Clear). Returns the files that had any, to redraw. */
+  clearAll(): string[] {
+    const files = this.files();
+    this.byUri.clear();
+    return files;
+  }
+
   /**
    * Forget everything one endpoint reported — it just (re)connected, so what it logged before
    * came from a run that is over (the app restarted, or was redeployed). Other runtimes' values

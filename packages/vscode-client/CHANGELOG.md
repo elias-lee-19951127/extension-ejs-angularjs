@@ -10,6 +10,24 @@ stack frame that came back, so the value appeared beside the line below the one 
 logpoints are now anchored where the logpoint was asked for. Ordinary `console.*` calls are
 unchanged: they are still drawn at their own call site.
 
+**A Runtime Values tab in the bottom panel**, read like a debugger: every line that logged, newest
+first, and the selected hit's value as a tree — `name = {Type} preview`, colored by kind with the
+theme's own debug colors, expandable with the mouse or the arrow keys, each branch copyable as JSON.
+Earlier hits of the line are one click away, and the branches you opened stay open between them.
+
+**The hover's links work, and are easy to find.** "Show full value" did nothing when clicked: a
+decoration's hover runs no command link unless it is marked trusted, and it wasn't. The hover now
+opens with `Inspect` · `Open as JSON` · `Copy`, with icons, right under its title.
+
+**Logged values are colored in the hover.** A code block that opens with `{` is a block of
+statements to the JavaScript grammar, and its keys labels, which no theme colors. A logpoint's
+`version = ` now stays on the line of the value it names, and an object logged on its own is
+wrapped in parentheses. Earlier hits read as code, not plain text.
+
+**Observed type reads as a laid-out TypeScript declaration** — `type latestVersion = { … }`, four
+levels deep and up to 30 keys, one key per line once it no longer fits on one — instead of a single
+line cut at two levels.
+
 ## 0.5.0
 
 **Types seen at runtime.** Hovering a scope variable shows the type the running app actually produced,

@@ -359,3 +359,34 @@ test('an assignment that could not be inferred carries where to log it and what 
   const [sel] = typeAt(ws, 'list.html', 'sel }}').unknownFrom;
   assert.deepStrictEqual([sel.rhsText, sel.lhsText, sel.after], ['find()', '$scope.sel', src.indexOf('find();') + 'find();'.length]);
 });
+
+test('formatTypeBlock: a TypeScript declaration, laid out once it no longer fits a line', () => {
+  const version = C.fromShape({
+    kind: 'object',
+    props: {
+      versionId: { kind: 'primitive', primitive: 'string' },
+      versionNo: { kind: 'primitive', primitive: 'number' },
+      stage: { kind: 'primitive', primitive: 'string' },
+      status: { kind: 'primitive', primitive: 'string' },
+      progress: { kind: 'object', props: { done: { kind: 'primitive', primitive: 'number' }, total: { kind: 'primitive', primitive: 'number' } } },
+      'x-trace': { kind: 'primitive', primitive: 'string' },
+    },
+  });
+  assert.strictEqual(
+    C.formatTypeBlock(version, 'latestVersion'),
+    [
+      'type latestVersion = {',
+      '  versionId: string;',
+      '  versionNo: number;',
+      '  stage: string;',
+      '  status: string;',
+      '  progress: { done: number, total: number };',
+      "  'x-trace': string;",
+      '};',
+    ].join('\n'),
+  );
+  // Short enough: one line, still a declaration so the grammar colors it.
+  assert.strictEqual(C.formatTypeBlock(C.fromShape({ kind: 'primitive', primitive: 'number' }), 'count'), 'type count = number;');
+  // Not an identifier: a neutral alias rather than invalid TypeScript.
+  assert.strictEqual(C.formatTypeBlock(C.fromShape({ kind: 'primitive', primitive: 'number' }), 'items[0]'), 'type T = number;');
+});

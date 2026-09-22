@@ -172,7 +172,7 @@ test('LSP + real node --inspect: hover merges what the runtime logged, says wher
   const hints = () => conn.sendRequest('textDocument/inlayHint', { textDocument: { uri }, range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } } });
 
   const before = await hover('rows">');
-  assert.match(before, /```ts\nunknown\[\]\n```/, before);
+  assert.match(before, /```ts\ntype \w+ = unknown\[\];\n```/, before);
   assert.match(before, /_Some assignments could not be inferred and are left out:_ `load\(n\)`/, before);
   assert.doesNotMatch(before, /Seen at runtime/, before);
   const hintsBefore = await hints();
@@ -181,13 +181,13 @@ test('LSP + real node --inspect: hover merges what the runtime logged, says wher
   await waitForStatus(conn, (s) => s.connections[0]?.typeEvidence >= 3); // rows, sel as object, sel as null
 
   const rows = await hover('rows">');
-  assert.match(rows, /```ts\n\{ id: number, name: string, owner: \{ id: number, name: string \} \}\[\]\n```/, rows);
+  assert.match(rows, /```ts\ntype rows = \{\n  id: number;\n  name: string;\n  owner: \{ id: number, name: string \};\n\}\[\];\n```/, rows);
   assert.match(rows, /_Not inferred statically_ \(`load\(n\)` \(\[list\.controller\.js:9\]\(\S*#L9\)\)\) _— shape from runtime_/, rows);
   assert.match(rows, /_Seen at runtime:_ \d+× — last \d\d:\d\d:\d\d via `[^`]+`, logged at \[list\.controller\.js:11\]\(\S*#L11\)/, rows);
-  assert.match(await hover('name }}'), /```ts\nstring\n```/);
+  assert.match(await hover('name }}'), /```ts\ntype \w+ = string;\n```/);
 
   const sel = await hover('sel.title');
-  assert.match(sel, /```ts\n\{ title: string \} \| null\n```/, sel);
+  assert.match(sel, /```ts\ntype \w+ = \{ title: string \} \| null;\n```/, sel);
   assert.match(sel, /_Seen `null`\/`undefined` at runtime_/, sel);
   assert.doesNotMatch(sel, /_Can be empty when rendered_/, sel);
   assert.deepStrictEqual(await hints(), hintsBefore, 'runtime evidence never adds an inline hint');
@@ -233,7 +233,7 @@ test('LSP + real node --inspect: a logpoint at a column right after an assignmen
   const uri = pathToFileURL(join(root, 'list.controller.js')).href;
   conn.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: 'javascript', version: 1, text: ONE_LINER } });
   const hover = await conn.sendRequest('textDocument/hover', { textDocument: { uri }, position: positionOf(ONE_LINER, 'rows = res', 1) });
-  assert.match(hover.contents.value, /```ts\n\{ id: number \}\[\]\n```/, hover.contents.value);
+  assert.match(hover.contents.value, /```ts\ntype \w+ = \{ id: number \}\[\];\n```/, hover.contents.value);
 });
 
 // ---------------------------------------------------------------- expand-log-values ticket 02

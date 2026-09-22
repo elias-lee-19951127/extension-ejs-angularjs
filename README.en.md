@@ -199,9 +199,13 @@ Runs the core tests and the LSP tests over stdio (spinning up a real server). Te
 
 Objects and arrays in inline logs read as themselves instead of `[Object]`: the extension asks the running app
 for the value's properties (`Runtime.getProperties`), at most once per line per 300 ms. The hover lays the value
-out; **Show full value** opens a read-only JSON tab with the whole thing, where folding, search and copy are VS
+out; **Open as JSON** (in the hover, next to **Inspect** and **Copy**) opens a read-only JSON tab with the whole thing, where folding, search and copy are VS
 Code's own. Measured against a real Chrome page logging 33 times a second: the app runs **exactly as fast** as
 with the feature off. Turn it off with `ejsng.runtimeLog.expandValues`.
+
+**Runtime Values** — a tab in the bottom panel, next to Terminal — reads like a debugger: every line that logged,
+newest first, and the selected hit's value as a tree (`name = {Type} preview`), colored by kind, expandable with the
+mouse or the arrow keys. **Inspect** in the hover opens it on that line.
 
 ### Three ways to set a logpoint, none of them typing
 

@@ -366,7 +366,7 @@ test('LSP: hover on a template variable adds its observed type, what could not b
   // The existing hover is still there, above the new section.
   assert.match(value, /^\*\*rows\*\*/, value);
   assert.match(value, /Scope chain: /, value);
-  assert.match(value, /\n---\n\n\*\*Observed type\*\* of `rows`\n```ts\n\{ id: number, label: string, tags: string\[\] \}\[\]\n```/, value);
+  assert.match(value, /\n---\n\n\*\*Observed type\*\* of `rows`\n```ts\ntype \w+ = \{ id: number, label: string, tags: string\[\] \}\[\];\n```/, value);
   // `s.rows = Api.list()` can't be inferred: named with its source, never a bare "unknown".
   assert.match(value, /could not be inferred and are left out:_ `Api\.list\(\)` \(\[js\/app\.js:8\]\(file:\/\/\S*#L8\)\)/, value);
   assert.match(value, /Assigned at: \[js\/app\.js:2\]\(\S*#L2\), \[js\/app\.js:8\]\(\S*#L8\)/, value);
@@ -398,14 +398,14 @@ test('LSP: hover on a variable only assigned from a response: the reason with it
   assert.doesNotMatch(stats, /```ts/, stats);
 
   const user = await hoverAt(tpl, 'user.name');
-  assert.match(user, /```ts\n\{ name: string \} \| null\n```/, user);
+  assert.match(user, /```ts\ntype \w+ = \{ name: string \} \| null;\n```/, user);
   assert.match(user, /_Can be empty when rendered_/, user);
   assert.doesNotMatch(user, /Only assigned in a callback/, user); // `$scope.user = null` runs at construction
 
   // JS side: hovering the assigned property shows the same merged type.
   const js = open('stats/ctrl.js', 'javascript');
   const fromJs = await hoverAt(js, 'user = {', 1);
-  assert.match(fromJs, /\*\*Observed type\*\* of `user`\n```ts\n\{ name: string \} \| null\n```/, fromJs);
+  assert.match(fromJs, /\*\*Observed type\*\* of `user`\n```ts\ntype \w+ = \{ name: string \} \| null;\n```/, fromJs);
 });
 
 // observed-types ticket 04: the "may be empty" inlay hint.

@@ -34,6 +34,7 @@ import {
   digRuntimeValue,
   formatRuntimeArgsInline,
   formatRuntimeArgsJson,
+  formatRuntimeArgsTree,
   formatRuntimeArgsPretty,
   parseLogMessage,
   RuntimeEvidenceStore,
@@ -594,7 +595,7 @@ function observedTypeLines(t: ObservedTypeResult): string[] {
 
   const fromRuntime = t.runtime.length > 0;
   if (t.text) {
-    lines.push('```ts', t.text, '```');
+    lines.push('```ts', t.block ?? t.text, '```');
     if (sources && fromRuntime) lines.push(`- _Not inferred statically_ (${sources}) _— shape from runtime_`);
     else if (t.partial && sources) lines.push(`- _Some assignments could not be inferred and are left out:_ ${sources}`);
   } else if (sources) {
@@ -1238,6 +1239,22 @@ connection.onRequest('ejsng/expandRuntimeLog', async (params: { logId?: number }
   // have been — that, not an error, is how a released value shows up.
   const stale = dug.some((d, i) => args[i]!.objectId !== undefined && d.value.properties === undefined);
   return { json: formatRuntimeArgsJson(dug.map((d) => d.value)), stale };
+});
+
+/**
+ * The Runtime Values panel's tree for a drawn log: the same dig as "Show full value", laid out as
+ * `name = {Type} preview` nodes instead of JSON, so each value keeps its kind for coloring.
+ * `null` when the log is no longer held — the panel then shows the text it was drawn with.
+ */
+connection.onRequest('ejsng/inspectRuntimeLog', async (params: { logId?: number }) => {
+  const logId = params?.logId;
+  if (typeof logId !== 'number') return null;
+  const entry = [...runtimeLogConnections.values()].find((info) => info.loggedArgs.has(logId));
+  if (!entry) return null;
+  const args = entry.loggedArgs.get(logId)!;
+  const dug = await Promise.all(args.map((arg) => digRuntimeValue(arg, getPropertiesOn(entry), FULL_DIG_LIMITS)));
+  const stale = dug.some((d, i) => args[i]!.objectId !== undefined && d.value.properties === undefined);
+  return { tree: formatRuntimeArgsTree(dug.map((d) => d.value)), stale };
 });
 
 /** `Runtime.getProperties` on one connection, as `digRuntimeValue` wants it. */

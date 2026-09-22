@@ -27,6 +27,8 @@ import {
 import { logpointsFrom } from './logpoints';
 import { fileNameOf, logLenses, parseLogVariableArgs, planLogVariable, type LogLensMode, type LogTarget, type LogVariableArgs } from './log-variable';
 import { RuntimeLogViewProvider } from './runtime-log-view';
+import { RuntimeValuesViewProvider } from './runtime-values-view';
+import { clockTime, parseSiteId, siteId, textOnlyRoots, valueHits, valueSites, type ValueDetail, type ValueTreeNode } from './runtime-values';
 import {
   appUrlForPort,
   browserLaunchArgs,
@@ -38,6 +40,7 @@ import {
 import { browserProfileDir, locateBrowser, spawnBrowser } from './browser-launch';
 
 let client: LanguageClient | undefined;
+let runtimeValuesView: RuntimeValuesViewProvider | undefined;
 let runtimeLogStatusBar: vscode.StatusBarItem | undefined;
 let runtimeLogDecorationType: vscode.TextEditorDecorationType | undefined;
 const runtimeLogState = new RuntimeLogState();
@@ -634,26 +637,69 @@ const SEVERITY_COLOR: Record<RuntimeLogEntry['severity'], string> = {
   error: 'terminal.ansiRed',
 };
 
-/** The hover for one line: where the latest value came from, the value in full, then the earlier ones. */
-function runtimeLogHover(line: RuntimeLogLine): vscode.MarkdownString {
+/** Command links a runtime log's hover may run — a hover's markdown runs none it doesn't name. */
+const HOVER_COMMANDS = () => [SHOW_LOG_VALUE_COMMAND, INSPECT_VALUE_COMMAND, COPY_VALUE_COMMAND];
+
+/** A `command:` link's argument, escaped so a `)` in a path can't end the markdown link early. */
+function commandArgs(args: unknown): string {
+  return encodeURIComponent(JSON.stringify([args])).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/** Inline code that survives backticks in the value: fenced with one more than it contains. */
+function inlineCode(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length));
+  const fence = '`'.repeat(longest + 1);
+  return `${fence} ${text.replace(/\s*\n\s*/g, ' ')} ${fence}`;
+}
+
+/**
+ * A code block the JavaScript grammar colors as a value: an object opening a line reads to it as a
+ * block of statements, with its keys as labels no theme colors — so it is wrapped in parentheses.
+ */
+function colorableValue(text: string): string {
+  return text
+    .split('\n\n')
+    .map((part) => (part.startsWith('{') && part.endsWith('}') ? `(${part})` : part))
+    .join('\n\n');
+}
+
+/**
+ * The hover for one line: where the latest value came from, what can be done with it, the value
+ * laid out, then the earlier hits. The actions come first and carry icons: below a long value they
+ * scrolled out of sight, and as bare text they didn't read as something to click.
+ */
+function runtimeLogHover(uri: string, line: RuntimeLogLine): vscode.MarkdownString {
   const latest = line.history[0]!;
-  const md = new vscode.MarkdownString().appendText(formatRuntimeLogHoverTitle(latest));
-  // The dug rendering reads as objects; `value` is the runtime's own one-level preview.
-  md.appendCodeblock(latest.expanded ?? latest.value, latest.expanded ? 'js' : 'text');
+  const md = new vscode.MarkdownString(undefined, true);
+  md.isTrusted = { enabledCommands: HOVER_COMMANDS() };
+  const title = formatRuntimeLogHoverTitle(latest);
+  md.appendMarkdown(`$(${latest.severity === 'error' ? 'error' : latest.severity === 'warning' ? 'warning' : 'output'}) `);
+  md.appendText(title);
+  if (line.count > 1) md.appendMarkdown(` · **×${line.count}**`);
+  const site = { uri, line: line.line };
+  const actions = [`[$(list-tree) Inspect](command:${INSPECT_VALUE_COMMAND}?${commandArgs(site)} "Show this value as a tree in the Runtime Values panel")`];
   if (latest.logId !== undefined) {
-    const args = encodeURIComponent(JSON.stringify([{ logId: latest.logId, title: logValueTitle(line) }])).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-    md.appendMarkdown(`\n\n[Show full value](command:${SHOW_LOG_VALUE_COMMAND}?${args})\n`);
+    actions.push(`[$(json) Open as JSON](command:${SHOW_LOG_VALUE_COMMAND}?${commandArgs({ logId: latest.logId, title: logValueTitle(line) })} "Open the whole value in a JSON editor tab")`);
   }
-  const earlier = formatRuntimeLogHistory(line);
+  actions.push(`[$(copy) Copy](command:${COPY_VALUE_COMMAND}?${commandArgs({ ...site, logId: latest.logId })} "Copy the value as JSON")`);
+  md.appendMarkdown(`\n\n${actions.join('&nbsp;&nbsp;·&nbsp;&nbsp;')}\n`);
+  // The dug rendering reads as objects; `value` is the runtime's own one-level preview.
+  md.appendCodeblock(latest.expanded ? colorableValue(latest.expanded) : latest.value, latest.expanded ? 'javascript' : 'text');
+  const earlier = line.history.slice(1);
   if (earlier.length > 0) {
-    md.appendMarkdown(`\n\n**${line.count} hits** — earlier, most recent first:\n\n`);
-    for (const item of earlier) md.appendMarkdown('- ').appendText(item).appendMarkdown('\n');
+    md.appendMarkdown(`\n**Earlier hits** — most recent first:\n\n`);
+    for (const e of earlier) {
+      md.appendMarkdown(`- ${clockTime(e.at)} `).appendText(`· ${e.source ?? 'unknown runtime'}`).appendMarkdown(` — ${inlineCode(e.inline ?? e.value)}\n`);
+    }
+    const dropped = line.count - line.history.length;
+    if (dropped > 0) md.appendMarkdown(`- _…and ${dropped} earlier not kept_\n`);
   }
   return md;
 }
 
 function redrawRuntimeLogDecorations(uri: string): void {
   if (!runtimeLogDecorationType) return;
+  scheduleValuesRefresh();
   const editor = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uri);
   if (!editor) return;
   const lines = runtimeLogState.linesFor(uri).filter((l) => l.line < editor.document.lineCount);
@@ -666,7 +712,7 @@ function redrawRuntimeLogDecorations(uri: string): void {
     const line = editor.document.lineAt(e.line);
     return {
       range: new vscode.Range(line.range.start, line.range.end),
-      hoverMessage: runtimeLogHover(l),
+      hoverMessage: runtimeLogHover(uri, l),
       renderOptions: {
         after: { contentText: formatRuntimeLogInline(l), color: new vscode.ThemeColor(SEVERITY_COLOR[e.severity]) },
       },
@@ -684,7 +730,7 @@ function redrawRuntimeLogDecorations(uri: string): void {
       title: formatRuntimeLogHoverTitle(l.history[0]!),
       history: formatRuntimeLogHistory(l),
       // The whole markdown, so a test can see the laid-out value and the "Show full value" link.
-      markdown: runtimeLogHover(l).value,
+      markdown: runtimeLogHover(uri, l).value,
     })),
   );
 }
@@ -841,6 +887,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     runtimeLogStatusBar,
     new vscode.Disposable(() => clearInterval(runtimeStatusPollInterval)),
     vscode.window.registerWebviewViewProvider('ejsngRuntimeView', runtimeLogView),
+    vscode.window.registerWebviewViewProvider(RuntimeValuesViewProvider.viewId, createValuesView(), {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+    vscode.commands.registerCommand(INSPECT_VALUE_COMMAND, inspectValue),
+    vscode.commands.registerCommand(COPY_VALUE_COMMAND, copyValue),
     vscode.commands.registerCommand('ejsng.reindex', async () => {
       const r = await client?.sendRequest('ejsng/reindex');
       void vscode.window.showInformationMessage(`EJS/NG: ${JSON.stringify(r)}`);
@@ -958,8 +1009,152 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
   return process.env.EJSNG_EXTENSION_TEST === '1' ? testApi : undefined;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The Runtime Values panel (bottom): every logged line, and the selected hit's value as a tree.
+// ---------------------------------------------------------------------------------------------
+
+/** What the panel is showing, so a refresh re-digs only when the hit it follows actually changed. */
+let valuesSelection: { id: string; hit: number; shown?: RuntimeLogEntry; expanded?: string } | undefined;
+let valuesRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+/** Trees already dug, by `logId` — asking the runtime again for the same hit is wasted round-trips. */
+const valueTrees = new Map<number, { tree: ValueTreeNode[]; stale: boolean }>();
+const MAX_VALUE_TREES = 50;
+
+function createValuesView(): RuntimeValuesViewProvider {
+  runtimeValuesView = new RuntimeValuesViewProvider({
+    select: (id, hit, follow) => void selectValue(id, hit, follow),
+    reveal: (id) => void revealSite(id),
+    copy: (text) => {
+      void vscode.env.clipboard.writeText(text);
+      vscode.window.setStatusBarMessage('$(copy) Runtime Log: value copied', 2000);
+    },
+    openJson: (id, hit) => {
+      const found = entryAt(id, hit);
+      if (found?.entry.logId !== undefined) void showLogValue({ logId: found.entry.logId, title: logValueTitle(found.line) });
+      else void vscode.window.showInformationMessage('Runtime Log: the runtime no longer holds this value — use Copy for the text it was drawn with.');
+    },
+    clear: () => {
+      valueTrees.clear();
+      valuesSelection = undefined;
+      for (const uri of runtimeLogState.clearAll()) redrawRuntimeLogDecorations(uri);
+      scheduleValuesRefresh();
+    },
+    connect: () => void vscode.commands.executeCommand('ejsng.connectRuntime'),
+  });
+  return runtimeValuesView;
+}
+
+/** Coalesce a burst of logs into one list update — a hot loop must not repaint the panel per hit. */
+function scheduleValuesRefresh(): void {
+  if (!runtimeValuesView || valuesRefreshTimer) return;
+  valuesRefreshTimer = setTimeout(() => {
+    valuesRefreshTimer = undefined;
+    runtimeValuesView?.showSites(valueSites(runtimeLogState, (uri) => vscode.workspace.asRelativePath(vscode.Uri.parse(uri), true)));
+  }, 150);
+}
+
+function entryAt(id: string, hit: number): { line: RuntimeLogLine; entry: RuntimeLogEntry } | null {
+  const site = parseSiteId(id);
+  if (!site) return null;
+  const line = runtimeLogState.linesFor(site.uri).find((l) => l.line === site.line);
+  const entry = line?.history[Math.min(hit, line.history.length - 1)];
+  return line && entry ? { line, entry } : null;
+}
+
+async function selectValue(id: string, hit: number, follow = false): Promise<void> {
+  const found = entryAt(id, hit);
+  if (!found) return;
+  const { line, entry } = found;
+  // The panel asks again on every list refresh while it follows the latest hit; the same entry,
+  // already expanded as far as it will be, needs no second dig.
+  const same = valuesSelection?.id === id && valuesSelection.hit === hit;
+  if (follow && same && valuesSelection!.shown === entry && valuesSelection!.expanded === entry.expanded) return;
+  valuesSelection = { id, hit, shown: entry, expanded: entry.expanded };
+  const { hits, dropped } = valueHits(line);
+  let roots: ValueTreeNode[] | undefined;
+  let note: string | undefined;
+  if (entry.logId !== undefined) {
+    let dug = valueTrees.get(entry.logId);
+    if (!dug) {
+      const result = await client?.sendRequest<{ tree: ValueTreeNode[]; stale: boolean } | null>('ejsng/inspectRuntimeLog', { logId: entry.logId });
+      if (result) {
+        dug = result;
+        if (!result.stale) {
+          valueTrees.set(entry.logId, result);
+          if (valueTrees.size > MAX_VALUE_TREES) valueTrees.delete(valueTrees.keys().next().value!);
+        }
+      }
+    }
+    if (dug) {
+      roots = dug.tree;
+      if (dug.stale) note = 'The runtime no longer holds part of this value (the page navigated or the app restarted) — only what was already known is shown.';
+    }
+  }
+  if (!roots) {
+    roots = textOnlyRoots(entry);
+    // Dug once, so it held objects — and the runtime has let go of them since.
+    if (entry.expanded !== undefined) note = 'The runtime no longer holds this value — shown as it was drawn.';
+  }
+  // Another selection may have been made while the runtime was answering.
+  if (valuesSelection?.id !== id || valuesSelection.hit !== hit) return;
+  const detail: ValueDetail = { id, hit: Math.min(hit, line.history.length - 1), hits, dropped, roots, ...(note ? { note } : {}) };
+  runtimeValuesView?.showDetail(detail);
+}
+
+async function revealSite(id: string): Promise<void> {
+  const site = parseSiteId(id);
+  if (!site) return;
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(site.uri));
+  const at = new vscode.Position(Math.min(site.line, doc.lineCount - 1), 0);
+  await vscode.window.showTextDocument(doc, { selection: new vscode.Range(at, at), preserveFocus: true, preview: true });
+}
+
+/**
+ * `ejsng.inspectLogValue` — the hover's "Inspect" link, or the editor's context menu: open
+ * the Runtime Values panel on this line. Without arguments, the line under the cursor.
+ */
+async function inspectValue(raw?: unknown): Promise<void> {
+  const args = raw as { uri?: unknown; line?: unknown } | undefined;
+  let uri: string | undefined;
+  let line: number | undefined;
+  if (args && typeof args.uri === 'string' && typeof args.line === 'number') {
+    uri = args.uri;
+    line = args.line;
+  } else {
+    const editor = vscode.window.activeTextEditor;
+    if (editor) {
+      uri = editor.document.uri.toString();
+      line = editor.selection.active.line;
+    }
+  }
+  await vscode.commands.executeCommand(`${RuntimeValuesViewProvider.viewId}.focus`);
+  if (uri === undefined || line === undefined) return;
+  if (!runtimeLogState.linesFor(uri).some((l) => l.line === line)) {
+    void vscode.window.showInformationMessage('Runtime Log: nothing has been logged on this line yet.');
+    return;
+  }
+  runtimeValuesView?.select(siteId(uri, line));
+}
+
+/** `ejsng.copyLogValue` — the hover's "Copy": the whole value as JSON while the runtime holds it, else the text drawn. */
+async function copyValue(raw?: unknown): Promise<void> {
+  const args = raw as { uri?: unknown; line?: unknown; logId?: unknown } | undefined;
+  if (!args || typeof args.uri !== 'string' || typeof args.line !== 'number') return;
+  const found = entryAt(siteId(args.uri, args.line), 0);
+  if (!found) return;
+  let text = found.entry.expanded ?? found.entry.value;
+  if (typeof args.logId === 'number') {
+    const result = await client?.sendRequest<{ json: string; stale: boolean }>('ejsng/expandRuntimeLog', { logId: args.logId });
+    if (result && !result.stale) text = result.json;
+  }
+  await vscode.env.clipboard.writeText(text);
+  vscode.window.setStatusBarMessage('$(copy) Runtime Log: value copied', 2000);
+}
+
 const LOG_VARIABLE_COMMAND = 'ejsng.logVariable';
 const SHOW_LOG_VALUE_COMMAND = 'ejsng.showLogValue';
+const INSPECT_VALUE_COMMAND = 'ejsng.inspectLogValue';
+const COPY_VALUE_COMMAND = 'ejsng.copyLogValue';
 /** Read-only documents holding a logged value, so VS Code's own JSON folding and search apply. */
 const LOG_VALUE_SCHEME = 'ejsng-log';
 

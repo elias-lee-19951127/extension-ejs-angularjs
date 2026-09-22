@@ -26,6 +26,13 @@
           "title": "EJS/NG Runtime",
           "icon": "media/runtime-icon.svg"
         }
+      ],
+      "panel": [
+        {
+          "id": "ejsngRuntimeValuesPanel",
+          "title": "Runtime Values",
+          "icon": "media/runtime-icon.svg"
+        }
       ]
     },
     "views": {
@@ -35,6 +42,14 @@
           "name": "Runtime Log",
           "type": "webview",
           "contextualTitle": "EJS/NG Runtime"
+        }
+      ],
+      "ejsngRuntimeValuesPanel": [
+        {
+          "id": "ejsngRuntimeValues",
+          "name": "Runtime Values",
+          "type": "webview",
+          "contextualTitle": "Runtime Values"
         }
       ]
     },
@@ -80,6 +95,14 @@
         "title": "EJS/NG: Show Full Logged Value"
       },
       {
+        "command": "ejsng.inspectLogValue",
+        "title": "EJS/NG: Inspect Logged Value"
+      },
+      {
+        "command": "ejsng.copyLogValue",
+        "title": "EJS/NG: Copy Logged Value"
+      },
+      {
         "command": "ejsng.logHere",
         "title": "EJS/NG: Log This at Runtime"
       }
@@ -98,6 +121,11 @@
           "command": "ejsng.logHere",
           "when": "editorLangId == javascript",
           "group": "debug@1"
+        },
+        {
+          "command": "ejsng.inspectLogValue",
+          "when": "editorLangId == javascript",
+          "group": "debug@2"
         }
       ],
       "commandPalette": [
@@ -107,6 +135,10 @@
         },
         {
           "command": "ejsng.showLogValue",
+          "when": "false"
+        },
+        {
+          "command": "ejsng.copyLogValue",
           "when": "false"
         }
       ]
@@ -202,10 +234,19 @@
           "description": "Maps a container-internal path to its path on this machine, for inline runtime log from a Dockerized process (e.g. [{\"remote\": \"/app\", \"local\": \"/Users/me/project\"}]). Usually not needed: mappings are inferred from the connected container's own mounts. Declare one here to override that, or for a process this extension can't read the mounts of. Not needed at all for a process running directly on this machine. Under Remote-WSL, write Linux paths (/home/me/project); a pasted \\\\wsl.localhost\\… path is read as its Linux path. The most specific remote is applied first, whatever the order here.",
           "items": {
             "type": "object",
-            "required": ["remote", "local"],
+            "required": [
+              "remote",
+              "local"
+            ],
             "properties": {
-              "remote": { "type": "string", "description": "Path prefix as reported by the container, e.g. /app" },
-              "local": { "type": "string", "description": "The matching path on this machine, e.g. /Users/me/project. May use ${workspaceFolder} so the mapping can be committed to the repo." }
+              "remote": {
+                "type": "string",
+                "description": "Path prefix as reported by the container, e.g. /app"
+              },
+              "local": {
+                "type": "string",
+                "description": "The matching path on this machine, e.g. /Users/me/project. May use ${workspaceFolder} so the mapping can be committed to the repo."
+              }
             }
           }
         },
@@ -221,7 +262,11 @@
         },
         "ejsng.logLens": {
           "type": "string",
-          "enum": ["unknown", "all", "off"],
+          "enum": [
+            "unknown",
+            "all",
+            "off"
+          ],
           "default": "unknown",
           "enumDescriptions": [
             "A lens only on assignments the index cannot type (about 3% of a controller's lines) — where logging teaches the most.",
@@ -243,7 +288,9 @@
         "ejsng.runtimeLog.skipFrames": {
           "type": "array",
           "default": [],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "markdownDescription": "Extra glob patterns for stack frames to never anchor a runtime log to (e.g. a vendored logger not already covered by the defaults, or your team's own log wrapper). This ADDS to the built-in default list — it never replaces it. Defaults already skipped: `node:internal/**`, `node:*`, `**/node_modules/**`, and common logger directories (`log4js`, `winston`, `bunyan`, `pino`)."
         }
       }

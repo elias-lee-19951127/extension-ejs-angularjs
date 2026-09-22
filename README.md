@@ -191,9 +191,13 @@ diện" — xem [phụ lục I](docs/kien-truc.md).
 
 Giá trị object/mảng trong log inline hiện ra **thật**, không còn `[Object]`: extension hỏi app đang chạy các
 thuộc tính của giá trị đó (`Runtime.getProperties`), tối đa 1 lần mỗi dòng mỗi 300 ms. Hover cho bản trải ra
-nhiều dòng; bấm **Show full value** mở một tab JSON chỉ đọc với toàn bộ giá trị — gập/mở, tìm kiếm, copy đều là
+nhiều dòng; bấm **Open as JSON** (trong hover, cạnh **Inspect** và **Copy**) mở một tab JSON chỉ đọc với toàn bộ giá trị — gập/mở, tìm kiếm, copy đều là
 sẵn có của VS Code. Đo trên Chrome thật: app log 33 lần/giây chạy **y như khi tắt** tính năng này.
 Tắt bằng `ejsng.runtimeLog.expandValues`.
+
+**Runtime Values** — một tab ở bottom panel, cạnh Terminal — đọc như cửa sổ debugger: mọi dòng đã log, mới nhất lên
+đầu, và giá trị của lần chạy đang chọn dạng cây (`name = {Type} preview`), tô màu theo kiểu, mở/đóng bằng chuột hoặc
+phím mũi tên. Bấm **Inspect** trong hover để mở tab đúng dòng đó.
 
 ### Ba cách đặt logpoint, không cách nào phải gõ
 
