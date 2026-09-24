@@ -573,3 +573,30 @@ test('LSP: ejsng/logHere answers what the cursor asks to log, or why it cannot',
   assert.deepStrictEqual(await ask('load();', 0), { reason: 'call' });
   assert.deepStrictEqual(await conn.sendRequest('ejsng/logHere', { uri: 'file:///x/page.html', line: 0, character: 0 }), { reason: 'not-js' });
 });
+
+test('LSP: ejsng/templateLinks gives the gutter links both ways between a templateUrl and its template', async (t) => {
+  const { conn, root, open } = await startServer(t);
+  mkdirSync(join(root, 'public', 'js'), { recursive: true });
+  mkdirSync(join(root, 'public', 'views'), { recursive: true });
+  const js =
+    "myApp.directive('itemList', function () {\n" +
+    "  return { templateUrl: 'views/list.html', controller: 'ListCtrl' };\n" +
+    '});\n';
+  writeFileSync(join(root, 'public', 'js', 'app.js'), js);
+  writeFileSync(join(root, 'public', 'views', 'list.html'), '<p>{{ items }}</p>\n');
+  notifyWatched(conn, root, ['public', CREATED]);
+  const doc = open('public/js/app.js', 'javascript');
+  const tpl = open('public/views/list.html', 'html');
+
+  const { links } = await conn.sendRequest('ejsng/templateLinks', { uri: doc.uri });
+  assert.strictEqual(links.length, 1);
+  assert.strictEqual(links[0].kind, 'template');
+  assert.deepStrictEqual(links[0].range.start, positionOf(js, "'views/list.html'"));
+  assert.strictEqual(pathOf(links[0].target.uri), join(root, 'public', 'views', 'list.html'));
+
+  const back = (await conn.sendRequest('ejsng/templateLinks', { uri: tpl.uri })).links;
+  assert.strictEqual(back.length, 1);
+  assert.strictEqual(back[0].kind, 'templateUrl');
+  assert.strictEqual(back[0].controller, 'ListCtrl');
+  assert.deepStrictEqual(back[0].target.range.start, positionOf(js, "'views/list.html'"));
+});

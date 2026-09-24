@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0
+
+**A `templateUrl` written the way Angular reads it now links to its template.** Angular fetches a
+`templateUrl` relative to the page, not to the script, so `templateUrl: 'views/list.html'` in
+`public/js/app.js` is `public/views/list.html` — and without a `templateRoots` entry it linked to
+nothing: no Ctrl+click, and the template's expressions never reached the controller. After
+`templateRoots` and the workspace root, the URL is now tried under each directory above the script
+(nearest first), then as the end of a path (`/`-bounded, the file nearest the script; a tie links
+none). `./`, `../` and `http://host` prefixes are understood. Only the file the URL names is tried
+there — `profile.html` → `profile.ejs` still needs `templateRoots`.
+
+**Gutter icons between a `templateUrl` and its template**, as IntelliJ marks related code: an HTML
+icon beside each `templateUrl` that resolves, a controller icon on the first line of a template
+loaded by one — hover it to see which directive/route/state loads it and with which controller.
+**EJS/NG: Go to Related Template / Controller** (`Ctrl+Cmd+↑` on macOS, `Ctrl+Alt+Home` elsewhere —
+IntelliJ's own keys, also in the editor's context menu) jumps across.
+
+**Looks like IntelliJ.** Inline runtime values are drawn as IntelliJ's debugger draws them: muted
+italic, a little after the code, no `»`; warnings and errors keep their own color. Three colors are
+contributed (`ejsng.inlineValue.foreground`, `…warningForeground`, `…errorForeground`), so a theme
+or `workbench.colorCustomizations` can change them. The Runtime Values panel follows the Variables
+view: round kind icons, `name = {Type} value` in Darcula or IntelliJ Light token colors, 24px rows,
+IntelliJ's selection colors, and an icon-only toolbar. High-contrast themes keep VS Code's own colors.
+
 ## 0.5.1
 
 **An inline value now appears on the line the logpoint was set on.** A logpoint placed from the

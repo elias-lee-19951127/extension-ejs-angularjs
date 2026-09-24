@@ -58,7 +58,7 @@ test('connect -> the log is drawn at the end of the right line of the real file,
   runtime.sendLog('hello', { url: '/srv/app/app.js', line: 1 });
 
   const drawn = await waitFor(() => api.decorations(appUri.toString()).length > 0 && api.decorations(appUri.toString()), 'a decoration in app.js');
-  assert.deepStrictEqual(drawn, [{ line: 1, text: '  » hello' }]);
+  assert.deepStrictEqual(drawn, [{ line: 1, text: 'hello' }]);
   const [hover] = api.hovers(appUri.toString());
   assert.strictEqual(hover.line, 1);
   assert.match(hover.title, new RegExp(`^node 127\\.0\\.0\\.1:${runtime.port} · log · \\d\\d:\\d\\d:\\d\\d$`));
@@ -84,7 +84,7 @@ test('a later log on the same line replaces the value; a file opened afterwards 
     () => api.decorations(workerUri.toString()).length > 0 && api.decorations(workerUri.toString()),
     'worker.js to be decorated once opened',
   );
-  assert.deepStrictEqual(drawn, [{ line: 1, text: '  » second (×2)' }]);
+  assert.deepStrictEqual(drawn, [{ line: 1, text: 'second (×2)' }]);
   // Ticket 05: the earlier value is kept for the hover, with its own source.
   const [hover] = api.hovers(workerUri.toString());
   assert.strictEqual(hover.history.length, 1);
@@ -174,7 +174,7 @@ test('a line hit several times shows its count; reconnecting to the same runtime
 
   for (const i of [0, 1, 2]) runtime.sendLog(String(i), { url: '/srv/app/history.js', line: 1 });
   const drawn = await waitFor(
-    () => api.decorations(historyUri.toString()).find((d) => d.text === '  » 2 (×3)'),
+    () => api.decorations(historyUri.toString()).find((d) => d.text === '2 (×3)'),
     'the loop line drawn with its count',
   );
   assert.strictEqual(drawn.line, 1);
@@ -186,5 +186,5 @@ test('a line hit several times shows its count; reconnecting to the same runtime
 
   runtime.sendLog('fresh', { url: '/srv/app/history.js', line: 1 });
   const fresh = await waitFor(() => api.decorations(historyUri.toString())[0], 'the new run’s value');
-  assert.strictEqual(fresh.text, '  » fresh');
+  assert.strictEqual(fresh.text, 'fresh');
 });

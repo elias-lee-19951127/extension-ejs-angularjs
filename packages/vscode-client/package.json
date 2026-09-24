@@ -2,7 +2,7 @@
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "publisher": "phule",
   "license": "MIT",
   "icon": "icon.png",
@@ -105,6 +105,11 @@
       {
         "command": "ejsng.logHere",
         "title": "EJS/NG: Log This at Runtime"
+      },
+      {
+        "command": "ejsng.goToRelated",
+        "title": "EJS/NG: Go to Related Template / Controller",
+        "icon": "$(link)"
       }
     ],
     "keybindings": [
@@ -113,10 +118,21 @@
         "key": "ctrl+alt+l",
         "mac": "cmd+alt+l",
         "when": "editorTextFocus && editorLangId == javascript"
+      },
+      {
+        "command": "ejsng.goToRelated",
+        "key": "ctrl+alt+home",
+        "mac": "ctrl+cmd+up",
+        "when": "editorTextFocus && editorLangId =~ /^(javascript|html|ejs)$/"
       }
     ],
     "menus": {
       "editor/context": [
+        {
+          "command": "ejsng.goToRelated",
+          "when": "editorLangId =~ /^(javascript|html|ejs)$/",
+          "group": "navigation@9"
+        },
         {
           "command": "ejsng.logHere",
           "when": "editorLangId == javascript",
@@ -294,7 +310,39 @@
           "markdownDescription": "Extra glob patterns for stack frames to never anchor a runtime log to (e.g. a vendored logger not already covered by the defaults, or your team's own log wrapper). This ADDS to the built-in default list — it never replaces it. Defaults already skipped: `node:internal/**`, `node:*`, `**/node_modules/**`, and common logger directories (`log4js`, `winston`, `bunyan`, `pino`)."
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "ejsng.inlineValue.foreground",
+        "description": "Inline runtime value drawn after a line that logged (IntelliJ debugger style).",
+        "defaults": {
+          "dark": "#8C8C8C",
+          "light": "#8C8C8C",
+          "highContrast": "#C0C0C0",
+          "highContrastLight": "#5A5A5A"
+        }
+      },
+      {
+        "id": "ejsng.inlineValue.warningForeground",
+        "description": "Inline runtime value from console.warn.",
+        "defaults": {
+          "dark": "#D6AE58",
+          "light": "#A57B00",
+          "highContrast": "#FFD700",
+          "highContrastLight": "#7A5A00"
+        }
+      },
+      {
+        "id": "ejsng.inlineValue.errorForeground",
+        "description": "Inline runtime value from console.error.",
+        "defaults": {
+          "dark": "#DB5C5C",
+          "light": "#D02F2F",
+          "highContrast": "#FF6B6B",
+          "highContrastLight": "#B00020"
+        }
+      }
+    ]
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

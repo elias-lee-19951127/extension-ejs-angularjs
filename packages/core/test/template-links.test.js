@@ -268,3 +268,75 @@ angular.module('app', [])
     r.reason,
   );
 });
+
+// A templateUrl is fetched relative to the PAGE, so a correct Angular URL is rarely a path from the
+// workspace root. None of these declare templateRoots: the URL alone must find the template.
+const pageRelativeApp = (url) => `
+angular.module('app', [])
+  .controller('ListCtrl', function ($scope) { $scope.items = []; })
+  .directive('itemList', function () { return { templateUrl: '${url}', controller: 'ListCtrl' }; });
+`;
+
+for (const url of ['views/list.html', '/views/list.html', './views/list.html', 'http://localhost:3000/views/list.html']) {
+  test(`no templateRoots: '${url}' from public/js/app.js finds public/views/list.html (the page's directory)`, (t) => {
+    const ws = workspace(t, {
+      'public/js/app.js': pageRelativeApp(url),
+      'public/views/list.html': '<li ng-repeat="i in items">{{ i }}</li>\n',
+    });
+
+    assert.deepStrictEqual(ws.templateLinkIssues(), []);
+    const open = ws.definitionAt('public/js/app.js', at(ws, 'public/js/app.js', 'views/list.html'));
+    assert.strictEqual(open.targets.length, 1, open.reason);
+    assert.strictEqual(open.targets[0].path, 'public/views/list.html');
+    const d = ws.definitionAt('public/views/list.html', at(ws, 'public/views/list.html', 'items'));
+    assert.strictEqual(d.targets.length, 1, d.reason);
+    assert.strictEqual(d.targets[0].path, 'public/js/app.js');
+  });
+}
+
+test('no templateRoots: a page served from a sibling directory is found by the end of the path', (t) => {
+  const ws = workspace(t, {
+    'client/scripts/app.js': pageRelativeApp('app/components/list/list.html'),
+    'web/app/components/list/list.html': '<p>{{ items.length }}</p>\n',
+  });
+
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+  const d = ws.definitionAt('web/app/components/list/list.html', at(ws, 'web/app/components/list/list.html', 'items'));
+  assert.strictEqual(d.targets.length, 1, d.reason);
+});
+
+test('no templateRoots: of two files ending with the URL, the one nearest the script wins; a tie links none', (t) => {
+  const near = workspace(t, {
+    'admin/js/app.js': pageRelativeApp('partials/list.html'),
+    'admin/static/partials/list.html': '<p>{{ items }}</p>\n',
+    'shop/static/partials/list.html': '<p>{{ items }}</p>\n',
+  });
+  const open = near.definitionAt('admin/js/app.js', at(near, 'admin/js/app.js', 'partials/list.html'));
+  assert.strictEqual(open.targets[0]?.path, 'admin/static/partials/list.html', open.reason);
+
+  const tie = workspace(t, {
+    'js/app.js': pageRelativeApp('partials/list.html'),
+    'admin/partials/list.html': '<p>{{ items }}</p>\n',
+    'shop/partials/list.html': '<p>{{ items }}</p>\n',
+  });
+  assert.strictEqual(tie.templateLinkIssues()[0]?.reason, 'no-file');
+});
+
+test('gutter markers: a templateUrl marks its template, and the template marks the templateUrl back', (t) => {
+  const ws = workspace(t, {
+    'public/js/app.js': pageRelativeApp('views/list.html'),
+    'public/views/list.html': '<p>{{ items }}</p>\n',
+  });
+
+  const js = ws.templateLinkMarkers('public/js/app.js');
+  assert.strictEqual(js.length, 1);
+  assert.strictEqual(js[0].kind, 'template');
+  assert.strictEqual(js[0].target.path, 'public/views/list.html');
+  assert.strictEqual(js[0].controller, 'ListCtrl');
+
+  const html = ws.templateLinkMarkers('public/views/list.html');
+  assert.strictEqual(html.length, 1);
+  assert.strictEqual(html[0].kind, 'templateUrl');
+  assert.strictEqual(html[0].target.path, 'public/js/app.js');
+  assert.strictEqual(textAt(ws, html[0].target), "'views/list.html'");
+});

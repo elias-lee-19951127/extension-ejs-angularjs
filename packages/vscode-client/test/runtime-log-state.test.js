@@ -450,8 +450,8 @@ test('RuntimeLogState history: a line keeps its last values, most recent first, 
 });
 
 test('formatRuntimeLogInline: the count appears only once a line has been hit more than once', () => {
-  assert.strictEqual(formatRuntimeLogInline({ line: 4, count: 1, history: [hit('"tổng: 42"')] }), '  » "tổng: 42"');
-  assert.strictEqual(formatRuntimeLogInline({ line: 4, count: 3, history: [hit('"tổng: 42"')] }), '  » "tổng: 42" (×3)');
+  assert.strictEqual(formatRuntimeLogInline({ line: 4, count: 1, history: [hit('"tổng: 42"')] }), '"tổng: 42"');
+  assert.strictEqual(formatRuntimeLogInline({ line: 4, count: 3, history: [hit('"tổng: 42"')] }), '"tổng: 42" (×3)');
 });
 
 test('formatRuntimeLogHistory: earlier values with their own source, one line each, and what is no longer kept', () => {
@@ -505,14 +505,14 @@ test('expand: the dug rendering replaces the line text in place, and the hover k
   state.record('file:///a.js', { line: 3, character: 0, value: 'rows [Object]', severity: 'log', logId: 7 });
   state.record('file:///a.js', { line: 3, character: 0, value: 'rows [Object]', severity: 'log', logId: 8 });
   const [line] = state.linesFor('file:///a.js');
-  assert.strictEqual(formatRuntimeLogInline(line), '  » rows [Object] (×2)', 'the preview text until the dig comes back');
+  assert.strictEqual(formatRuntimeLogInline(line), 'rows [Object] (×2)', 'the preview text until the dig comes back');
 
   // The newest log is history[0]; an older one expanding must not become the drawn text.
   assert.strictEqual(state.expand(7, { inline: 'rows [{id: 1}]', expanded: 'rows\n[\n  {id: 1}\n]' }), 'file:///a.js');
-  assert.strictEqual(formatRuntimeLogInline(state.linesFor('file:///a.js')[0]), '  » rows [Object] (×2)');
+  assert.strictEqual(formatRuntimeLogInline(state.linesFor('file:///a.js')[0]), 'rows [Object] (×2)');
   state.expand(8, { inline: 'rows [{id: 2}]', expanded: 'rows\n[\n  {id: 2}\n]' });
   const expanded = state.linesFor('file:///a.js')[0];
-  assert.strictEqual(formatRuntimeLogInline(expanded), '  » rows [{id: 2}] (×2)');
+  assert.strictEqual(formatRuntimeLogInline(expanded), 'rows [{id: 2}] (×2)');
   assert.strictEqual(expanded.history[0].expanded, 'rows\n[\n  {id: 2}\n]');
   assert.strictEqual(expanded.history[1].inline, 'rows [{id: 1}]', 'the older one kept its own');
 

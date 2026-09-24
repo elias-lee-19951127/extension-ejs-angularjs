@@ -41,7 +41,7 @@ test('a logpoint (never a plain breakpoint) is set on the runtime by its contain
   const id = Number(/ejsng-logpoint-(\d+)$/.exec(set.params.condition)[1]);
   runtime.sendLog(['said ', 'hi'], { url: '/srv/app/logpoint.js', line: 1, logpointId: id });
   const drawn = await waitFor(() => api.decorations(appUri.toString()).find((d) => d.line === 1 && d.text.includes('said')), 'the logpoint output drawn');
-  assert.strictEqual(drawn.text, '  » said hi');
+  assert.strictEqual(drawn.text, 'said hi');
 
   vscode.debug.removeBreakpoints([logpoint]);
   await waitFor(() => removeCommands(runtime).length === setCommands(runtime).length, 'every breakpoint set to be removed');

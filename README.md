@@ -87,6 +87,9 @@ node packages/cli/dist/index.js sweep --root /duong/dan/toi/repo
 Cuối output là danh sách `templateUrl` chưa nối được (biểu thức động, không khớp file nào, hoặc một
 template bị gán nhiều controller). Khai `templateRoots` qua CLI bằng
 `--template-root /views/=src/views=.ejs,.html` (lặp lại được) và `--views-dir src/views`.
+Thường không cần: một `templateUrl` viết đúng kiểu Angular (tương đối theo trang, ví dụ
+`'views/list.html'` trong `public/js/app.js`) được tìm dưới các thư mục cha của file JS, rồi theo
+đuôi đường dẫn. `templateRoots` chỉ cần khi URL khác đường dẫn đĩa (prefix riêng, `.html` → `.ejs`).
 
 Định vị bằng chuỗi thay vì đếm cột (dùng khi soi một biểu thức cụ thể):
 

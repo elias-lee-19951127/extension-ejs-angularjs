@@ -47,6 +47,37 @@ export interface TemplateLinkIndex {
   viewTargets: Map<string, string>;
   /** View path -> every `res.render()` call rendering it. */
   renderers: Map<string, RenderSite[]>;
+  /** Template path -> every `templateUrl` that resolved to it: the way back from the HTML to its JS. */
+  usedBy: Map<string, TemplateUse[]>;
+  /** Every indexed path — what a `templateUrl` in an edited, not yet indexed buffer resolves against. */
+  paths: Set<string>;
+}
+
+/** One `templateUrl` site pointing at a template. */
+export interface TemplateUse {
+  path: string;
+  span: Span;
+  via: TemplateLink['via'];
+  owner: string;
+  url: string;
+  controller: string | null;
+}
+
+/**
+ * A JS↔template link to mark beside the code — the editor's gutter icon:
+ * - in a `.js` file: each `templateUrl` string that maps to a template, pointing at that file;
+ * - in a template: the whole file, pointing at each `templateUrl` that loads it.
+ */
+export interface TemplateLinkMarker {
+  /** Where the marker sits in the file asked about. */
+  span: Span;
+  target: { path: string; span: Span };
+  /** `'template'`: the marker opens a template. `'templateUrl'`: it opens the JS that loads this one. */
+  kind: 'template' | 'templateUrl';
+  via: TemplateLink['via'];
+  owner: string;
+  url: string;
+  controller: string | null;
 }
 
 /** Express's own default when no views directory is configured: `<app root>/views`. */
@@ -62,6 +93,8 @@ export function linkTemplates(all: Array<{ path: string; facts: FileFacts }>, co
     urlTargets: new Map(),
     viewTargets: new Map(),
     renderers: new Map(),
+    usedBy: new Map(),
+    paths: exists,
   };
   const candidates = new Map<string, TemplateBinding[]>();
 
@@ -74,12 +107,15 @@ export function linkTemplates(all: Array<{ path: string; facts: FileFacts }>, co
         index.issues.push({ ...base, reason: 'dynamic', detail: 'templateUrl is an expression, not a string literal' });
         continue;
       }
-      const target = resolveTemplateUrl(link.url, config, exists);
+      const target = resolveTemplateUrl(link.url, config, exists, path);
       if (!target) {
         index.issues.push({ ...base, reason: 'no-file', detail: `no indexed file matches '${link.url}' — check templateRoots` });
         continue;
       }
       index.urlTargets.set(`${path}:${link.urlSpan.start}`, target);
+      const uses = index.usedBy.get(target) ?? [];
+      uses.push({ path, span: link.urlSpan, via: link.via, owner: link.owner, url: link.url, controller: link.controller });
+      index.usedBy.set(target, uses);
       if (!link.controller) continue; // a template with no controller of its own: nothing to bind
       const list = candidates.get(target) ?? [];
       list.push({ controller: link.controller, alias: link.controllerAs, from: { path, span: link.urlSpan, via: link.via, owner: link.owner, url: link.url } });
@@ -123,13 +159,21 @@ export function linkTemplates(all: Array<{ path: string; facts: FileFacts }>, co
 }
 
 /**
- * Map a runtime `templateUrl` to an indexed file. Tries each `templateRoots` entry whose
- * `urlPrefix` matches (longest prefix first), then the URL as a path from the workspace root.
- * Within a root, the file as named comes first, then each of its `extensions` — swapped for the
- * URL's own extension (`profile.html` -> `profile.ejs`) or appended when the URL has none.
+ * Map a runtime `templateUrl` to an indexed file, first match wins:
+ * 1. each `templateRoots` entry whose `urlPrefix` matches (longest prefix first) — within a root,
+ *    the file as named, then each of its `extensions`, swapped for the URL's own extension
+ *    (`profile.html` -> `profile.ejs`) or appended when the URL has none;
+ * 2. the URL as a path from the workspace root;
+ * 3. the URL under each directory above `fromPath`, nearest first. Angular fetches a `templateUrl`
+ *    relative to the PAGE, not to the script — and the page is almost always served from a
+ *    directory above its scripts: `public/js/app.js` + `'views/list.html'` -> `public/views/list.html`;
+ * 4. the one indexed file whose path ends with the URL (`/` boundary), nearest to `fromPath` when
+ *    several do — a page served from a directory that is not an ancestor of the script.
+ * Steps 2–4 guess nothing about extensions: only the file the URL names.
  */
-export function resolveTemplateUrl(url: string, config: Config, exists: Set<string>): string | null {
-  const clean = url.split(/[?#]/)[0]!;
+export function resolveTemplateUrl(url: string, config: Config, exists: Set<string>, fromPath?: string): string | null {
+  const clean = stripOrigin(url.split(/[?#]/)[0]!.trim());
+  if (clean === '') return null;
   const roots = [...(config.templateRoots ?? [])].sort((a, b) => b.urlPrefix.length - a.urlPrefix.length);
   for (const root of roots) {
     if (!clean.startsWith(root.urlPrefix)) continue;
@@ -138,7 +182,49 @@ export function resolveTemplateUrl(url: string, config: Config, exists: Set<stri
     const hit = firstExisting(posix.join(dir, clean.slice(root.urlPrefix.length)), root.extensions ?? [], exists);
     if (hit) return hit;
   }
-  return firstExisting(clean, [], exists);
+  const direct = firstExisting(clean, [], exists);
+  if (direct) return direct;
+
+  // `./x.html` and `../x.html` name a file relative to the page, which we don't know: keep the rest.
+  const tail = posix.normalize(clean.replace(/^\/+/, '')).replace(/^(\.\.\/)+/, '');
+  if (tail === '' || tail === '.' || tail === '..') return null;
+  if (fromPath) {
+    for (let dir = posix.dirname(fromPath); ; dir = posix.dirname(dir)) {
+      const hit = firstExisting(dir === '.' ? tail : posix.join(dir, tail), [], exists);
+      if (hit) return hit;
+      if (dir === '.' || dir === '/' || dir === '') break;
+    }
+  }
+  return nearestBySuffix(tail, exists, fromPath ?? '');
+}
+
+/** `http://host:3000/views/a.html` and `//cdn/views/a.html` -> `/views/a.html`. */
+function stripOrigin(url: string): string {
+  const m = /^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]*(\/.*)?$/i.exec(url);
+  return m ? (m[1] ?? '') : url;
+}
+
+/** The indexed file ending in `/<tail>` that shares the most leading directories with `fromPath`; `null` on a tie. */
+function nearestBySuffix(tail: string, exists: Set<string>, fromPath: string): string | null {
+  const suffix = '/' + tail;
+  const from = fromPath.split('/');
+  let best: string | null = null;
+  let bestScore = -1;
+  let tie = false;
+  for (const p of exists) {
+    if (!p.endsWith(suffix)) continue;
+    const parts = p.split('/');
+    let score = 0;
+    while (score < parts.length - 1 && score < from.length - 1 && parts[score] === from[score]) score++;
+    if (score > bestScore) {
+      best = p;
+      bestScore = score;
+      tie = false;
+    } else if (score === bestScore) {
+      tie = true;
+    }
+  }
+  return tie ? null : best;
 }
 
 /** Map the view name of `res.render('user/profile')` to an indexed file under `expressViewsDir`. */
@@ -190,6 +276,40 @@ export function withBinding(facts: TemplateFacts, binding: TemplateBinding): Tem
       return { ...e, scopeChain };
     }),
   };
+}
+
+/**
+ * The JS↔template markers of one file. A `.js` file's own `templateUrl`s are resolved from the facts
+ * passed in (the open buffer's, when it is being edited), so a marker follows the code as it moves.
+ */
+export function linkMarkers(index: TemplateLinkIndex, config: Config, relPath: string, facts: FileFacts): TemplateLinkMarker[] {
+  if (facts.kind === 'js') {
+    const out: TemplateLinkMarker[] = [];
+    for (const link of facts.templateLinks ?? []) {
+      if (link.url === null) continue;
+      const target = resolveTemplateUrl(link.url, config, index.paths, relPath);
+      if (!target) continue;
+      out.push({
+        span: link.urlSpan,
+        target: { path: target, span: { start: 0, end: 0 } },
+        kind: 'template',
+        via: link.via,
+        owner: link.owner,
+        url: link.url,
+        controller: link.controller,
+      });
+    }
+    return out;
+  }
+  return (index.usedBy.get(relPath) ?? []).map((u) => ({
+    span: { start: 0, end: 0 },
+    target: { path: u.path, span: u.span },
+    kind: 'templateUrl' as const,
+    via: u.via,
+    owner: u.owner,
+    url: u.url,
+    controller: u.controller,
+  }));
 }
 
 /**

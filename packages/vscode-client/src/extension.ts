@@ -38,6 +38,7 @@ import {
   type AppPortSource,
 } from './browser-locator';
 import { browserProfileDir, locateBrowser, spawnBrowser } from './browser-launch';
+import { registerTemplateGutter } from './template-gutter';
 
 let client: LanguageClient | undefined;
 let runtimeValuesView: RuntimeValuesViewProvider | undefined;
@@ -631,10 +632,11 @@ interface RuntimeLogNotification {
 }
 
 /** ANSI theme colors so the decoration matches the severity at a glance, in any color theme. */
+/** Inline value colors, contributed in package.json with IntelliJ's debugger defaults per theme. */
 const SEVERITY_COLOR: Record<RuntimeLogEntry['severity'], string> = {
-  log: 'terminal.ansiGreen',
-  warning: 'terminal.ansiYellow',
-  error: 'terminal.ansiRed',
+  log: 'ejsng.inlineValue.foreground',
+  warning: 'ejsng.inlineValue.warningForeground',
+  error: 'ejsng.inlineValue.errorForeground',
 };
 
 /** Command links a runtime log's hover may run — a hover's markdown runs none it doesn't name. */
@@ -869,8 +871,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     },
   );
 
+  // IntelliJ's inline debugger values: italic, muted, a few spaces after the code — read, not shouted.
   runtimeLogDecorationType = vscode.window.createTextEditorDecorationType({
-    after: { margin: '0 0 0 1.5em', fontWeight: 'bold' },
+    after: { margin: '0 0 0 2.5em', fontStyle: 'italic' },
   });
   runtimeLogStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   runtimeLogStatusBar.text = 'EJS/NG Runtime: off';
@@ -954,6 +957,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
   );
 
   await client.start();
+  registerTemplateGutter(context, () => client);
   // Shows the checklist's "not checked yet" state. A plain request to the server — nothing is
   // probed and nothing connects until the user presses Connect (user story #38).
   void refreshRuntimeStatus();

@@ -298,7 +298,13 @@ báo cáo "unresolved links" để người dùng biết mà khai báo tay.
 ở `packages/core/src/resolve/template-links.ts`:
 - Extractor ghi `JsFacts.templateLinks` (vẫn là fact thuần, chưa map ra file). Layer 4 map URL qua
   `templateRoots` (prefix dài nhất trước; thử tên y nguyên, rồi đổi/thêm từng `extensions`), cuối
-  cùng thử URL như đường dẫn từ gốc workspace.
+  cùng thử URL như đường dẫn từ gốc workspace. Không khớp nữa thì (0.6.0) thử URL dưới từng thư mục
+  cha của file JS, gần nhất trước — Angular tải `templateUrl` tương đối theo TRANG, và trang gần như
+  luôn nằm ở thư mục cha của script (`public/js/app.js` + `'views/list.html'` → `public/views/list.html`);
+  sau cùng là file duy nhất có đuôi đường dẫn khớp URL (gần script nhất, hoà thì không nối). Hai bước
+  này không đoán đuôi file.
+- Gutter icon (0.6.0): `Workspace.templateLinkMarkers()` → request `ejsng/templateLinks` — trong `.js`
+  mỗi `templateUrl` nối được, trong template mỗi `templateUrl` tải nó (`TemplateLinkIndex.usedBy`).
 - Controller được nối **lúc query**: `Workspace.facts()` chèn một frame controller ngay trong frame
   root của mọi scope chain — `ng-controller` bên trong template vẫn gần hơn nên vẫn thắng. Nhờ
   đi qua `facts()`, go-to-definition, completion, hover và rename đều thấy cùng một liên kết.

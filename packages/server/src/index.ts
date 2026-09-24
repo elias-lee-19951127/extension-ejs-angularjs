@@ -754,6 +754,24 @@ connection.onRequest('ejsng/logHere', (params: { uri?: string; line?: number; ch
   return { target: { ...result.target, uri: workspaceUri(workspace, r) } };
 });
 
+/**
+ * JS↔template links of one file, for the client's gutter icons: each `templateUrl` in a `.js` file
+ * with the template it opens, or — in a template — each `templateUrl` that loads it.
+ */
+connection.onRequest('ejsng/templateLinks', (params: { uri?: string }) => {
+  const r = typeof params?.uri === 'string' ? rel(params.uri) : null;
+  const doc = typeof params?.uri === 'string' ? documents.get(params.uri) : undefined;
+  if (!workspace || !r) return { links: [] };
+  const source = doc?.getText() ?? workspace.source(r);
+  if (source == null) return { links: [] };
+  const links = workspace.templateLinkMarkers(r).flatMap((m) => {
+    const target = toLocation(m.target.path, m.target.span);
+    if (!target) return [];
+    return [{ range: toRange(source, m.span), target, targetPath: m.target.path, kind: m.kind, via: m.via, owner: m.owner, url: m.url, controller: m.controller }];
+  });
+  return { links };
+});
+
 connection.onRequest('ejsng/reindex', () => {
   if (!workspace) return null;
   return workspace.index();

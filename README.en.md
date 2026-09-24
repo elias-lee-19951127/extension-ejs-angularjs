@@ -92,6 +92,10 @@ node packages/cli/dist/index.js sweep --root /path/to/your/repo
 The end of the output lists every `templateUrl` that could not be linked (a dynamic expression, no
 matching file, or one template given several controllers). Pass `templateRoots` on the CLI with
 `--template-root /views/=src/views=.ejs,.html` (repeatable) and `--views-dir src/views`.
+Usually not needed: a `templateUrl` written the way Angular reads it (relative to the page, e.g.
+`'views/list.html'` in `public/js/app.js`) is looked up under the directories above the JS file, then
+by the end of its path. `templateRoots` is only for a URL that differs from the path on disk (its own
+prefix, `.html` served from `.ejs`).
 
 Locate by string instead of counting columns (use this to inspect one specific expression):
 

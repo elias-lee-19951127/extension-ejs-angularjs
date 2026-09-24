@@ -383,7 +383,8 @@ export function formatRuntimeLogInline(line: RuntimeLogLine): string {
   const latest = line.history[0];
   // The expanded rendering when the dig has come back, the preview text until then.
   const value = latest?.inline ?? latest?.value ?? '';
-  return line.count > 1 ? `  » ${value} (×${line.count})` : `  » ${value}`;
+  // As IntelliJ's debugger draws inline values: the value alone, set apart by the decoration's margin.
+  return line.count > 1 ? `${value} (×${line.count})` : value;
 }
 
 /** A value shortened to one line for the history list in a hover. */

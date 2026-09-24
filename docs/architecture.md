@@ -309,6 +309,13 @@ in `packages/core/src/resolve/template-links.ts`:
 - The extractor records `JsFacts.templateLinks` (still a pure fact, not yet mapped to a file). Layer 4
   maps the URL through `templateRoots` (longest prefix first; the name as-is, then each of
   `extensions` swapped in or appended), and finally tries the URL as a path from the workspace root.
+  Failing those (0.6.0), the URL is tried under each directory above the JS file, nearest first —
+  Angular fetches a `templateUrl` relative to the PAGE, which almost always sits above its scripts
+  (`public/js/app.js` + `'views/list.html'` → `public/views/list.html`) — and last, the one file whose
+  path ends with the URL (nearest the script; a tie links none). Neither step guesses extensions.
+- Gutter icons (0.6.0): `Workspace.templateLinkMarkers()` → the `ejsng/templateLinks` request — in a
+  `.js` file each `templateUrl` that resolves, in a template each `templateUrl` loading it
+  (`TemplateLinkIndex.usedBy`).
 - The controller is joined **at query time**: `Workspace.facts()` inserts a controller frame just
   inside the root frame of every scope chain — an `ng-controller` inside the template is nearer, so
   it still wins. Because it goes through `facts()`, go-to-definition, completion, hover and rename

@@ -13,7 +13,15 @@ import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
 import { Linker } from './linker';
 import { nullableHints, observedTypeAt, observedTypeOf, type NullableHint, type ObservedTypeResult, type TypeEvidence } from './observed-type';
-import { linkDefinition, linkTemplates, withBinding, type TemplateLinkIndex, type TemplateLinkIssue } from './template-links';
+import {
+  linkDefinition,
+  linkMarkers,
+  linkTemplates,
+  withBinding,
+  type TemplateLinkIndex,
+  type TemplateLinkIssue,
+  type TemplateLinkMarker,
+} from './template-links';
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { resolveDefinition } from './definition';
@@ -482,6 +490,16 @@ export class Workspace implements FactSource, RenameSource {
    */
   templateLinkIssues(): TemplateLinkIssue[] {
     return this.templateLinks?.issues ?? [];
+  }
+
+  /**
+   * The JS↔template links of one file, for the editor to mark in its gutter: in a `.js` file each
+   * `templateUrl` that maps to a template; in a template, each `templateUrl` that loads it.
+   */
+  templateLinkMarkers(relPath: string): TemplateLinkMarker[] {
+    const facts = this.overlayFacts.get(relPath) ?? this.store.getFacts(relPath);
+    if (!facts || !this.templateLinks) return [];
+    return linkMarkers(this.templateLinks, this.config, relPath, facts);
   }
 
   source(relPath: string): string | null {

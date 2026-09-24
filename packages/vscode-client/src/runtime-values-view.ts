@@ -124,7 +124,24 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
     --c-error: var(--vscode-errorForeground, #f48771);
     --muted: var(--vscode-descriptionForeground);
     --border: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128,128,128,.35)));
-    --row-h: 22px;
+    --row-h: 24px;
+    --sel: var(--vscode-list-activeSelectionBackground);
+    --sel-fg: var(--vscode-list-activeSelectionForeground);
+    --sel-inactive: var(--vscode-list-inactiveSelectionBackground);
+    --hover: var(--vscode-list-hoverBackground);
+    --i-object: #E08855; --i-array: #548AF7; --i-value: #A571E6; --i-function: #5FB865;
+  }
+  /* IntelliJ's Variables view: Darcula / New UI Dark token colors on a dark theme… */
+  body.vscode-dark {
+    --c-name: #C77DBB; --c-string: #6AAB73; --c-number: #2AACB8; --c-boolean: #CF8E6D; --c-type: #868A91;
+    --c-function: #56A8F5; --muted: #868A91;
+    --sel: #2E436E; --sel-fg: inherit; --sel-inactive: #43454A; --hover: rgba(255,255,255,.05);
+  }
+  /* …and IntelliJ Light's on a light one. High contrast keeps the theme's own debugger colors. */
+  body.vscode-light {
+    --c-name: #871094; --c-string: #067D17; --c-number: #1750EB; --c-boolean: #0033B3; --c-type: #8C8C8C;
+    --c-function: #00627A; --muted: #8C8C8C;
+    --sel: #D5E1FF; --sel-fg: inherit; --sel-inactive: #DFE1E5; --hover: #EDF3FF;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
@@ -134,15 +151,15 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
 
   /* Toolbar */
   .toolbar { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
-  .toolbar input[type=search] { flex: 0 1 220px; min-width: 80px; height: 22px; background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; padding: 0 6px; font: inherit; }
+  .toolbar input[type=search] { flex: 0 1 220px; min-width: 80px; height: 24px; background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 4px; padding: 0 8px; font: inherit; }
   .toolbar input[type=search]:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   .toolbar .spacer { flex: 1; }
-  .tb { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 6px; border: none; border-radius: 3px; background: transparent;
+  .tb { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 24px; min-width: 24px; padding: 0 4px; border: none; border-radius: 4px; background: transparent;
     color: var(--vscode-foreground); font: inherit; cursor: pointer; white-space: nowrap; }
   .tb:hover { background: var(--vscode-toolbar-hoverBackground, rgba(90,93,94,.31)); }
   .tb:disabled { opacity: .45; cursor: default; background: transparent; }
-  .tb svg { width: 14px; height: 14px; fill: currentColor; flex: 0 0 auto; }
+  .tb svg { width: 16px; height: 16px; fill: currentColor; flex: 0 0 auto; }
   label.tb input { margin: 0; }
 
   /* Two panes */
@@ -156,19 +173,20 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
     .sites { flex-basis: 40%; max-width: none; border-right: none; border-bottom: 1px solid var(--border); }
     .grip { display: none; }
   }
-  .pane-title { position: sticky; top: 0; z-index: 1; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  .pane-title { position: sticky; top: 0; z-index: 1; font-size: 12px; font-weight: 600;
     color: var(--muted); padding: 4px 8px; background: var(--vscode-sideBar-background, var(--vscode-panel-background)); }
 
   /* Frames-like list of log sites */
   .site { display: grid; grid-template-columns: 10px auto minmax(0, 1fr) auto; align-items: center; column-gap: 6px; height: var(--row-h);
     padding: 0 8px; cursor: pointer; white-space: nowrap; }
-  .site:hover { background: var(--vscode-list-hoverBackground); }
-  .site.sel { background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-list-inactiveSelectionForeground, inherit); }
-  .sites:focus-within .site.sel { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+  .site:hover { background: var(--hover); }
+  .site.sel { background: var(--sel-inactive); }
+  .sites:focus-within .site.sel { background: var(--sel); color: var(--sel-fg); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-log); }
   .dot.warning { background: var(--c-warning); } .dot.error { background: var(--c-error); }
-  .site .loc { font-weight: 500; }
-  .site .rest { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .site .loc { font-weight: normal; }
+  .site .rest { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-style: italic; }
+  .site .rest .pv { font-style: normal; }
   .site .rest .pv { color: var(--vscode-foreground); opacity: .8; }
   .site .meta { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; text-align: center; font-size: 10px; line-height: 16px;
@@ -180,10 +198,10 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
   ::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,.4)); }
   ::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,.7)); }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
-  .hit { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 11px; cursor: pointer;
+  .hit { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 4px; cursor: pointer;
     border: 1px solid var(--border); background: transparent; color: inherit; font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .hit:hover { background: var(--vscode-list-hoverBackground); }
-  .hit.sel { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
+  .hit:hover { background: var(--hover); }
+  .hit.sel { background: var(--sel); color: var(--sel-fg); border-color: transparent; }
   .hit .dot { width: 6px; height: 6px; }
   .hits .more { color: var(--muted); align-self: center; font-size: 12px; white-space: nowrap; }
   .note { padding: 4px 8px; font-size: 12px; color: var(--c-warning); border-bottom: 1px solid var(--border); }
@@ -191,23 +209,26 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
   /* Variables-like tree */
   .tree { flex: 1 1 auto; overflow: auto; padding: 2px 0 8px; outline: none; }
   .row { display: flex; align-items: center; height: var(--row-h); padding-right: 8px; white-space: nowrap; cursor: default; position: relative; }
-  .row:hover { background: var(--vscode-list-hoverBackground); }
-  .row.sel { background: var(--vscode-list-inactiveSelectionBackground); }
-  .tree:focus .row.sel { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); outline: 1px solid var(--vscode-list-focusOutline, transparent); outline-offset: -1px; }
+  .row:hover { background: var(--hover); }
+  .row.sel { background: var(--sel-inactive); }
+  .tree:focus .row.sel { background: var(--sel); color: var(--sel-fg); }
   .tw { flex: 0 0 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
   .tw svg { width: 10px; height: 10px; fill: currentColor; transition: transform .08s; }
   .row.open > .tw svg { transform: rotate(90deg); }
-  .ic { flex: 0 0 auto; width: 16px; height: 16px; margin-right: 5px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;
-    font: 700 9px/1 var(--vscode-editor-font-family); color: var(--k); background: color-mix(in srgb, var(--k) 18%, transparent); }
-  .k-object { --k: var(--c-object); } .k-array { --k: var(--c-array); } .k-string { --k: var(--c-string); } .k-number { --k: var(--c-number); }
-  .k-boolean, .k-null, .k-undefined { --k: var(--c-boolean); } .k-function { --k: var(--c-function); } .k-other, .k-unexpanded, .k-more { --k: var(--muted); }
+  /* Round node icons, as IntelliJ draws a variable's: the kind by color, a letter inside. */
+  .ic { flex: 0 0 auto; width: 14px; height: 14px; margin-right: 6px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    font: 600 9px/1 var(--vscode-font-family); color: var(--k); border: 1px solid var(--k); background: color-mix(in srgb, var(--k) 22%, transparent); }
+  .k-array .ic, .ic.k-array { border-radius: 3px; }
+  .k-object { --k: var(--i-object); } .k-array { --k: var(--i-array); }
+  .k-string, .k-number, .k-boolean, .k-null, .k-undefined { --k: var(--i-value); } .k-function { --k: var(--i-function); }
+  .k-other, .k-unexpanded, .k-more { --k: var(--muted); }
   .nm { color: var(--c-name); }
-  .eq { color: var(--muted); padding: 0 4px; }
+  .eq { color: var(--vscode-foreground); padding: 0 5px; }
   .ty { color: var(--c-type); margin-right: 6px; }
   .v { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .v.string { color: var(--c-string); } .v.number { color: var(--c-number); } .v.boolean, .v.null, .v.undefined { color: var(--c-boolean); }
-  .v.function { color: var(--c-function); font-style: italic; } .v.unexpanded, .v.more { color: var(--muted); font-style: italic; }
-  .v.object, .v.array { color: var(--muted); }
+  .v.string { color: var(--c-string); } .v.number { color: var(--c-number); } .v.boolean, .v.null, .v.undefined { color: var(--c-boolean); font-weight: 600; }
+  .v.function { color: var(--c-function); } .v.unexpanded, .v.more { color: var(--muted); font-style: italic; }
+  .v.object, .v.array { color: var(--vscode-foreground); }
   .row.text { height: auto; align-items: flex-start; padding-top: 3px; padding-bottom: 3px; }
   .row.text .v { white-space: pre-wrap; overflow: visible; }
   .row .act { position: absolute; right: 4px; display: none; gap: 2px; background: inherit; }
@@ -227,13 +248,13 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
 <div id="app">
   <div class="toolbar">
     <input id="filter" type="search" placeholder="Filter lines" aria-label="Filter logged lines">
-    <label class="tb" title="Show each new hit of the selected line as it arrives"><input id="follow" type="checkbox" checked>Follow latest</label>
+    <label class="tb" title="Show each new hit of the selected line as it arrives"><input id="follow" type="checkbox" checked>Follow</label>
     <span class="spacer"></span>
     <button class="tb" id="expandAll" title="Expand all"><svg viewBox="0 0 16 16"><path d="M9 9H4v1h5V9z"/><path d="M7 12V7H6v5h1z"/><path fill-rule="evenodd" d="M5 3l1-1h7l1 1v7l-1 1h-2v2l-1 1H3l-1-1V6l1-1h2V3zm1 2h4l1 1v4h2V3H6v2zm4 1H3v7h7V6z"/></svg></button>
     <button class="tb" id="collapseAll" title="Collapse all"><svg viewBox="0 0 16 16"><path d="M9 9H4v1h5V9z"/><path fill-rule="evenodd" d="M5 3l1-1h7l1 1v7l-1 1h-2v2l-1 1H3l-1-1V6l1-1h2V3zm1 2h4l1 1v4h2V3H6v2zm4 1H3v7h7V6z"/></svg></button>
-    <button class="tb" id="copyAll" title="Copy the whole value as JSON"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M4 4l1-1h5.414L14 6.586V14l-1 1H5l-1-1V4zm9 3l-3-3H5v10h8V7z"/><path fill-rule="evenodd" d="M3 1L2 2v10l1 1V2h6.414l-1-1H3z"/></svg>Copy</button>
-    <button class="tb" id="openJson" title="Open the whole value in a JSON editor tab"><svg viewBox="0 0 16 16"><path d="M6 2.984V2h-.09c-.313 0-.616.062-.909.185a2.33 2.33 0 0 0-.775.53 2.23 2.23 0 0 0-.493.753v.001a3.542 3.542 0 0 0-.198.83v.002a6.08 6.08 0 0 0-.024.863c.012.29.018.58.018.869 0 .203-.04.393-.117.572v.001a1.504 1.504 0 0 1-.765.787 1.376 1.376 0 0 1-.558.115H2v.984h.09c.195 0 .38.04.556.121l.001.001c.178.078.329.184.455.318l.002.002c.13.13.233.285.307.465l.001.002c.078.18.117.368.117.566 0 .29-.006.58-.018.869-.012.296-.004.585.024.87v.001c.033.283.099.558.197.824v.001c.106.273.271.524.494.753.223.23.482.407.775.53.293.123.596.185.91.185H6v-.984h-.09c-.2 0-.387-.038-.563-.115a1.613 1.613 0 0 1-.457-.32 1.659 1.659 0 0 1-.309-.467c-.074-.18-.11-.37-.11-.573 0-.228.003-.453.011-.672.008-.228.008-.45 0-.665a4.639 4.639 0 0 0-.055-.64 2.682 2.682 0 0 0-.168-.609A2.284 2.284 0 0 0 3.522 8a2.284 2.284 0 0 0 .738-.585c.123-.199.227-.399.308-.604l.001-.002c.074-.2.13-.4.168-.609.039-.216.055-.43.055-.64 0-.215.003-.436.012-.664.008-.22.008-.445 0-.672 0-.205.036-.394.11-.572l.001-.002c.078-.176.18-.33.308-.466l.001-.001c.13-.13.285-.234.457-.311l.001-.001c.178-.08.365-.119.564-.119H6zm4 10.032V14h.09c.313 0 .616-.062.909-.185.293-.123.552-.3.775-.53.223-.23.388-.48.493-.753v-.001c.1-.27.166-.547.198-.83v-.002c.028-.285.036-.573.024-.863-.012-.29-.018-.58-.018-.869 0-.203.04-.393.117-.572v-.001a1.504 1.504 0 0 1 .765-.787c.176-.077.362-.115.558-.115H14v-.984h-.09c-.195 0-.38-.04-.556-.121l-.001-.001a1.462 1.462 0 0 1-.455-.318l-.002-.002a1.469 1.469 0 0 1-.307-.465l-.001-.002a1.402 1.402 0 0 1-.117-.566c0-.29.006-.58.018-.869a6.19 6.19 0 0 0-.024-.87v-.001a3.537 3.537 0 0 0-.197-.824v-.001a2.23 2.23 0 0 0-.494-.753 2.331 2.331 0 0 0-.775-.53 2.325 2.325 0 0 0-.91-.185H10v.984h.09c.2 0 .387.038.562.115.17.08.322.186.458.32.13.137.232.293.309.467.074.18.11.37.11.573 0 .228-.003.453-.011.672-.008.228-.008.45 0 .665.012.216.03.43.055.64.039.21.095.41.168.609.08.206.186.405.308.604.123.2.37.396.738.585a2.284 2.284 0 0 0-.738.585c-.123.199-.227.399-.308.604l-.001.002c-.074.2-.13.4-.168.609-.039.216-.055.43-.055.64 0 .215-.003.436-.012.664-.008.22-.008.445 0 .672 0 .205-.036.394-.11.572l-.001.002a1.474 1.474 0 0 1-.308.466l-.001.001c-.13.13-.285.234-.457.311l-.001.001a1.34 1.34 0 0 1-.564.119H10z"/></svg>Open JSON</button>
-    <button class="tb" id="clear" title="Clear every logged value, here and beside the code"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M10 3h3v1h-1v9l-1 1H4l-1-1V4H2V3h3V2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1zM9 2H6v1h3V2zM4 13h7V4H4v9zm2-8H5v7h1V5zm1 0h1v7H7V5zm2 0h1v7H9V5z"/></svg>Clear</button>
+    <button class="tb" id="copyAll" title="Copy the whole value as JSON" aria-label="Copy"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M4 4l1-1h5.414L14 6.586V14l-1 1H5l-1-1V4zm9 3l-3-3H5v10h8V7z"/><path fill-rule="evenodd" d="M3 1L2 2v10l1 1V2h6.414l-1-1H3z"/></svg></button>
+    <button class="tb" id="openJson" title="Open the whole value in a JSON editor tab" aria-label="Open JSON"><svg viewBox="0 0 16 16"><path d="M6 2.984V2h-.09c-.313 0-.616.062-.909.185a2.33 2.33 0 0 0-.775.53 2.23 2.23 0 0 0-.493.753v.001a3.542 3.542 0 0 0-.198.83v.002a6.08 6.08 0 0 0-.024.863c.012.29.018.58.018.869 0 .203-.04.393-.117.572v.001a1.504 1.504 0 0 1-.765.787 1.376 1.376 0 0 1-.558.115H2v.984h.09c.195 0 .38.04.556.121l.001.001c.178.078.329.184.455.318l.002.002c.13.13.233.285.307.465l.001.002c.078.18.117.368.117.566 0 .29-.006.58-.018.869-.012.296-.004.585.024.87v.001c.033.283.099.558.197.824v.001c.106.273.271.524.494.753.223.23.482.407.775.53.293.123.596.185.91.185H6v-.984h-.09c-.2 0-.387-.038-.563-.115a1.613 1.613 0 0 1-.457-.32 1.659 1.659 0 0 1-.309-.467c-.074-.18-.11-.37-.11-.573 0-.228.003-.453.011-.672.008-.228.008-.45 0-.665a4.639 4.639 0 0 0-.055-.64 2.682 2.682 0 0 0-.168-.609A2.284 2.284 0 0 0 3.522 8a2.284 2.284 0 0 0 .738-.585c.123-.199.227-.399.308-.604l.001-.002c.074-.2.13-.4.168-.609.039-.216.055-.43.055-.64 0-.215.003-.436.012-.664.008-.22.008-.445 0-.672 0-.205.036-.394.11-.572l.001-.002c.078-.176.18-.33.308-.466l.001-.001c.13-.13.285-.234.457-.311l.001-.001c.178-.08.365-.119.564-.119H6zm4 10.032V14h.09c.313 0 .616-.062.909-.185.293-.123.552-.3.775-.53.223-.23.388-.48.493-.753v-.001c.1-.27.166-.547.198-.83v-.002c.028-.285.036-.573.024-.863-.012-.29-.018-.58-.018-.869 0-.203.04-.393.117-.572v-.001a1.504 1.504 0 0 1 .765-.787c.176-.077.362-.115.558-.115H14v-.984h-.09c-.195 0-.38-.04-.556-.121l-.001-.001a1.462 1.462 0 0 1-.455-.318l-.002-.002a1.469 1.469 0 0 1-.307-.465l-.001-.002a1.402 1.402 0 0 1-.117-.566c0-.29.006-.58.018-.869a6.19 6.19 0 0 0-.024-.87v-.001a3.537 3.537 0 0 0-.197-.824v-.001a2.23 2.23 0 0 0-.494-.753 2.331 2.331 0 0 0-.775-.53 2.325 2.325 0 0 0-.91-.185H10v.984h.09c.2 0 .387.038.562.115.17.08.322.186.458.32.13.137.232.293.309.467.074.18.11.37.11.573 0 .228-.003.453-.011.672-.008.228-.008.45 0 .665.012.216.03.43.055.64.039.21.095.41.168.609.08.206.186.405.308.604.123.2.37.396.738.585a2.284 2.284 0 0 0-.738.585c-.123.199-.227.399-.308.604l-.001.002c-.074.2-.13.4-.168.609-.039.216-.055.43-.055.64 0 .215-.003.436-.012.664-.008.22-.008.445 0 .672 0 .205-.036.394-.11.572l-.001.002a1.474 1.474 0 0 1-.308.466l-.001.001c-.13.13-.285.234-.457.311l-.001.001a1.34 1.34 0 0 1-.564.119H10z"/></svg></button>
+    <button class="tb" id="clear" title="Clear every logged value, here and beside the code" aria-label="Clear"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M10 3h3v1h-1v9l-1 1H4l-1-1V4H2V3h3V2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1zM9 2H6v1h3V2zM4 13h7V4H4v9zm2-8H5v7h1V5zm1 0h1v7H7V5zm2 0h1v7H9V5z"/></svg></button>
   </div>
   <div class="split" id="split">
     <div class="sites" id="sites" tabindex="-1">
@@ -244,7 +265,7 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
     <div class="detail">
       <div class="hits hidden" id="hits"></div>
       <div class="note hidden" id="note"></div>
-      <div class="tree mono" id="tree" tabindex="0" role="tree" aria-label="Logged value"></div>
+      <div class="tree" id="tree" tabindex="0" role="tree" aria-label="Logged value"></div>
     </div>
   </div>
   <div class="empty hidden" id="empty">
@@ -261,7 +282,7 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
   const ICON = {
-    object: '{}', array: '[]', string: 'ab', number: '#', boolean: 'b', null: '∅', undefined: '∅', function: 'ƒ', other: '·', unexpanded: '…', more: '…',
+    object: 'o', array: 'a', string: 'v', number: 'v', boolean: 'v', null: 'v', undefined: 'v', function: 'ƒ', other: '·', unexpanded: '…', more: '…',
   };
   const CHEVRON = '<svg viewBox="0 0 16 16"><path d="M5.7 13.7L5 13l4.6-4.6L5 3.7l.7-.7 5.3 5.3z"/></svg>';
   const COPY = '<svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M4 4l1-1h5.414L14 6.586V14l-1 1H5l-1-1V4zm9 3l-3-3H5v10h8V7z"/><path fill-rule="evenodd" d="M3 1L2 2v10l1 1V2h6.414l-1-1H3z"/></svg>';
@@ -372,7 +393,7 @@ export class RuntimeValuesViewProvider implements vscode.WebviewViewProvider {
     const row = el('div', 'row' + (expandable && open.has(key(r.path)) ? ' open' : '') + (i === cursor ? ' sel' : '') + (n.kind === 'other' && n.text.includes('\\n') ? ' text' : ''));
     row.setAttribute('role', 'treeitem');
     if (expandable) row.setAttribute('aria-expanded', String(open.has(key(r.path))));
-    row.style.paddingLeft = (4 + r.depth * 16) + 'px';
+    row.style.paddingLeft = (6 + r.depth * 20) + 'px';
     const tw = el('span', 'tw');
     if (expandable) tw.innerHTML = CHEVRON;
     row.append(tw);
