@@ -17,6 +17,8 @@ import {
   linkDefinition,
   linkMarkers,
   linkTemplates,
+  templateUrlAt,
+  type TemplateUrlInfo,
   withBinding,
   type TemplateLinkIndex,
   type TemplateLinkIssue,
@@ -490,6 +492,22 @@ export class Workspace implements FactSource, RenameSource {
    */
   templateLinkIssues(): TemplateLinkIssue[] {
     return this.templateLinks?.issues ?? [];
+  }
+
+  /** The `templateUrl` at a position of a `.js` file: its target and how it was found, or what was tried. */
+  templateUrlAt(relPath: string, offset: number): TemplateUrlInfo | null {
+    const facts = this.overlayFacts.get(relPath) ?? this.store.getFacts(relPath);
+    if (!facts || !this.templateLinks) return null;
+    return templateUrlAt(this.templateLinks, this.config, relPath, offset, facts);
+  }
+
+  /**
+   * Replace the links set by hand (`templateUrl` -> template) and relink — no reindex: the facts
+   * don't change, only how their URLs map to files.
+   */
+  setTemplateUrlMap(map: Record<string, string>): void {
+    this.config.templateUrlMap = { ...map };
+    this.templateLinks = linkTemplates(this.store.allFacts(), this.config);
   }
 
   /**

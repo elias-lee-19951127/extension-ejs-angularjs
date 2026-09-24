@@ -14,8 +14,9 @@
  * 14: `var vm = this` aliases count as the controller in scopeMembers and scopeWrites.
  * 15: JsFacts.consoleCalls (observed-types-r1 ticket 02).
  * 16: ScopeWrite.lhsText and ScopeWrite.after (log-variable ticket 01).
+ * 17: JsFacts.serverRoots; templateUrl read from functions, concatenation and any object literal; inline controllers.
  */
-export const PARSER_VERSION = 16;
+export const PARSER_VERSION = 17;
 
 /** Cache file name inside the .ejsng-cache/ directory. */
 export const INDEX_FILENAME = 'index.ndjson';

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { Workspace, type Config, type RenameResult } from '@ejsng/core';
 
 /**
@@ -36,6 +36,9 @@ Options:
   --template-root <urlPrefix>=<fsPath>[=<.ext,.ext>]
                            Map a templateUrl prefix to a directory (repeatable),
                            e.g. /views/=src/views=.ejs,.html
+  --template-map <templateUrl>=<file>
+                           Link one templateUrl to its template by hand (repeatable);
+                           .vscode/settings.json ejsng.templateUrlMap is read too
   --views-dir <path>       Express views directory for res.render() (default 'views')
   --json                   Output JSON
 `);
@@ -48,12 +51,13 @@ interface Opts {
   moduleAliases: string[];
   delimiter: string;
   templateRoots: Config['templateRoots'];
+  templateUrlMap: Record<string, string>;
   viewsDir?: string;
   rest: string[];
 }
 
 function parseArgs(argv: string[]): Opts {
-  const opts: Opts = { root: process.cwd(), json: false, moduleAliases: [], delimiter: '%', templateRoots: [], rest: [] };
+  const opts: Opts = { root: process.cwd(), json: false, moduleAliases: [], delimiter: '%', templateRoots: [], templateUrlMap: {}, rest: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--root') opts.root = argv[++i] ?? opts.root;
@@ -61,6 +65,11 @@ function parseArgs(argv: string[]): Opts {
     else if (a === '--delimiter') opts.delimiter = argv[++i] ?? '%';
     else if (a === '--template-root') opts.templateRoots.push(parseTemplateRoot(argv[++i] ?? ''));
     else if (a === '--views-dir') opts.viewsDir = argv[++i];
+    else if (a === '--template-map') {
+      const [url, file] = (argv[++i] ?? '').split('=');
+      if (!url || !file) usage();
+      opts.templateUrlMap[url] = file;
+    }
     else if (a === '--json') opts.json = true;
     else opts.rest.push(a);
   }
@@ -82,7 +91,22 @@ function makeWorkspace(opts: Opts): Workspace {
   cfg.ejsDelimiter = opts.delimiter;
   if (opts.templateRoots.length) cfg.templateRoots = opts.templateRoots;
   if (opts.viewsDir) cfg.expressViewsDir = opts.viewsDir;
+  // The links set by hand in the editor, then any given here.
+  cfg.templateUrlMap = { ...editorTemplateUrlMap(cfg.root), ...opts.templateUrlMap };
   return new Workspace(cfg);
+}
+
+/** `ejsng.templateUrlMap` from the workspace's `.vscode/settings.json` (JSON with comments), if any. */
+function editorTemplateUrlMap(root: string): Record<string, string> {
+  try {
+    const text = readFileSync(join(root, '.vscode', 'settings.json'), 'utf8')
+      .replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str ?? '')
+      .replace(/,(\s*[}\]])/g, '$1');
+    const map = JSON.parse(text)['ejsng.templateUrlMap'];
+    return map && typeof map === 'object' ? map : {};
+  } catch {
+    return {};
+  }
 }
 
 /**

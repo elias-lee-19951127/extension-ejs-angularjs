@@ -20,6 +20,7 @@ const {
   connectThroughCommand,
   disconnect,
   refreshed,
+  onCleanup,
 } = require('./helpers');
 
 const OFF = 'EJS/NG Runtime: off';
@@ -187,4 +188,33 @@ test('a line hit several times shows its count; reconnecting to the same runtime
   runtime.sendLog('fresh', { url: '/srv/app/history.js', line: 1 });
   const fresh = await waitFor(() => api.decorations(historyUri.toString())[0], 'the new run’s value');
   assert.strictEqual(fresh.text, 'fresh');
+});
+
+test('deleting a console.log, or its whole line, takes its inline value away', async () => {
+  const api = await extensionApi();
+  const uri = workspaceUri('delete-log.js');
+  const editor = await vscode.window.showTextDocument(uri);
+  onCleanup(() => vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor'));
+  const runtime = await startFakeRuntime();
+  await connectThroughCommand(api, runtime);
+  runtime.sendLog('42', { url: '/srv/app/delete-log.js', line: 1 });
+  runtime.sendLog('kept', { url: '/srv/app/delete-log.js', line: 3 });
+  await waitFor(() => api.decorations(uri.toString()).length === 2, 'both values drawn');
+
+  // Select `console.log(total);` and delete it — the line itself stays.
+  await editor.edit((edit) => edit.delete(editor.document.lineAt(1).range));
+  await waitFor(
+    () => JSON.stringify(api.decorations(uri.toString())) === JSON.stringify([{ line: 3, text: 'kept' }]),
+    `only 'kept' left, got ${JSON.stringify(api.decorations(uri.toString()))}`,
+  );
+
+  // Log line 1 again, then delete that whole line: nothing slides onto `var after = 1;`.
+  await editor.edit((edit) => edit.insert(new vscode.Position(1, 0), 'console.log(total);'));
+  runtime.sendLog('42 again', { url: '/srv/app/delete-log.js', line: 1 });
+  await waitFor(() => api.decorations(uri.toString()).some((d) => d.text === '42 again'), 'the new value drawn');
+  await editor.edit((edit) => edit.delete(new vscode.Range(1, 0, 2, 0)));
+  await waitFor(
+    () => JSON.stringify(api.decorations(uri.toString())) === JSON.stringify([{ line: 2, text: 'kept' }]),
+    `the deleted line's value gone, 'kept' moved up, got ${JSON.stringify(api.decorations(uri.toString()))}`,
+  );
 });

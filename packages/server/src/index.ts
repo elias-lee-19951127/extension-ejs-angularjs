@@ -75,6 +75,7 @@ import {
   buildLogpointCondition,
   logpointUrlRegex,
   runtimePathCandidates,
+  type TemplateUrlInfo,
 } from '@ejsng/core';
 import {
   connectRuntimeLog,
@@ -426,7 +427,8 @@ documents.onDidChangeContent((change) => {
   const r = rel(change.document.uri);
   if (!workspace || !r) return;
   workspace.setOverlay(r, change.document.getText());
-  if (diagnosticsEnabled) void publishDiagnostics(change.document);
+  // Always: a `.js` file's unlinked templateUrls are marked even with diagnostics off.
+  void publishDiagnostics(change.document);
 });
 
 documents.onDidSave((e) => {
@@ -490,6 +492,8 @@ connection.onHover((params) => {
   if (!workspace || !doc || !r) return null;
 
   const offset = offsetOf(doc, params.position);
+  const tpl = workspace.templateUrlAt(r, offset);
+  if (tpl) return { contents: { kind: 'markdown' as const, value: templateUrlHover(tpl, params.textDocument.uri) }, range: toRange(doc.getText(), tpl.span) };
   const def = workspace.definitionAt(r, offset);
   const lines: string[] = [];
 
@@ -529,6 +533,36 @@ connection.onHover((params) => {
 
   return lines.length ? { contents: { kind: 'markdown' as const, value: lines.join('\n') } } : null;
 });
+
+/**
+ * The hover of a `templateUrl`: the template it loads and why that one, or — when none — every place
+ * it was looked for, with a link to pick the template by hand (`ejsng.linkTemplateUrl`, saved in the
+ * `ejsng.templateUrlMap` setting).
+ */
+function templateUrlHover(info: TemplateUrlInfo, uri: string): string {
+  const cmd = (name: string, args: unknown) => `command:${name}?${encodeURIComponent(JSON.stringify([args]))}`;
+  const lines: string[] = [];
+  const ctrl = info.controller ? ` · controller \`${info.controller.startsWith('inline:') ? 'inline function' : info.controller}\`` : '';
+  lines.push(`**templateUrl** of ${info.via} \`${info.owner}\`${ctrl}`, '');
+  if (info.url === null) {
+    lines.push('_Computed at runtime — no part of it can be read without running the code._', '');
+    return lines.join('\n');
+  }
+  const pick = `[Link to a template…](${cmd('ejsng.linkTemplateUrl', { url: info.url, uri })} "Choose the template this URL loads; saved in ejsng.templateUrlMap")`;
+  if (info.trace.target) {
+    lines.push(`→ ${fileLink(info.trace.target)}`, '', `_Found: ${info.trace.how}_`, '');
+    const manual = /by hand/.test(info.trace.how ?? '');
+    const links = [pick.replace('Link to a template…', 'Change…')];
+    if (manual) links.push(`[Remove this link](${cmd('ejsng.unlinkTemplateUrl', { url: info.url })} "Remove it from ejsng.templateUrlMap")`);
+    lines.push(links.join(' · '));
+    return lines.join('\n');
+  }
+  lines.push(`**No template found** for \`${info.url}\`. Looked for:`, '');
+  for (const t of info.trace.tried.slice(0, 12)) lines.push(`- \`${t.replace(/`/g, "'")}\``);
+  if (info.trace.tried.length > 12) lines.push(`- _…and ${info.trace.tried.length - 12} more_`);
+  lines.push('', pick);
+  return lines.join('\n');
+}
 
 /**
  * "may be empty" after a template variable explicitly assigned null/undefined somewhere
@@ -690,7 +724,10 @@ connection.onDocumentSymbol((params) => {
 /**
  * Diagnostics.
  *
- * OFF BY DEFAULT (docs/kien-truc.md section 10): on an older codebase, every expression that
+ * In a `.js` file, always: a Hint (faint dots, never in the Problems count) under each `templateUrl`
+ * no template could be found for — hover it for what was tried and a link to pick one.
+ *
+ * In a template, OFF BY DEFAULT (docs/kien-truc.md section 10): on an older codebase, every expression that
  * fails to resolve becomes a warning, and a few thousand meaningless warnings will get the user
  * to disable the extension on day one. Only enable when the user opts in explicitly.
  */
@@ -702,7 +739,22 @@ async function publishDiagnostics(doc: TextDocument): Promise<void> {
   const diagnostics: Diagnostic[] = [];
   const source = doc.getText();
 
-  if (facts?.kind === 'template') {
+  if (facts?.kind === 'js') {
+    for (const issue of workspace.templateLinkIssues()) {
+      if (issue.path !== r || issue.reason === 'dynamic') continue;
+      diagnostics.push({
+        severity: DiagnosticSeverity.Hint,
+        range: toRange(source, issue.span),
+        message:
+          issue.reason === 'no-file'
+            ? `No template found for templateUrl '${issue.url}' — hover it to see where it was looked for, or to link one`
+            : issue.detail,
+        source: 'ejsng',
+      });
+    }
+  }
+
+  if (facts?.kind === 'template' && diagnosticsEnabled) {
     for (const err of facts.parseErrors) {
       diagnostics.push({
         severity: DiagnosticSeverity.Warning,
@@ -770,6 +822,13 @@ connection.onRequest('ejsng/templateLinks', (params: { uri?: string }) => {
     return [{ range: toRange(source, m.span), target, targetPath: m.target.path, kind: m.kind, via: m.via, owner: m.owner, url: m.url, controller: m.controller }];
   });
   return { links };
+});
+
+/** The links set by hand changed (`ejsng.templateUrlMap`): relink, and redraw what shows them. */
+connection.onNotification('ejsng/setTemplateUrlMap', (params: { map?: Record<string, string> }) => {
+  if (!workspace) return;
+  workspace.setTemplateUrlMap(params?.map ?? {});
+  for (const doc of documents.all()) void publishDiagnostics(doc);
 });
 
 connection.onRequest('ejsng/reindex', () => {

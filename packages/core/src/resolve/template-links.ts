@@ -51,6 +51,8 @@ export interface TemplateLinkIndex {
   usedBy: Map<string, TemplateUse[]>;
   /** Every indexed path — what a `templateUrl` in an edited, not yet indexed buffer resolves against. */
   paths: Set<string>;
+  /** What the Express code serves, read once per link pass. */
+  served: ServedDirs;
 }
 
 /** One `templateUrl` site pointing at a template. */
@@ -95,6 +97,7 @@ export function linkTemplates(all: Array<{ path: string; facts: FileFacts }>, co
     renderers: new Map(),
     usedBy: new Map(),
     paths: exists,
+    served: servedDirs(all, config, exists),
   };
   const candidates = new Map<string, TemplateBinding[]>();
 
@@ -107,9 +110,9 @@ export function linkTemplates(all: Array<{ path: string; facts: FileFacts }>, co
         index.issues.push({ ...base, reason: 'dynamic', detail: 'templateUrl is an expression, not a string literal' });
         continue;
       }
-      const target = resolveTemplateUrl(link.url, config, exists, path);
+      const target = resolveTemplateUrl(link.url, config, exists, path, index.served, link.suffixOnly);
       if (!target) {
-        index.issues.push({ ...base, reason: 'no-file', detail: `no indexed file matches '${link.url}' — check templateRoots` });
+        index.issues.push({ ...base, reason: 'no-file', detail: `no indexed file matches '${link.url}' — link it by hand (ejsng.templateUrlMap / --template-map) or add a templateRoots entry` });
         continue;
       }
       index.urlTargets.set(`${path}:${link.urlSpan.start}`, target);
@@ -158,44 +161,175 @@ export function linkTemplates(all: Array<{ path: string; facts: FileFacts }>, co
   return index;
 }
 
+/** What the Express code in the workspace serves, as workspace-relative directories. */
+export interface ServedDirs {
+  /** `express.static` mounts, longest URL prefix first. */
+  statics: Array<{ urlPrefix: string; dir: string }>;
+  /** Views directories: `app.set('views', …)`, plus `expressViewsDir` (default `views`). */
+  views: string[];
+  /** Routes rendering a view named by the URL: `/partials/:name` -> `partials/<name>`. */
+  renderRoutes: Array<{ urlPrefix: string; viewPrefix: string }>;
+}
+
+/** Extensions a template file may have — tried in place of the URL's when nothing has its exact name. */
+const TEMPLATE_EXTENSIONS = ['.html', '.ejs', '.htm'];
+
+/** Collect `ServedDirs` from every `.js` file's `serverRoots`. */
+export function servedDirs(all: Array<{ path: string; facts: FileFacts }>, config: Config, exists: Set<string>): ServedDirs {
+  const statics: ServedDirs['statics'] = [];
+  const views: string[] = [];
+  const renderRoutes: ServedDirs['renderRoutes'] = [];
+  const dirs = new Set<string>();
+  for (const p of exists) for (let d = posix.dirname(p); d !== '.' && !dirs.has(d); d = posix.dirname(d)) dirs.add(d);
+  const inWorkspace = (dir: string) => dir === '' || dirs.has(dir);
+  const place = (from: string, dir: string, fromFile: boolean): string | null => {
+    const tries = fromFile ? [posix.join(posix.dirname(from), dir)] : [dir, posix.join(posix.dirname(from), dir)];
+    for (const t of tries) {
+      const norm = posix.normalize(t).replace(/^\.\/?/, '').replace(/\/+$/, '');
+      if (!norm.startsWith('..') && inWorkspace(norm)) return norm;
+    }
+    return null;
+  };
+  for (const { path, facts } of all) {
+    if (facts.kind !== 'js') continue;
+    for (const r of facts.serverRoots ?? []) {
+      if (r.kind === 'render-route') {
+        renderRoutes.push({ urlPrefix: r.urlPrefix, viewPrefix: r.viewPrefix ?? '' });
+        continue;
+      }
+      const dir = place(path, r.dir, r.fromFile);
+      if (dir === null) continue;
+      if (r.kind === 'static') statics.push({ urlPrefix: r.urlPrefix, dir });
+      else if (!views.includes(dir)) views.push(dir);
+    }
+  }
+  const configured = workspaceRelative(config.expressViewsDir ?? DEFAULT_VIEWS_DIR, config.root);
+  if (configured !== null && !views.includes(configured)) views.push(configured);
+  statics.sort((a, b) => b.urlPrefix.length - a.urlPrefix.length);
+  renderRoutes.sort((a, b) => b.urlPrefix.length - a.urlPrefix.length);
+  return { statics, views, renderRoutes };
+}
+
+const NO_SERVED: ServedDirs = { statics: [], views: [], renderRoutes: [] };
+
 /**
- * Map a runtime `templateUrl` to an indexed file, first match wins:
- * 1. each `templateRoots` entry whose `urlPrefix` matches (longest prefix first) — within a root,
- *    the file as named, then each of its `extensions`, swapped for the URL's own extension
- *    (`profile.html` -> `profile.ejs`) or appended when the URL has none;
- * 2. the URL as a path from the workspace root;
- * 3. the URL under each directory above `fromPath`, nearest first. Angular fetches a `templateUrl`
- *    relative to the PAGE, not to the script — and the page is almost always served from a
- *    directory above its scripts: `public/js/app.js` + `'views/list.html'` -> `public/views/list.html`;
- * 4. the one indexed file whose path ends with the URL (`/` boundary), nearest to `fromPath` when
- *    several do — a page served from a directory that is not an ancestor of the script.
- * Steps 2–4 guess nothing about extensions: only the file the URL names.
+ * Map a runtime `templateUrl` to an indexed file. Tried in order, first with the file name as
+ * written, then — only if nothing matched — with its extension swapped for another template one
+ * (`list.html` -> `list.ejs`) or added when it has none (`/partials/list` -> `partials/list.ejs`):
+ * 1. `templateRoots` entries whose `urlPrefix` matches, longest first (each with its own `extensions`);
+ * 2. `express.static` mounts found in the code, longest prefix first;
+ * 3. routes rendering a view named by the URL (`/partials/:name` -> `<views>/partials/<name>.ejs`);
+ * 4. the URL as a path from the workspace root;
+ * 5. the URL under each directory above `fromPath`, nearest first — Angular fetches a `templateUrl`
+ *    relative to the PAGE, which is almost always served from a directory above its scripts;
+ * 6. the URL under each views directory;
+ * 7. the one indexed file whose path ends with the URL (`/` boundary), nearest `fromPath` — a tie links none.
+ * `suffixOnly`: the URL is only the static END of an expression (`base + '/list.html'`): step 7 alone.
  */
-export function resolveTemplateUrl(url: string, config: Config, exists: Set<string>, fromPath?: string): string | null {
+export function resolveTemplateUrl(
+  url: string,
+  config: Config,
+  exists: Set<string>,
+  fromPath?: string,
+  served: ServedDirs = NO_SERVED,
+  suffixOnly = false,
+): string | null {
+  return traceTemplateUrl(url, config, exists, fromPath, served, suffixOnly).target;
+}
+
+/** How a `templateUrl` was resolved — or every place it was looked for — for the hover. */
+export interface TemplateUrlTrace {
+  target: string | null;
+  /** Which rule found it: `'set by hand (ejsng.templateUrlMap)'`, `'express.static mount "/assets" -> client'`… */
+  how: string | null;
+  /** What was looked for, in order, when nothing matched. */
+  tried: string[];
+}
+
+/** `resolveTemplateUrl`, keeping the reason. */
+export function traceTemplateUrl(
+  url: string,
+  config: Config,
+  exists: Set<string>,
+  fromPath?: string,
+  served: ServedDirs = NO_SERVED,
+  suffixOnly = false,
+): TemplateUrlTrace {
+  const tried: string[] = [];
+  const found = (target: string, how: string): TemplateUrlTrace => ({ target, how, tried });
+  const manual = config.templateUrlMap?.[url];
+  if (manual !== undefined) {
+    const path = posix.normalize(manual.split('\\').join('/')).replace(/^\.?\//, '');
+    if (exists.has(path)) return found(path, 'set by hand (ejsng.templateUrlMap)');
+    tried.push(`ejsng.templateUrlMap -> ${manual} (not an indexed file)`);
+  }
   const clean = stripOrigin(url.split(/[?#]/)[0]!.trim());
-  if (clean === '') return null;
+  if (clean === '') return { target: null, how: null, tried };
+  // `./x.html` and `../x.html` name a file relative to the page, which we don't know: keep the rest.
+  const tail = posix.normalize(clean.replace(/^\/+/, '')).replace(/^(\.\.\/)+/, '').replace(/^\.\//, '');
+  if (tail === '' || tail === '.' || tail === '..') return { target: null, how: null, tried };
+  if (suffixOnly) {
+    const hit = nearestBySuffix(tail, exists, fromPath ?? '', false) ?? nearestBySuffix(tail, exists, fromPath ?? '', true);
+    if (hit) return found(hit, 'the end of its path — the start is computed at runtime');
+    tried.push(`any file ending in /${tail} (the start of this URL is computed at runtime)`);
+    return { target: null, how: null, tried };
+  }
+
   const roots = [...(config.templateRoots ?? [])].sort((a, b) => b.urlPrefix.length - a.urlPrefix.length);
   for (const root of roots) {
     if (!clean.startsWith(root.urlPrefix)) continue;
     const dir = workspaceRelative(root.fsPath, config.root);
     if (dir === null) continue;
     const hit = firstExisting(posix.join(dir, clean.slice(root.urlPrefix.length)), root.extensions ?? [], exists);
-    if (hit) return hit;
+    if (hit) return found(hit, `templateRoots "${root.urlPrefix}" -> ${root.fsPath}`);
+    tried.push(`templateRoots "${root.urlPrefix}" -> ${posix.join(dir, clean.slice(root.urlPrefix.length))}`);
   }
-  const direct = firstExisting(clean, [], exists);
-  if (direct) return direct;
 
-  // `./x.html` and `../x.html` name a file relative to the page, which we don't know: keep the rest.
-  const tail = posix.normalize(clean.replace(/^\/+/, '')).replace(/^(\.\.\/)+/, '');
-  if (tail === '' || tail === '.' || tail === '..') return null;
-  if (fromPath) {
-    for (let dir = posix.dirname(fromPath); ; dir = posix.dirname(dir)) {
-      const hit = firstExisting(dir === '.' ? tail : posix.join(dir, tail), [], exists);
+  const abs = clean.startsWith('/') ? clean : '/' + tail;
+  for (const alt of [false, true]) {
+    const other = alt ? ' (another template extension)' : '';
+    const at = (p: string, how: string): TemplateUrlTrace | null => {
+      const hit = alt ? firstExisting(p, TEMPLATE_EXTENSIONS.filter((e) => e !== posix.extname(p)), exists, true) : firstExisting(p, [], exists);
+      if (hit) return found(hit, how + other);
+      if (!alt) tried.push(posix.normalize(p).replace(/^\/+/, '') + `  (${how})`);
+      return null;
+    };
+    for (const s of served.statics) {
+      const prefix = s.urlPrefix.endsWith('/') ? s.urlPrefix : s.urlPrefix + '/';
+      if (s.urlPrefix !== '/' && !abs.startsWith(prefix) && abs !== s.urlPrefix) continue;
+      const hit = at(posix.join(s.dir, s.urlPrefix === '/' ? abs : abs.slice(prefix.length - 1)), `express.static "${s.urlPrefix}" -> ${s.dir || '.'}`);
       if (hit) return hit;
-      if (dir === '.' || dir === '/' || dir === '') break;
     }
+    if (!alt) {
+      for (const r of served.renderRoutes) {
+        if (!abs.startsWith(r.urlPrefix)) continue;
+        const rest = abs.slice(r.urlPrefix.length);
+        const name = r.viewPrefix + rest.slice(0, rest.length - posix.extname(rest).length);
+        for (const v of served.views) {
+          const hit = firstExisting(posix.join(v, name), VIEW_EXTENSIONS, exists);
+          if (hit) return found(hit, `route "${r.urlPrefix}…" renders the view ${r.viewPrefix}…`);
+          tried.push(`${posix.join(v, name)}.ejs  (route "${r.urlPrefix}…" rendering ${r.viewPrefix}…)`);
+        }
+      }
+    }
+    const direct = at(tail, 'from the workspace root');
+    if (direct) return direct;
+    if (fromPath) {
+      for (let dir = posix.dirname(fromPath); dir !== '.' && dir !== '/' && dir !== ''; dir = posix.dirname(dir)) {
+        const hit = at(posix.join(dir, tail), 'relative to a directory above the script, where its page is served');
+        if (hit) return hit;
+      }
+    }
+    for (const v of served.views) {
+      const hit = at(posix.join(v, tail), `under the views directory ${v}`);
+      if (hit) return hit;
+    }
+    const bySuffix = nearestBySuffix(tail, exists, fromPath ?? '', alt);
+    if (bySuffix) return found(bySuffix, 'the only file whose path ends with it' + other);
+    if (!alt) tried.push(`any file ending in /${tail}`);
   }
-  return nearestBySuffix(tail, exists, fromPath ?? '');
+  tried.push('each of the above with .html / .ejs / .htm in place of its extension');
+  return { target: null, how: null, tried };
 }
 
 /** `http://host:3000/views/a.html` and `//cdn/views/a.html` -> `/views/a.html`. */
@@ -204,15 +338,20 @@ function stripOrigin(url: string): string {
   return m ? (m[1] ?? '') : url;
 }
 
-/** The indexed file ending in `/<tail>` that shares the most leading directories with `fromPath`; `null` on a tie. */
-function nearestBySuffix(tail: string, exists: Set<string>, fromPath: string): string | null {
-  const suffix = '/' + tail;
+/**
+ * The indexed file ending in `/<tail>` (or, with `alt`, in `/<tail>` with another template extension)
+ * that shares the most leading directories with `fromPath`; `null` when none, or on a tie.
+ */
+function nearestBySuffix(tail: string, exists: Set<string>, fromPath: string, alt: boolean): string | null {
+  const ext = posix.extname(tail);
+  const stem = ext && TEMPLATE_EXTENSIONS.includes(ext) ? tail.slice(0, -ext.length) : tail;
+  const suffixes = alt ? TEMPLATE_EXTENSIONS.filter((e) => e !== ext).map((e) => '/' + stem + e) : ['/' + tail];
   const from = fromPath.split('/');
   let best: string | null = null;
   let bestScore = -1;
   let tie = false;
   for (const p of exists) {
-    if (!p.endsWith(suffix)) continue;
+    if (!suffixes.some((s) => p.endsWith(s) || '/' + p === s)) continue;
     const parts = p.split('/');
     let score = 0;
     while (score < parts.length - 1 && score < from.length - 1 && parts[score] === from[score]) score++;
@@ -234,12 +373,13 @@ export function resolveViewPath(viewPath: string, config: Config, exists: Set<st
   return firstExisting(posix.join(dir, viewPath), VIEW_EXTENSIONS, exists);
 }
 
-function firstExisting(path: string, extensions: string[], exists: Set<string>): string | null {
+/** `path` itself, then each extension swapped in (or appended). `altOnly`: skip `path` itself. */
+function firstExisting(path: string, extensions: string[], exists: Set<string>, altOnly = false): string | null {
   const base = posix.normalize(path).replace(/^\/+/, '');
   if (base === '' || base === '.' || base.startsWith('../')) return null;
   const ext = posix.extname(base);
   const stem = ext ? base.slice(0, -ext.length) : base;
-  const tries = [base, ...extensions.map((e) => stem + e), ...(ext ? extensions.map((e) => base + e) : [])];
+  const tries = [...(altOnly ? [] : [base]), ...extensions.map((e) => stem + e), ...(ext ? extensions.map((e) => base + e) : [])];
   return tries.find((p) => exists.has(p)) ?? null;
 }
 
@@ -287,7 +427,7 @@ export function linkMarkers(index: TemplateLinkIndex, config: Config, relPath: s
     const out: TemplateLinkMarker[] = [];
     for (const link of facts.templateLinks ?? []) {
       if (link.url === null) continue;
-      const target = resolveTemplateUrl(link.url, config, index.paths, relPath);
+      const target = resolveTemplateUrl(link.url, config, index.paths, relPath, index.served, link.suffixOnly);
       if (!target) continue;
       out.push({
         span: link.urlSpan,
@@ -310,6 +450,36 @@ export function linkMarkers(index: TemplateLinkIndex, config: Config, relPath: s
     url: u.url,
     controller: u.controller,
   }));
+}
+
+/** The `templateUrl` under the cursor, with how it resolved — what its hover says. */
+export interface TemplateUrlInfo {
+  url: string | null;
+  span: Span;
+  via: TemplateLink['via'];
+  owner: string;
+  controller: string | null;
+  suffixOnly: boolean;
+  trace: TemplateUrlTrace;
+}
+
+export function templateUrlAt(index: TemplateLinkIndex, config: Config, relPath: string, offset: number, facts: FileFacts): TemplateUrlInfo | null {
+  if (facts.kind !== 'js') return null;
+  const link = (facts.templateLinks ?? []).find((l) => offset >= l.urlSpan.start && offset <= l.urlSpan.end);
+  if (!link) return null;
+  const trace: TemplateUrlTrace =
+    link.url === null
+      ? { target: null, how: null, tried: [] }
+      : traceTemplateUrl(link.url, config, index.paths, relPath, index.served, link.suffixOnly);
+  return {
+    url: link.url,
+    span: link.urlSpan,
+    via: link.via,
+    owner: link.owner,
+    controller: link.controller,
+    suffixOnly: !!link.suffixOnly,
+    trace,
+  };
 }
 
 /**

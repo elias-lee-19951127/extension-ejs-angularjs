@@ -32,6 +32,7 @@ function jsRows(facts: Extract<FileFacts, { kind: 'js' }>) {
   const refs: RefInput[] = [];
 
   for (const d of facts.declarations) {
+    if (d.inline) continue; // its scope members still count, below
     symbols.push({
       kind: d.kind,
       name: d.name,

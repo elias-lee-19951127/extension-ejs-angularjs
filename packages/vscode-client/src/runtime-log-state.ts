@@ -250,7 +250,16 @@ interface LineState {
   history: RuntimeLogEntry[];
   /** Hits per endpoint, so resetting one endpoint subtracts exactly its own hits from the total. */
   countByEndpoint: Map<string, number>;
+  /**
+   * The code that logged, whitespace removed, as it read when the value came in (or when the file
+   * was first seen open): once the line no longer reads so — the `console.log` deleted, the line
+   * removed — the value no longer describes it and is dropped.
+   */
+  code?: string;
 }
+
+/** A line's text as compared against `LineState.code`: formatting changes don't count as edits. */
+export const codeKey = (text: string): string => text.replace(/\s+/g, '');
 
 const total = (l: LineState): number => [...l.countByEndpoint.values()].reduce((a, b) => a + b, 0);
 
@@ -267,7 +276,8 @@ export class RuntimeLogState {
   private readonly byUri = new Map<string, Map<number, LineState>>();
 
   /** Record a notification; returns every current (latest) entry for that file. */
-  record(uri: string, entry: RuntimeLogEntry): RuntimeLogEntry[] {
+  /** `lineText`: the line as the editor shows it now, when the file is open — see `LineState.code`. */
+  record(uri: string, entry: RuntimeLogEntry, lineText?: string): RuntimeLogEntry[] {
     let lines = this.byUri.get(uri);
     if (!lines) {
       lines = new Map();
@@ -278,6 +288,7 @@ export class RuntimeLogState {
       state = { history: [], countByEndpoint: new Map() };
       lines.set(entry.line, state);
     }
+    if (lineText !== undefined) state.code = codeKey(lineText);
     state.history.unshift(entry);
     if (state.history.length > RUNTIME_LOG_HISTORY_PER_LINE) state.history.length = RUNTIME_LOG_HISTORY_PER_LINE;
     const endpoint = entry.endpoint ?? '';
@@ -358,6 +369,40 @@ export class RuntimeLogState {
    * below move by the difference, and lines strictly inside a multi-line replacement are dropped —
    * their code is gone. The edited start line keeps its values. Returns whether anything changed.
    */
+  /**
+   * After an edit: drop every line whose code no longer reads as it did when it logged — the
+   * `console.log` was deleted or rewritten, or a deleted line's value slid onto the line below.
+   * A line with no recorded code yet takes the current one (the file was not open when it logged).
+   * `textAt` returns `null` past the end of the file. Returns whether anything was dropped.
+   */
+  pruneChanged(uri: string, textAt: (line: number) => string | null): boolean {
+    const lines = this.byUri.get(uri);
+    if (!lines) return false;
+    let changed = false;
+    for (const [line, state] of lines) {
+      const text = textAt(line);
+      if (text === null) {
+        lines.delete(line);
+        changed = true;
+      } else if (state.code === undefined) {
+        state.code = codeKey(text);
+      } else if (state.code !== codeKey(text)) {
+        lines.delete(line);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /** Record the code of lines that logged while their file was not open — see `pruneChanged`. */
+  adoptCode(uri: string, textAt: (line: number) => string | null): void {
+    for (const [line, state] of this.byUri.get(uri) ?? []) {
+      if (state.code !== undefined) continue;
+      const text = textAt(line);
+      if (text !== null) state.code = codeKey(text);
+    }
+  }
+
   applyEdit(uri: string, startLine: number, endLine: number, newLineCount: number): boolean {
     const lines = this.byUri.get(uri);
     if (!lines) return false;

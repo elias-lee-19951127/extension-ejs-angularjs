@@ -21,6 +21,9 @@ export interface TemplateLinkInfo {
 }
 
 export const GO_TO_RELATED_COMMAND = 'ejsng.goToRelated';
+/** From a `templateUrl`'s hover: pick the template it loads; saved in `ejsng.templateUrlMap`. */
+export const LINK_TEMPLATE_URL_COMMAND = 'ejsng.linkTemplateUrl';
+export const UNLINK_TEMPLATE_URL_COMMAND = 'ejsng.unlinkTemplateUrl';
 
 const SUPPORTED = new Set(['javascript', 'html', 'ejs']);
 
@@ -90,6 +93,32 @@ export function registerTemplateGutter(context: vscode.ExtensionContext, getClie
     vscode.workspace.onDidChangeTextDocument((e) => schedule(e.document)),
     // Saving one file can link or unlink another (a new templateUrl, a renamed template).
     vscode.workspace.onDidSaveTextDocument(() => setTimeout(refreshVisible, 600)),
+    vscode.commands.registerCommand(LINK_TEMPLATE_URL_COMMAND, async (args?: { url?: string; uri?: string }) => {
+      const url = args?.url;
+      if (typeof url !== 'string') return;
+      const picked = await pickTemplate(url);
+      if (!picked) return;
+      await saveTemplateUrlMap((map) => ({ ...map, [url]: picked }));
+      void vscode.window.setStatusBarMessage(`EJS/NG: '${url}' → ${picked} (saved in ejsng.templateUrlMap)`, 4000);
+      setTimeout(refreshVisible, 300);
+    }),
+    vscode.commands.registerCommand(UNLINK_TEMPLATE_URL_COMMAND, async (args?: { url?: string }) => {
+      const url = args?.url;
+      if (typeof url !== 'string') return;
+      await saveTemplateUrlMap((map) => {
+        const next = { ...map };
+        delete next[url];
+        return next;
+      });
+      setTimeout(refreshVisible, 300);
+    }),
+    // Edited by hand, or by the commands above: the server relinks without a reload.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('ejsng.templateUrlMap')) return;
+      const map = vscode.workspace.getConfiguration('ejsng').get<Record<string, string>>('templateUrlMap') ?? {};
+      void getClient()?.sendNotification('ejsng/setTemplateUrlMap', { map });
+      setTimeout(refreshVisible, 300);
+    }),
     vscode.commands.registerCommand(GO_TO_RELATED_COMMAND, async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
@@ -119,6 +148,38 @@ export function registerTemplateGutter(context: vscode.ExtensionContext, getClie
     }),
   );
   refreshVisible();
+}
+
+/**
+ * The templates of the workspace, best guesses first: same file name (any template extension), then
+ * a name containing the URL's, then the rest — the one the URL means is nearly always on top.
+ */
+async function pickTemplate(url: string): Promise<string | undefined> {
+  const files = await vscode.workspace.findFiles('**/*.{html,ejs,htm}', '**/{node_modules,bower_components,dist,.git}/**', 5000);
+  const base = url.split(/[?#]/)[0]!.split('/').pop() ?? '';
+  const stem = base.replace(/\.(html|ejs|htm)$/i, '').toLowerCase();
+  const rank = (rel: string) => {
+    const name = rel.split('/').pop()!.replace(/\.(html|ejs|htm)$/i, '').toLowerCase();
+    if (stem && name === stem) return rel.toLowerCase().endsWith(url.replace(/^[./]+/, '').toLowerCase()) ? 0 : 1;
+    if (stem && (name.includes(stem) || stem.includes(name))) return 2;
+    return 3;
+  };
+  const items = files
+    .map((f) => vscode.workspace.asRelativePath(f, false))
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+    .map((rel) => ({ label: `$(file-code) ${rel.split('/').pop()}`, description: rel, rel }));
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: `Template loaded by templateUrl '${url}'`,
+    matchOnDescription: true,
+  });
+  return picked?.rel;
+}
+
+/** Write `ejsng.templateUrlMap` where it lives for this workspace (committable in .vscode/settings.json). */
+async function saveTemplateUrlMap(update: (map: Record<string, string>) => Record<string, string>): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('ejsng');
+  const current = cfg.inspect<Record<string, string>>('templateUrlMap')?.workspaceValue ?? {};
+  await cfg.update('templateUrlMap', update(current), vscode.ConfigurationTarget.Workspace);
 }
 
 function lineOf(doc: vscode.TextDocument, line: number): vscode.Range {

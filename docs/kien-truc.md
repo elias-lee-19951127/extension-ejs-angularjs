@@ -303,6 +303,14 @@ báo cáo "unresolved links" để người dùng biết mà khai báo tay.
   luôn nằm ở thư mục cha của script (`public/js/app.js` + `'views/list.html'` → `public/views/list.html`);
   sau cùng là file duy nhất có đuôi đường dẫn khớp URL (gần script nhất, hoà thì không nối). Hai bước
   này không đoán đuôi file.
+- 0.7.0 — thứ tự đầy đủ ở `traceTemplateUrl`: `ejsng.templateUrlMap` (liên kết tay) → `templateRoots`
+  → mount `express.static` đọc từ code server (`JsFacts.serverRoots`) → route render view theo URL
+  (`/partials/:name`) → gốc workspace → thư mục cha của script → thư mục views → đuôi đường dẫn
+  duy nhất; rồi lặp lại với đuôi file khác (`.html`/`.ejs`/`.htm`). Extractor hiểu thêm controller
+  inline/biến (template gắn vào chính directive/component; route/modal được một khai báo
+  `inline: true` không bao giờ thành symbol), `scope` của `link`, `return ddo`, mọi object literal
+  có `templateUrl`, hàm trả URL, nối chuỗi với hằng của file, và `suffixOnly` khi đầu URL tính lúc
+  chạy. Hover trên `templateUrl` hiện cách tìm được hoặc danh sách đã thử.
 - Gutter icon (0.6.0): `Workspace.templateLinkMarkers()` → request `ejsng/templateLinks` — trong `.js`
   mỗi `templateUrl` nối được, trong template mỗi `templateUrl` tải nó (`TemplateLinkIndex.usedBy`).
 - Controller được nối **lúc query**: `Workspace.facts()` chèn một frame controller ngay trong frame

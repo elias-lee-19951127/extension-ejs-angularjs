@@ -38,7 +38,7 @@ import {
   type AppPortSource,
 } from './browser-locator';
 import { browserProfileDir, locateBrowser, spawnBrowser } from './browser-launch';
-import { registerTemplateGutter } from './template-gutter';
+import { LINK_TEMPLATE_URL_COMMAND, registerTemplateGutter, UNLINK_TEMPLATE_URL_COMMAND } from './template-gutter';
 
 let client: LanguageClient | undefined;
 let runtimeValuesView: RuntimeValuesViewProvider | undefined;
@@ -704,6 +704,8 @@ function redrawRuntimeLogDecorations(uri: string): void {
   scheduleValuesRefresh();
   const editor = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uri);
   if (!editor) return;
+  const doc = editor.document;
+  runtimeLogState.adoptCode(uri, (line) => (line < doc.lineCount ? doc.lineAt(line).text : null));
   const lines = runtimeLogState.linesFor(uri).filter((l) => l.line < editor.document.lineCount);
   const options: vscode.DecorationOptions[] = lines.map((l) => {
     const e = l.history[0]!;
@@ -804,7 +806,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
     },
     // The hover's "Log at runtime" link (.scratch/log-variable/spec.md #9): trusted for exactly
     // this one command, nothing else a hover's markdown could name.
-    markdown: { isTrusted: { enabledCommands: [LOG_VARIABLE_COMMAND, SHOW_LOG_VALUE_COMMAND] } },
+    markdown: { isTrusted: { enabledCommands: [LOG_VARIABLE_COMMAND, SHOW_LOG_VALUE_COMMAND, LINK_TEMPLATE_URL_COMMAND, UNLINK_TEMPLATE_URL_COMMAND] } },
     initializationOptions: {
       // Tells the server it may put that link in hovers — a client that can't run it gets none.
       commands: [LOG_VARIABLE_COMMAND],
@@ -814,6 +816,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       ejsDelimiter: cfg.get('ejsDelimiter'),
       customDirectives: cfg.get('customDirectives'),
       templateRoots: cfg.get('templateRoots'),
+      templateUrlMap: cfg.get('templateUrlMap'),
       expressViewsDir: cfg.get('expressViewsDir'),
       diagnostics: { enabled: cfg.get('diagnostics.enabled') },
       typeHints: { nullable: cfg.get('typeHints.nullable') },
@@ -952,6 +955,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       for (const c of changes) {
         changed = runtimeLogState.applyEdit(uri, c.range.start.line, c.range.end.line, c.text.split('\n').length) || changed;
       }
+      // A value stays only while its line still reads as the code that logged it: deleting the
+      // `console.log` (or its whole line) takes the value with it.
+      const doc = e.document;
+      changed = runtimeLogState.pruneChanged(uri, (line) => (line < doc.lineCount ? doc.lineAt(line).text : null)) || changed;
       if (changed) redrawRuntimeLogDecorations(uri);
     }),
   );
@@ -963,6 +970,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
   void refreshRuntimeStatus();
 
   client.onNotification('ejsng/runtimeLog', (params: RuntimeLogNotification) => {
+    const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === params.uri);
+    const lineText = doc && params.range.start.line < doc.lineCount ? doc.lineAt(params.range.start.line).text : undefined;
     runtimeLogState.record(params.uri, {
       line: params.range.start.line,
       character: params.range.start.character,
@@ -972,7 +981,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
       at: Date.now(),
       ...(params.endpoint ? { endpoint: params.endpoint } : {}),
       ...(params.logId !== undefined ? { logId: params.logId } : {}),
-    });
+    }, lineText);
     redrawRuntimeLogDecorations(params.uri);
   });
 

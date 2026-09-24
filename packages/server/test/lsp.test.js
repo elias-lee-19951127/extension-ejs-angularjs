@@ -600,3 +600,46 @@ test('LSP: ejsng/templateLinks gives the gutter links both ways between a templa
   assert.strictEqual(back[0].controller, 'ListCtrl');
   assert.deepStrictEqual(back[0].target.range.start, positionOf(js, "'views/list.html'"));
 });
+
+test('LSP: a templateUrl hover says what it links to and how, or what was tried with a link to pick one; a link set by hand applies at once', async (t) => {
+  const { conn, root, open } = await startServer(t, CLIENT_CAPS, { commands: [] });
+  const diagnostics = [];
+  conn.onNotification('textDocument/publishDiagnostics', (p) => diagnostics.push(p));
+  mkdirSync(join(root, 'public', 'js'), { recursive: true });
+  mkdirSync(join(root, 'old'), { recursive: true });
+  const js =
+    "myApp.directive('a', function () { return { templateUrl: 'views/page.ejs' }; });\n" +
+    "myApp.directive('b', function () { return { templateUrl: '/legacy/list' }; });\n";
+  writeFileSync(join(root, 'public', 'js', 'app.js'), js);
+  writeFileSync(join(root, 'old', 'list-v2.ejs'), '<p></p>\n');
+  notifyWatched(conn, root, ['public', CREATED], ['old', CREATED]);
+  const doc = open('public/js/app.js', 'javascript');
+
+  const hover = async (needle) =>
+    (await conn.sendRequest('textDocument/hover', { textDocument: { uri: doc.uri }, position: positionOf(js, needle, 2) })).contents.value;
+  const found = await hover("'views/page.ejs'");
+  assert.match(found, /views\/page\.ejs/);
+  assert.match(found, /_Found: /);
+  const missing = await hover("'/legacy/list'");
+  assert.match(missing, /No template found/);
+  assert.match(missing, /command:ejsng\.linkTemplateUrl\?/);
+
+  // The unlinked one is marked, faintly, even with diagnostics off.
+  const hint = await (async () => {
+    for (let i = 0; i < 50; i++) {
+      const d = diagnostics.filter((p) => p.uri === doc.uri).at(-1)?.diagnostics.find((x) => /No template found/.test(x.message));
+      if (d) return d;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return null;
+  })();
+  assert.ok(hint, JSON.stringify(diagnostics));
+  assert.strictEqual(hint.severity, 4);
+  assert.deepStrictEqual(hint.range.start, positionOf(js, "'/legacy/list'"));
+
+  conn.sendNotification('ejsng/setTemplateUrlMap', { map: { '/legacy/list': 'old/list-v2.ejs' } });
+  const linked = await hover("'/legacy/list'");
+  assert.match(linked, /old\/list-v2\.ejs/);
+  assert.match(linked, /by hand/);
+  assert.match(linked, /command:ejsng\.unlinkTemplateUrl\?/);
+});

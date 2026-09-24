@@ -20,6 +20,7 @@ to every template that reads it, rename across both, and dead-code detection.
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
 | Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity; drawn like IntelliJ's inline debugger values (muted italic after the code); a line hit many times shows its count (`42 (×3)`); hover the line to see which container or tab it came from, when, the full value, and the last few values before it |
 | Inline logpoints | VS Code logpoints (right-click the gutter → **Add Logpoint…**, e.g. `user = {user.name}`) show inline while connected — no code change, no restart, no debug session, and the app never pauses |
+| `templateUrl` hover | Says which template a `templateUrl` loads and how it was found (Express static mount, views directory, `.html` served from `.ejs`…) — or what was tried, with **Link to a template…** to pick it by hand (saved in `ejsng.templateUrlMap`) |
 | `templateUrl` ↔ template | IntelliJ-style gutter icons: an HTML icon beside each `templateUrl` that maps to a file, a controller icon on the template's first line (hover it for who loads it). **Go to Related** (`Ctrl+Cmd+↑` / `Ctrl+Alt+Home`) jumps between them. A correct Angular URL — relative to the page, like `'views/list.html'` from `public/js/app.js` — is found without any `templateRoots` |
 | Runtime Values panel | Laid out like IntelliJ's Variables view: `name = {Type} value`, round kind icons, Darcula / IntelliJ Light token colors |
 | Runtime Log panel | One **Connect** button finds your Node container through Docker, maps container paths from its mounts, and shows a step-by-step checklist of what works and why not — with fixes right on the failing step |
@@ -36,6 +37,7 @@ No separate install step — the language server ships bundled inside the extens
 | `ejsng.moduleAliases` | `["myApp", "app", "appModule"]` | Variables holding the Angular module when declared in another file |
 | `ejsng.ejsDelimiter` | `"%"` | Set to `"?"` for `<? ?>` delimiters |
 | `ejsng.customDirectives` | `{}` | e.g. `{"myOn": "statement"}` for your own custom directives |
+| `ejsng.templateUrlMap` | `{}` | `templateUrl` → template links set by hand, e.g. `{"/legacy/list": "old/tpl/list-v2.ejs"}`; filled from the hover's **Link to a template…** |
 | `ejsng.diagnostics.enabled` | `false` | Off by default to avoid false warnings on legacy code |
 | `ejsng.runtimeLog.pathMappings` | `[]` | Container path → local path. Usually inferred from Docker mounts; declare one to override. `${workspaceFolder}` allowed. Under Remote-WSL use Linux paths (a pasted `\\wsl.localhost\…` path is converted); the most specific remote always applies first |
 | `ejsng.runtimeLog.skipFrames` | `[]` | Extra stack-frame globs never used as a log's anchor (e.g. your own log wrapper) |

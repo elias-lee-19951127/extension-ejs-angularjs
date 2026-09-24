@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.0
+
+**Far fewer `templateUrl`s left unlinked.** In an EJS + AngularJS app the URL a script asks for is
+rarely the path of the file behind it. Now:
+
+- **The server code is read.** `app.use('/assets', express.static(path.join(__dirname, 'public')))`,
+  `app.set('views', …)` and routes like `app.get('/partials/:name', … res.render('partials/' + …))`
+  map a URL to its directory with no `templateRoots`.
+- **`.html` served from `.ejs`**, and URLs with no extension (`/partials/list`), find their template —
+  also under the views directory. The exact file name is always tried first; a swapped extension
+  only links when one file fits.
+- **More ways of writing a template are understood:** a component or directive whose controller is
+  an inline function or a variable naming one (`controller: CardController`), `scope.x` set in a
+  directive's `link`, `var ddo = {…}; return ddo;`, a factory passed by name, `$uibModal.open` /
+  `$mdDialog.show` / any object literal with a `templateUrl` (and its inline controller),
+  `$ionicModal.fromTemplateUrl('x.html')`, a `templateUrl` function returning one string, a URL
+  built from constants of the file (`BASE + 'list.html'`), and — when the start is computed at
+  runtime (`CONFIG.base + '/widgets/x.html'`) — the end of the path.
+
+**Hover a `templateUrl`** to see the template it loads and *how* it was found — or, when none was,
+everything that was tried and **Link to a template…**: pick the file (best guesses first) and the
+link is saved in the new `ejsng.templateUrlMap` setting (`.vscode/settings.json`, so it can be
+committed for the whole team). It applies at once, no reload; **Change…** and **Remove this link**
+sit in the same hover. `ejsng sweep` reads the same setting, and takes `--template-map url=file`.
+An unlinked `templateUrl` is marked with faint dots (a Hint, not counted in Problems).
+
+**Fixed: an inline value stayed after its `console.log` was deleted.** Deleting the call left the
+value on its line, and deleting the whole line slid the value onto the line below. A value now goes
+as soon as its line no longer reads as the code that logged it (reformatting doesn't count).
+
 ## 0.6.1
 
 No change to the extension itself: the end-to-end test for "Open as JSON" in the hover matches the

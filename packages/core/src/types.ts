@@ -58,6 +58,12 @@ export interface NgDeclaration {
   confidence: Confidence;
   /** Names of the injected dependencies. */
   deps: Array<{ name: string; span: Span }>;
+  /**
+   * A controller with no name of its own — `controller: function ($scope) {…}` in a route, state or
+   * modal — given one (`inline:$uibModal.open#L12`) so its scope members have an owner a template
+   * can be bound to. Never listed as a symbol: nothing can refer to it by that name.
+   */
+  inline?: true;
   /** For directive/component: controllerAs, isolate scope, template. */
   ddo?: {
     controllerAs?: string;
@@ -77,13 +83,19 @@ export interface NgDeclaration {
  * and the set of indexed files (Layer 4).
  */
 export interface TemplateLink {
-  via: 'directive' | 'component' | 'route' | 'state';
+  /** `'other'`: any other object literal carrying a `templateUrl` (`$uibModal.open`, `$mdDialog.show`, a route kept in a variable…) or `fromTemplateUrl('x.html')`. */
+  via: 'directive' | 'component' | 'route' | 'state' | 'other';
   /** Directive/component name, route path or state name (plus `@view` for a named view). */
   owner: string;
   /** The literal URL, or `null` when `templateUrl` is an expression that can't be read statically. */
   url: string | null;
-  /** Span of the `templateUrl` value. */
+  /** Span of the `templateUrl` value — of its static tail only, when `suffixOnly`. */
   urlSpan: Span;
+  /**
+   * `url` is only the static END of an expression (`base + '/list.html'`): matched as the end of a
+   * path, never as a whole one.
+   */
+  suffixOnly?: boolean;
   /** Controller NAME — `null` when absent or declared inline as a function. */
   controller: string | null;
   controllerAs: string | null;
@@ -193,7 +205,26 @@ export interface JsFacts {
   }>;
   /** Every `templateUrl` this file points at, from any of the sources in docs/kien-truc.md section 5.1. */
   templateLinks: TemplateLink[];
+  /** Where an Express app in this file serves templates from — so a `templateUrl` maps to disk with no config. */
+  serverRoots?: ServerRoot[];
   parseErrors: Array<{ message: string; span: Span }>;
+}
+
+/**
+ * A directory an Express app serves pages from, read off the server code:
+ * - `'static'`: `app.use('/assets', express.static(path.join(__dirname, 'public')))`
+ * - `'views'`: `app.set('views', path.join(__dirname, 'views'))`
+ * - `'render-route'`: `app.get('/partials/:name', (req, res) => res.render('partials/' + req.params.name))`
+ */
+export interface ServerRoot {
+  kind: 'static' | 'views' | 'render-route';
+  /** URL prefix served (`'/'` for an unprefixed static mount); `''` for `'views'`. */
+  urlPrefix: string;
+  /** The directory as written — relative to this file's directory when `fromFile`, else to the process cwd. */
+  dir: string;
+  fromFile: boolean;
+  /** `'render-route'`: what the route puts before the URL's rest to name the view (`'partials/'`). */
+  viewPrefix?: string;
 }
 
 /** An Angular expression in a template, with its scope context at that position. */
@@ -284,6 +315,11 @@ export interface Config {
   ejsDelimiter: string;
   customDirectives: Record<string, ExprKind>;
   templateRoots: Array<{ urlPrefix: string; fsPath: string; extensions?: string[] }>;
+  /**
+   * Links set by hand: a `templateUrl` exactly as written -> the workspace-relative template it
+   * loads. Checked before anything else — for the URLs no rule can find.
+   */
+  templateUrlMap?: Record<string, string>;
   expressViewsDir?: string;
 }
 

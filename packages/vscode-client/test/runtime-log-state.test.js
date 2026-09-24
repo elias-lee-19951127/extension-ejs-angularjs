@@ -500,6 +500,33 @@ test('RuntimeLogState.applyEdit: lines below move with inserted/removed lines; l
   assert.strictEqual(state.applyEdit('file:///a.js', 1, 1, 1), false);
 });
 
+test('RuntimeLogState.pruneChanged: a value goes with the code that logged it, and never slides onto the next line', () => {
+  const code = ['var total = 42;', 'console.log(total);', 'var after = 1;', "console.log('kept');"];
+  const textAt = (line) => (line < code.length ? code[line] : null);
+  const state = new RuntimeLogState();
+  state.record('file:///a.js', { line: 1, character: 0, value: '42', severity: 'log' }, code[1]);
+  state.record('file:///a.js', { line: 3, character: 0, value: 'kept', severity: 'log' }); // file was not open
+  const at = () => state.linesFor('file:///a.js').map((l) => [l.line, l.history[0].value]).sort((x, y) => x[0] - y[0]);
+
+  // Reformatting is not an edit of the code; the unopened line takes its code on first look.
+  code[1] = '  console.log( total );';
+  assert.strictEqual(state.pruneChanged('file:///a.js', textAt), false);
+  assert.deepStrictEqual(at(), [[1, '42'], [3, 'kept']]);
+
+  // The console.log deleted, its line left in place: the value goes.
+  code[1] = '';
+  assert.strictEqual(state.pruneChanged('file:///a.js', textAt), true);
+  assert.deepStrictEqual(at(), [[3, 'kept']]);
+
+  // The whole line of a logged value deleted (Cmd+Shift+K): the edit keeps line 1 and moves 3 -> 2,
+  // but line 1 now reads `var after = 1;` — the old value must not stay on it.
+  state.record('file:///a.js', { line: 1, character: 0, value: '42 again', severity: 'log' }, 'console.log(total);');
+  code.splice(1, 1);
+  state.applyEdit('file:///a.js', 1, 2, 1);
+  assert.strictEqual(state.pruneChanged('file:///a.js', textAt), true);
+  assert.deepStrictEqual(at(), [[2, 'kept']]);
+});
+
 test('expand: the dug rendering replaces the line text in place, and the hover keeps the rest', () => {
   const state = new RuntimeLogState();
   state.record('file:///a.js', { line: 3, character: 0, value: 'rows [Object]', severity: 'log', logId: 7 });

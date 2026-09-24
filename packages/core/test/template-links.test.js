@@ -48,10 +48,19 @@ test('route: templateUrl mapped through templateRoots (.html URL -> .ejs file) b
   assert.deepStrictEqual(ws.templateLinkIssues(), []);
 });
 
-test('route: without templateRoots the same URL maps to no file, is reported, and binds nothing', (t) => {
+test('route: without templateRoots a .html URL still finds the .ejs file it is served from', (t) => {
   const ws = workspace(t, { 'src/app.js': ROUTE_APP, 'src/views/profile.ejs': '<h1>{{ vm.fullName }}</h1>\n' });
 
   const d = ws.definitionAt('src/views/profile.ejs', at(ws, 'src/views/profile.ejs', 'fullName'));
+  assert.strictEqual(d.targets.length, 1, d.reason);
+  assert.strictEqual(d.targets[0].path, 'src/app.js');
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+});
+
+test('route: a URL no file answers to, under any extension, is reported and binds nothing', (t) => {
+  const ws = workspace(t, { 'src/app.js': ROUTE_APP, 'src/views/other.ejs': '<h1>{{ vm.fullName }}</h1>\n' });
+
+  const d = ws.definitionAt('src/views/other.ejs', at(ws, 'src/views/other.ejs', 'fullName'));
   assert.strictEqual(d.targets.length, 0);
   const issues = ws.templateLinkIssues();
   assert.strictEqual(issues.length, 1);
@@ -163,8 +172,9 @@ test('dynamic templateUrl is reported as unresolved, not guessed', (t) => {
     t,
     {
       'src/app.js': `
-var base = '/views';
-angular.module('app', []).directive('pane', function () { return { templateUrl: base + '/pane.html' }; });
+angular.module('app', []).directive('pane', function () {
+  return { templateUrl: function (el, attrs) { return attrs.tpl; } };
+});
 `,
       'src/views/pane.html': '<div></div>\n',
     },
@@ -175,8 +185,23 @@ angular.module('app', []).directive('pane', function () { return { templateUrl: 
   assert.strictEqual(issues[0].reason, 'dynamic');
   assert.strictEqual(issues[0].url, null);
   assert.strictEqual(issues[0].owner, 'pane');
+});
 
-  // The expression is still ordinary code: `base` jumps to its declaration.
+test('a templateUrl built from a constant of the file links; a click on the constant still goes to it', (t) => {
+  const ws = workspace(
+    t,
+    {
+      'src/app.js': `
+var base = '/views';
+angular.module('app', []).directive('pane', function () { return { templateUrl: base + '/pane.html' }; });
+`,
+      'src/views/pane.html': '<div></div>\n',
+    },
+    ROOTS,
+  );
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+  const open = ws.definitionAt('src/app.js', at(ws, 'src/app.js', "'/pane.html'"));
+  assert.strictEqual(open.targets[0]?.path, 'src/views/pane.html', open.reason);
   const d = ws.definitionAt('src/app.js', at(ws, 'src/app.js', "base + '/pane"));
   assert.strictEqual(d.targets.length, 1, d.reason);
   assert.strictEqual(d.targets[0].span.start, at(ws, 'src/app.js', 'base'));
@@ -339,4 +364,162 @@ test('gutter markers: a templateUrl marks its template, and the template marks t
   assert.strictEqual(html[0].kind, 'templateUrl');
   assert.strictEqual(html[0].target.path, 'public/js/app.js');
   assert.strictEqual(textAt(ws, html[0].target), "'views/list.html'");
+});
+
+// An EJS + Angular app: Express serves the templates, so its own code says where a URL lands.
+const linked = (ws, js) => ws.templateLinkMarkers(js).map((m) => m.target.path);
+
+test('express.static with a URL prefix maps the templateUrl into the mounted directory', (t) => {
+  const ws = workspace(t, {
+    'server/app.js': "const path = require('path');\napp.use('/assets', express.static(path.join(__dirname, '..', 'client')));\n",
+    'client/js/app.js': pageRelativeApp('/assets/tpl/list.html'),
+    'client/tpl/list.html': '<p>{{ items }}</p>\n',
+    'other/assets/tpl/list.html': '<p>decoy</p>\n',
+  });
+  assert.deepStrictEqual(linked(ws, 'client/js/app.js'), ['client/tpl/list.html']);
+});
+
+test('a route rendering a view named by the URL maps /partials/list to views/partials/list.ejs', (t) => {
+  const ws = workspace(t, {
+    'app.js':
+      "app.set('views', __dirname + '/server/views');\n" +
+      "app.get('/partials/:name', function (req, res) { res.render('partials/' + req.params.name); });\n",
+    'public/js/app.js': pageRelativeApp('/partials/list'),
+    'server/views/partials/list.ejs': '<p>{{ items }}</p>\n',
+  });
+  assert.deepStrictEqual(linked(ws, 'public/js/app.js'), ['server/views/partials/list.ejs']);
+  const d = ws.definitionAt('server/views/partials/list.ejs', at(ws, 'server/views/partials/list.ejs', 'items'));
+  assert.strictEqual(d.targets[0]?.path, 'public/js/app.js', d.reason);
+});
+
+test('with no server code, an extension-less or .html URL finds the one .ejs of that name under views/', (t) => {
+  const ws = workspace(t, {
+    'public/js/a.js': pageRelativeApp('templates/list.html'),
+    'public/js/b.js': pageRelativeApp('templates/card'),
+    'views/templates/list.ejs': '<p>{{ items }}</p>\n',
+    'views/templates/card.ejs': '<p>{{ items }}</p>\n',
+  });
+  assert.deepStrictEqual(linked(ws, 'public/js/a.js'), ['views/templates/list.ejs']);
+  assert.deepStrictEqual(linked(ws, 'public/js/b.js'), ['views/templates/card.ejs']);
+});
+
+test('the exact file name always beats a swapped extension', (t) => {
+  const ws = workspace(t, {
+    'public/js/app.js': pageRelativeApp('views/list.html'),
+    'public/views/list.ejs': '<p>{{ items }}</p>\n',
+    'shop/views/list.html': '<p>{{ items }}</p>\n',
+  });
+  assert.deepStrictEqual(linked(ws, 'public/js/app.js'), ['shop/views/list.html']);
+});
+
+// The ways real AngularJS code writes a template's controller and URL that are not a plain string.
+const resolvesIn = (ws, tpl, needle) => {
+  const d = ws.definitionAt(tpl, at(ws, tpl, needle));
+  assert.strictEqual(d.targets.length, 1, `${needle}: ${d.reason}`);
+  return d.targets[0];
+};
+
+test('component with an inline controller: $ctrl.x in its template reaches this.x', (t) => {
+  const ws = workspace(t, {
+    'js/list.component.js': `
+angular.module('app').component('itemList', {
+  templateUrl: 'tpl/list.html',
+  controller: function (ItemSvc) { this.items = ItemSvc.all(); }
+});`,
+    'tpl/list.html': '<li ng-repeat="i in $ctrl.items">{{ i }}</li>\n',
+  });
+  assert.strictEqual(resolvesIn(ws, 'tpl/list.html', 'items').path, 'js/list.component.js');
+});
+
+test('John Papa style: named directive factory, `var ddo = {…}; return ddo;`, controller by variable, link scope', (t) => {
+  const ws = workspace(t, {
+    'js/card.directive.js': `
+angular.module('app').directive('userCard', userCard);
+function userCard() {
+  var directive = { templateUrl: 'tpl/card.html', controller: CardController, controllerAs: 'vm', link: link };
+  return directive;
+  function link(scope) { scope.expanded = false; }
+}
+CardController.$inject = ['$scope'];
+function CardController($scope) { var vm = this; vm.title = 'x'; $scope.tags = []; }`,
+    'tpl/card.html': '<h1 ng-click="expanded = !expanded">{{ vm.title }} {{ tags.length }}</h1>\n',
+  });
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+  assert.strictEqual(resolvesIn(ws, 'tpl/card.html', 'title').path, 'js/card.directive.js');
+  assert.strictEqual(resolvesIn(ws, 'tpl/card.html', 'tags').path, 'js/card.directive.js');
+});
+
+test('directive with a link function: scope.x set there resolves in the template', (t) => {
+  const ws = workspace(t, {
+    'js/pane.js': `
+angular.module('app').directive('pane', function () {
+  return { templateUrl: 'tpl/pane.html', link: function (s, el) { s.open = true; } };
+});`,
+    'tpl/pane.html': '<div ng-show="open"></div>\n',
+  });
+  assert.strictEqual(resolvesIn(ws, 'tpl/pane.html', 'open').path, 'js/pane.js');
+});
+
+test('$uibModal.open with an inline controller binds the modal template to it', (t) => {
+  const ws = workspace(t, {
+    'js/list.controller.js': `
+angular.module('app').controller('ListCtrl', function ($scope, $uibModal) {
+  $scope.edit = function () {
+    $uibModal.open({
+      templateUrl: 'tpl/edit-modal.html',
+      controller: ['$scope', '$uibModalInstance', function ($scope, inst) { $scope.draft = {}; $scope.close = inst.close; }]
+    });
+  };
+});`,
+    'tpl/edit-modal.html': '<input ng-model="draft.name"><button ng-click="close()">x</button>\n',
+  });
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+  assert.strictEqual(resolvesIn(ws, 'tpl/edit-modal.html', 'draft').path, 'js/list.controller.js');
+  assert.strictEqual(resolvesIn(ws, 'tpl/edit-modal.html', 'close').path, 'js/list.controller.js');
+  // The made-up controller never shows up as dead code.
+  assert.ok(!ws.unused().some((s) => s.name.startsWith('inline:')), JSON.stringify(ws.unused()));
+});
+
+test('templateUrl as a function returning one string, a route kept in a variable, and fromTemplateUrl', (t) => {
+  const ws = workspace(t, {
+    'js/app.js': `
+var routes = { templateUrl: 'tpl/a.html', controller: 'ACtrl' };
+angular.module('app')
+  .directive('b', function () { return { templateUrl: function () { return 'tpl/b.html'; } }; })
+  .controller('C', function ($ionicModal) { $ionicModal.fromTemplateUrl('tpl/c.html', {}); });`,
+    'tpl/a.html': '<p></p>\n',
+    'tpl/b.html': '<p></p>\n',
+    'tpl/c.html': '<p></p>\n',
+  });
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+  assert.deepStrictEqual(linked(ws, 'js/app.js').sort(), ['tpl/a.html', 'tpl/b.html', 'tpl/c.html']);
+});
+
+test('an unknown base plus a static file name finds the file by the end of its path', (t) => {
+  const ws = workspace(t, {
+    'js/app.js': "angular.module('app').directive('x', function (CONFIG) { return { templateUrl: CONFIG.base + '/widgets/x.html' }; });",
+    'web/static/widgets/x.html': '<p></p>\n',
+  });
+  assert.deepStrictEqual(linked(ws, 'js/app.js'), ['web/static/widgets/x.html']);
+});
+
+test('a link set by hand wins, relinks at once, and the hover info says how each URL was found', (t) => {
+  const ws = workspace(t, {
+    'public/js/app.js': pageRelativeApp('/legacy/list'),
+    'public/views/list.html': '<p>{{ items }}</p>\n',
+    'old/tpl/list-v2.ejs': '<p>{{ items }}</p>\n',
+  });
+  const offset = at(ws, 'public/js/app.js', '/legacy/list');
+  const before = ws.templateUrlAt('public/js/app.js', offset);
+  assert.strictEqual(before.trace.target, null);
+  assert.ok(before.trace.tried.length > 2, before.trace.tried.join('\n'));
+  assert.strictEqual(ws.templateLinkIssues()[0]?.reason, 'no-file');
+
+  ws.setTemplateUrlMap({ '/legacy/list': 'old/tpl/list-v2.ejs' });
+  const after = ws.templateUrlAt('public/js/app.js', offset);
+  assert.strictEqual(after.trace.target, 'old/tpl/list-v2.ejs');
+  assert.match(after.trace.how, /by hand/);
+  assert.deepStrictEqual(ws.templateLinkIssues(), []);
+  const d = ws.definitionAt('old/tpl/list-v2.ejs', at(ws, 'old/tpl/list-v2.ejs', 'items'));
+  assert.strictEqual(d.targets[0]?.path, 'public/js/app.js', d.reason);
 });

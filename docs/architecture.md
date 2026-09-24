@@ -313,6 +313,16 @@ in `packages/core/src/resolve/template-links.ts`:
   Angular fetches a `templateUrl` relative to the PAGE, which almost always sits above its scripts
   (`public/js/app.js` + `'views/list.html'` → `public/views/list.html`) — and last, the one file whose
   path ends with the URL (nearest the script; a tie links none). Neither step guesses extensions.
+- 0.7.0 — the full order is in `traceTemplateUrl`: `ejsng.templateUrlMap` (links set by hand) →
+  `templateRoots` → `express.static` mounts read off the server code (`JsFacts.serverRoots`) → a
+  route rendering a view named by the URL (`/partials/:name`) → workspace root → directories above the
+  script → views directories → the one path ending with the URL; then all again with another
+  template extension (`.html`/`.ejs`/`.htm`). The extractor also reads inline/variable controllers
+  (the template binds to the directive/component itself; a route or modal gets an `inline: true`
+  declaration that never becomes a symbol), `link`'s `scope`, `return ddo`, any object literal with a
+  `templateUrl`, functions returning the URL, concatenation with the file's constants, and
+  `suffixOnly` when the start of the URL is computed at runtime. Hovering a `templateUrl` shows how it
+  was found, or what was tried.
 - Gutter icons (0.6.0): `Workspace.templateLinkMarkers()` → the `ejsng/templateLinks` request — in a
   `.js` file each `templateUrl` that resolves, in a template each `templateUrl` loading it
   (`TemplateLinkIndex.usedBy`).

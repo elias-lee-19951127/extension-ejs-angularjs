@@ -2,7 +2,7 @@
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
   "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "publisher": "phule",
   "license": "MIT",
   "icon": "icon.png",
@@ -110,6 +110,14 @@
         "command": "ejsng.goToRelated",
         "title": "EJS/NG: Go to Related Template / Controller",
         "icon": "$(link)"
+      },
+      {
+        "command": "ejsng.linkTemplateUrl",
+        "title": "EJS/NG: Link templateUrl to a Template"
+      },
+      {
+        "command": "ejsng.unlinkTemplateUrl",
+        "title": "EJS/NG: Remove templateUrl Link"
       }
     ],
     "keybindings": [
@@ -155,6 +163,14 @@
         },
         {
           "command": "ejsng.copyLogValue",
+          "when": "false"
+        },
+        {
+          "command": "ejsng.linkTemplateUrl",
+          "when": "false"
+        },
+        {
+          "command": "ejsng.unlinkTemplateUrl",
           "when": "false"
         }
       ]
@@ -227,7 +243,15 @@
               }
             }
           },
-          "description": "Maps runtime templateUrl values (directive, component, $routeProvider, $stateProvider) to template files, so a template's expressions resolve against the controller that renders it. Reload the window after changing."
+          "description": "Maps runtime templateUrl values (directive, component, $routeProvider, $stateProvider) to template files, so a template's expressions resolve against the controller that renders it. Usually not needed: URLs are also looked up through the app's express.static mounts and views directory, relative to the page, and by the end of their path. Reload the window after changing."
+        },
+        "ejsng.templateUrlMap": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Links set by hand: a `templateUrl` exactly as written → the template file it loads, relative to the workspace root. E.g. `{\"/legacy/list\": \"old/tpl/list-v2.ejs\"}`. Checked before any other rule. Usually filled from the **Link to a template…** link in a `templateUrl`'s hover; applies at once, and can be committed in `.vscode/settings.json` for the whole team."
         },
         "ejsng.expressViewsDir": {
           "type": "string",
