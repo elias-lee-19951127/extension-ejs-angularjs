@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+No change to the extension itself: the end-to-end test for "Open as JSON" in the hover matches the
+link again now that it carries a tooltip. The whole end-to-end suite passes (14/14).
+
 ## 0.6.0
 
 **A `templateUrl` written the way Angular reads it now links to its template.** Angular fetches a
