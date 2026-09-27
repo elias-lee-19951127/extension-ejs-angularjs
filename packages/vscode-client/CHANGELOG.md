@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0
+
+**What a template gets from JavaScript stands out.** In `.ejs` and `.html` files, every name a
+script defines is now colored and bold: scope variables and their properties (`form.title`) in
+purple, `ng-controller`s, directives, components and filters in teal. A name only the template
+declares — an `ng-repeat` variable — is left alone. Turn it off with
+`ejsng.templateHighlight.enabled`; change the colors with `ejsng.linkedScope.foreground` and
+`ejsng.linkedDeclaration.foreground` in `workbench.colorCustomizations`.
+
+**Logged objects read the same on every hit.**
+
+- **Runtime Values panel:** a line logging faster than once per 300 ms (a timer, a digest loop)
+  showed its newer hits as one line of text instead of a tree. Every kept hit can now be inspected,
+  and the latest one on a line is always expanded once the rate limit allows.
+- **Objects inside objects are shown, not `{…}`:** whatever was dug is now displayed, an array's
+  first elements are the ones dug (not first/middle/last), and the panel digs far enough for the
+  objects inside a large array's elements.
+- **Hover:** earlier hits are laid out over several lines like the latest one, and short nested
+  objects stay on one line (`owner: {id: 7, name: 'ops'}`), as Node's `inspect` prints them.
+
 ## 0.7.0
 
 **Far fewer `templateUrl`s left unlinked.** In an EJS + AngularJS app the URL a script asks for is

@@ -17,6 +17,11 @@ export interface DigLimits {
   samples: number;
   /** `Runtime.getProperties` calls per logged value, at most. */
   requests: number;
+  /**
+   * Dig an array's FIRST `samples` elements rather than first/middle/last — for a value that is
+   * going to be shown, whose rendering lists the first elements (expand-log-values).
+   */
+  leading?: boolean;
 }
 
 /** Decision #3: the hover's 2 levels × 8 keys, 3 sampled elements, 12 requests. */
@@ -74,7 +79,7 @@ export async function digRuntimeValue(
         node.properties = runtimeProperties(descriptors);
         if (node.object.subtype === 'array') {
           const elements = node.properties.filter((p) => /^\d+$/.test(p.name) && p.value);
-          for (const p of sample(elements, limits.samples)) next.push({ node: p.value!, level });
+          for (const p of limits.leading ? elements.slice(0, limits.samples) : sample(elements, limits.samples)) next.push({ node: p.value!, level });
         } else {
           const shown = node.properties.filter((p) => p.enumerable !== false && !p.accessor && !p.name.startsWith('$$'));
           for (const p of shown.slice(0, limits.keys)) if (p.value) next.push({ node: p.value, level: level + 1 });

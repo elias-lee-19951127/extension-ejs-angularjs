@@ -30,7 +30,7 @@ async function logged(t, value) {
 /** As the server will: dig, then render. */
 async function dug(t, value, limits) {
   const { arg, getProperties } = await logged(t, value);
-  const { value: runtimeValue, requests } = await C.digRuntimeValue(arg, getProperties, limits ?? { depth: 4, keys: 30, samples: 10, requests: 60 });
+  const { value: runtimeValue, requests } = await C.digRuntimeValue(arg, getProperties, limits ?? { depth: 4, keys: 30, samples: 10, requests: 80, leading: true });
   return { runtimeValue, requests, arg };
 }
 
@@ -45,17 +45,26 @@ test('an array of objects reads as objects, not as [Object, Object, …]', async
   const { runtimeValue } = await dug(t, ROWS);
   const inline = C.formatRuntimeValueInline(runtimeValue);
   assert.doesNotMatch(inline, /\bObject\b/, inline);
-  assert.match(inline, /^\[\{id: 0, title: 'Sensor 0', owner: \{…\}, tags: \[…\]\}/, inline);
+  assert.match(inline, /^\[\{id: 0, title: 'Sensor 0', owner: \{id: 7, name: 'ops', team: \{…\}\}, tags: \['alarm', 'live'\]\}/, inline);
   assert.match(inline, /…\+\d+\]$/, inline); // whatever didn't fit is counted, and the bracket closes
   assert.ok(inline.length <= 200, `${inline.length} characters`);
 
   const pretty = C.formatRuntimeValuePretty(runtimeValue);
-  assert.match(pretty, /owner: \{\n\s+id: 7,\n\s+name: 'ops',\n\s+team: \{…\}/, pretty);
-  assert.match(pretty, /tags: \[\n\s+'alarm',\n\s+'live'\n\s+\]/, pretty);
+  // Every level that was dug shows; a short one stays on one line, as Node's inspect keeps it.
+  assert.match(pretty, /^\[\n  \{\n    id: 0,\n    title: 'Sensor 0',\n    owner: \{id: 7, name: 'ops', team: \{id: 1, code: 'X'\}\},\n    tags: \['alarm', 'live'\]\n  \}/, pretty);
+  assert.doesNotMatch(pretty, /\{…\}|\[…\]/, pretty);
+});
+
+test('the hover lays out every element it lists, not just the few a dig samples', async (t) => {
+  const value = { items: Array.from({ length: 12 }, (_, i) => ({ id: i, meta: { k: i } })) };
+  const { runtimeValue } = await dug(t, value, { depth: 4, keys: 30, samples: 10, requests: 80, leading: true });
+  const pretty = C.formatRuntimeValuePretty(runtimeValue);
+  for (let i = 0; i < 10; i++) assert.match(pretty, new RegExp(`\\{id: ${i}, meta: \\{k: ${i}\\}\\}`), pretty);
+  assert.match(pretty, /…\+2\n  \]/, pretty);
 });
 
 test('the JSON rendering parses, keeps the values, and says where it stopped', async (t) => {
-  const { runtimeValue } = await dug(t, ROWS);
+  const { runtimeValue } = await dug(t, ROWS, { depth: 4, keys: 30, samples: 10, requests: 60 });
   const parsed = JSON.parse(C.formatRuntimeValueJson(runtimeValue));
   assert.strictEqual(parsed.length, 150, 'every element the runtime listed');
   // Sampled elements were dug all the way; the rest keep the preview the runtime sent with them.

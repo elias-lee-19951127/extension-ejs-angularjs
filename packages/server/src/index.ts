@@ -108,7 +108,8 @@ let logVariableLinks = false;
 /** `ejsng.runtimeLog.expandValues` — dig logged objects so they read as objects (expand-log-values spec #10). */
 let expandLogValues = true;
 /** How far a drawn log is dug (spec #4): enough for the inline line and the hover, not the whole tree. */
-const DRAW_DIG_LIMITS = { depth: 3, keys: 30, samples: 10, requests: 40 };
+// `leading`: the hover lists an array's first elements, so those are the ones worth digging.
+const DRAW_DIG_LIMITS = { depth: 4, keys: 30, samples: 10, requests: 80, leading: true };
 /** One dig per line per this many ms — a hot loop must not flood the runtime (spec #4). */
 const EXPAND_INTERVAL_MS = 300;
 /** Drawn logs whose arguments are kept for "Show full value" (spec #5). */
@@ -208,6 +209,11 @@ interface RuntimeLogConnectionInfo {
   loggedArgs: Map<number, RemoteObject[]>;
   /** When each `(file, line)` was last dug, so a hot loop can't flood the runtime (spec #4). */
   lastExpandedAt: Map<string, number>;
+  /**
+   * A line's latest log that came too soon after the last dig: dug when the interval is up, so the
+   * newest value on a line always ends up expanded, however fast it logs.
+   */
+  pendingExpand: Map<string, { log: ParsedConsoleLog; logId: number; timer: ReturnType<typeof setTimeout> }>;
 }
 
 /** What `applyLogpoints` has set on one connection, so the next call can take it all back. */
@@ -824,6 +830,19 @@ connection.onRequest('ejsng/templateLinks', (params: { uri?: string }) => {
   return { links };
 });
 
+/**
+ * What in a template is backed by JavaScript (`Workspace.linkedSpans`), for the client to color and
+ * embolden — so which names reach a controller, directive or filter reads at a glance.
+ */
+connection.onRequest('ejsng/linkedSymbols', (params: { uri?: string }) => {
+  const r = typeof params?.uri === 'string' ? rel(params.uri) : null;
+  const doc = typeof params?.uri === 'string' ? documents.get(params.uri) : undefined;
+  if (!workspace || !r) return { symbols: [] };
+  const source = doc?.getText() ?? workspace.source(r);
+  if (source == null) return { symbols: [] };
+  return { symbols: workspace.linkedSpans(r).map((l) => ({ range: toRange(source, l.span), kind: l.kind })) };
+});
+
 /** The links set by hand changed (`ejsng.templateUrlMap`): relink, and redraw what shows them. */
 connection.onNotification('ejsng/setTemplateUrlMap', (params: { map?: Record<string, string> }) => {
   if (!workspace) return;
@@ -1125,6 +1144,8 @@ function setConnectionState(key: string, info: RuntimeLogConnectionInfo, state: 
     info.typeEvidence.clear();
     info.loggedArgs.clear();
     info.lastExpandedAt.clear();
+    for (const p of info.pendingExpand.values()) clearTimeout(p.timer);
+    info.pendingExpand.clear();
   }
   void connection.sendNotification('ejsng/runtimeStatusChanged', { key, state, reason, endpoint: info.meta.endpoint });
 }
@@ -1269,22 +1290,44 @@ async function handleRuntimeLog(key: string, info: RuntimeLogConnectionInfo, log
  * runtime to answer, and the line simply gets better text a few milliseconds later.
  *
  * Rate limited per line: a log inside a hot loop must not turn into hundreds of CDP calls a second.
- * A skipped one still draws, with the preview text it always had.
+ * One that comes too soon is not dropped but deferred — only the latest of a burst is dug, once the
+ * interval is up — so the newest value on a line is always expanded. Every log's handles are kept,
+ * dug or not, so the Values panel and "Open as JSON" can still dig any hit that is kept.
  */
 function expandLoggedValue(key: string, info: RuntimeLogConnectionInfo, log: ParsedConsoleLog, logId: number, line: string): void {
   const expandable = log.args.filter((a) => typeof a.objectId === 'string');
   if (!expandable.length) return; // primitives already read fine
+  info.loggedArgs.set(logId, log.args);
+  if (info.loggedArgs.size > MAX_LOGGED_ARGS) info.loggedArgs.delete(info.loggedArgs.keys().next().value!);
+
   const now = Date.now();
   const last = info.lastExpandedAt.get(line);
-  if (last !== undefined && now - last < EXPAND_INTERVAL_MS) return;
+  if (last !== undefined && now - last < EXPAND_INTERVAL_MS) {
+    const pending = info.pendingExpand.get(line);
+    if (pending) {
+      pending.log = log;
+      pending.logId = logId;
+      return;
+    }
+    const timer = setTimeout(() => {
+      const p = info.pendingExpand.get(line);
+      info.pendingExpand.delete(line);
+      if (!p || runtimeLogConnections.get(key) !== info) return;
+      info.lastExpandedAt.set(line, Date.now());
+      digAndSend(key, info, p.log, p.logId);
+    }, EXPAND_INTERVAL_MS - (now - last));
+    info.pendingExpand.set(line, { log, logId, timer });
+    return;
+  }
   info.lastExpandedAt.set(line, now);
   if (info.lastExpandedAt.size > MAX_LOGGED_ARGS) {
     for (const [k, at] of info.lastExpandedAt) if (now - at >= EXPAND_INTERVAL_MS) info.lastExpandedAt.delete(k);
   }
-  // Kept for "Show full value", which digs deeper on demand (spec #5).
-  info.loggedArgs.set(logId, log.args);
-  if (info.loggedArgs.size > MAX_LOGGED_ARGS) info.loggedArgs.delete(info.loggedArgs.keys().next().value!);
+  digAndSend(key, info, log, logId);
+}
 
+/** Dig one drawn log for the inline line and the hover, and send the renderings for its `logId`. */
+function digAndSend(key: string, info: RuntimeLogConnectionInfo, log: ParsedConsoleLog, logId: number): void {
   const separator = log.logpointId !== undefined ? '' : ' ';
   void Promise.all(log.args.map((arg) => digRuntimeValue(arg, getPropertiesOn(info), DRAW_DIG_LIMITS))).then((dug) => {
     if (runtimeLogConnections.get(key) !== info) return;
@@ -1297,7 +1340,10 @@ function expandLoggedValue(key: string, info: RuntimeLogConnectionInfo, log: Par
 }
 
 /** How far "Show full value" digs (spec #3) — everything, within reason, and only when asked. */
-const FULL_DIG_LIMITS = { depth: 6, keys: 50, samples: 200, requests: 200 };
+// `requests`: an array of 200 objects spends 200 at its own level alone — enough is left here for
+// the objects inside them, which otherwise read `{…}`. A level's calls run in parallel, so the cost
+// is the number of levels, not of calls.
+const FULL_DIG_LIMITS = { depth: 6, keys: 50, samples: 200, requests: 1500, leading: true };
 
 /**
  * expand-log-values (spec #3, #5): the whole value behind a drawn log, as JSON for the tab that
@@ -1413,6 +1459,7 @@ function startRuntimeLogConnection(
     typeEvidence: new RuntimeEvidenceStore(runtimeSourceLabel(meta)),
     loggedArgs: new Map(),
     lastExpandedAt: new Map(),
+    pendingExpand: new Map(),
   };
   // Every callback guards on `runtimeLogConnections.get(key) !== info`: a message/event already
   // in flight on a connection this key has since replaced or disconnected must be ignored, so a

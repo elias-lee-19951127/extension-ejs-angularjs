@@ -287,3 +287,31 @@ test('real repo: smart-city', { skip: !existsSync(REAL) && 'smart-city repo not 
     rmSync(db, { force: true });
   });
 });
+
+test('linkedSpans: what in a template JavaScript answers for, and nothing the template declares', () => {
+  const db = join(FIXTURE, '.linked.ndjson');
+  rmSync(db, { force: true });
+  const ws = new C.Workspace({ root: FIXTURE }, db);
+  ws.index();
+  const TPL = 'views/page.ejs';
+  const src = ws.source(TPL);
+  const got = ws.linkedSpans(TPL).map((l) => `${l.kind}:${src.slice(l.span.start, l.span.end)}`);
+  assert.deepStrictEqual(got, [
+    'declaration:demo-view-controller',
+    'scope:init',
+    'scope:rows',
+    'scope:pick',
+    'scope:busy',
+    'scope:saving',
+    'scope:form',
+    'scope:title',
+    'scope:total',
+    'declaration:money',
+    'declaration:my-widget',
+    'declaration:pick-file',
+  ]);
+  // `row` is the ng-repeat's own variable: the template declares it, not a script.
+  assert.ok(!got.some((g) => g.endsWith(':row')), got.join(', '));
+  assert.deepStrictEqual(ws.linkedSpans('js/app.js'), [], 'only templates');
+  rmSync(db, { force: true });
+});

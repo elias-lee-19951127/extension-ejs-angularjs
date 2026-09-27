@@ -511,6 +511,49 @@ export class Workspace implements FactSource, RenameSource {
   }
 
   /**
+   * What in a template is backed by JavaScript, for the editor to set apart: every name a
+   * definition in a script file answers for — a scope variable and the properties after it
+   * (`form.title`), an `ng-controller`, a directive or component used as an element or attribute,
+   * a filter. What only the template itself declares (an `ng-repeat` variable) is left alone.
+   * `kind` separates the Angular declarations from the scope's data, which are drawn differently.
+   */
+  linkedSpans(relPath: string): Array<{ span: Span; kind: 'scope' | 'declaration' }> {
+    const facts = this.facts(relPath);
+    const source = this.source(relPath);
+    if (facts?.kind !== 'template' || source == null) return [];
+    const out: Array<{ span: Span; kind: 'scope' | 'declaration' }> = [];
+    const seen = new Set<number>();
+    const inScript = (at: number): boolean =>
+      this.definitionAt(relPath, at).targets.some((t) => t.path !== relPath && /\.(?:[cm]?js|ts)$/i.test(t.path));
+    const add = (span: Span, kind: 'scope' | 'declaration'): boolean => {
+      if (span.end <= span.start || seen.has(span.start) || !inScript(span.start)) return false;
+      seen.add(span.start);
+      out.push({ span, kind });
+      return true;
+    };
+    for (const expr of facts.expressions) {
+      for (const root of expr.roots) {
+        if (!add(root.span, 'scope')) continue;
+        // `form.title.length`: each property after it, while the script still says what it is.
+        let at = root.span.end;
+        for (let i = 0; i < root.path.length; i++) {
+          const m = /^\s*\??\.\s*([A-Za-z_$][\w$]*)/.exec(source.slice(at, at + 200));
+          const name = m?.[1];
+          if (!m || name === undefined || name !== root.path[i]) break;
+          const start = at + m[0].length - name.length;
+          if (!add({ start, end: start + name.length }, 'scope')) break;
+          at = start + name.length;
+        }
+      }
+      for (const f of expr.filters) add(f.span, 'declaration');
+    }
+    for (const c of facts.controllers) add(c.span, 'declaration');
+    for (const e of facts.customElements) add(e.span, 'declaration');
+    for (const a of facts.attrCandidates) add(a.attrSpan, 'declaration');
+    return out.sort((a, b) => a.span.start - b.span.start);
+  }
+
+  /**
    * The JS↔template links of one file, for the editor to mark in its gutter: in a `.js` file each
    * `templateUrl` that maps to a template; in a template, each `templateUrl` that loads it.
    */

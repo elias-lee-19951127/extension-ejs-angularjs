@@ -24,11 +24,11 @@ test('a logged array reads as objects inline, and "Show full value" opens it as 
     'the expanded value drawn inline',
   );
   assert.doesNotMatch(drawn.text, /\bObject\b/, drawn.text);
-  assert.match(drawn.text, /rows \[\{id: 0, title: 'Sensor 0', owner: \{…\}\}/, drawn.text);
+  assert.match(drawn.text, /rows \[\{id: 0, title: 'Sensor 0', owner: \{id: 7, name: 'ops'\}\}/, drawn.text);
 
   // The hover (a decoration's hoverMessage, not a hover provider) shows it laid out, with the link.
   const md = api.hovers(appUri.toString()).find((h) => h.line === 0).markdown;
-  assert.match(md, /owner: \{\n\s+id: 7,\n\s+name: 'ops'\n\s+\}/, md);
+  assert.match(md, /owner: \{id: 7, name: 'ops'\}/, md);
   // The link carries a tooltip after its target: `(command:…?args "Open the whole value…")`.
   const link = /command:ejsng\.showLogValue\?(\S+?)[\s)]/.exec(md);
   assert.ok(link, md);

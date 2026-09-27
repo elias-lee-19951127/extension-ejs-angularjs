@@ -270,9 +270,9 @@ test('LSP + real node --inspect: a logged array of objects is expanded into read
 
   const first = expanded[0];
   assert.doesNotMatch(first.inline, /\bObject\b/, first.inline);
-  assert.match(first.inline, /^rows \[\{id: 0, title: 'Sensor 0', owner: \{…\}\}/, first.inline);
+  assert.match(first.inline, /^rows \[\{id: 0, title: 'Sensor 0', owner: \{id: 7, name: 'ops'\}\}/, first.inline);
   assert.ok(first.inline.length <= 210, `${first.inline.length} characters`);
-  assert.match(first.expanded, /owner: \{\n\s+id: 7,\n\s+name: 'ops'\n\s+\}/, first.expanded);
+  assert.match(first.expanded, /owner: \{id: 7, name: 'ops'\}/, first.expanded);
 });
 
 test('LSP + real node --inspect: logging in a loop is rate limited per line, and the setting turns it off', async (t) => {
@@ -291,6 +291,31 @@ test('LSP + real node --inspect: logging in a loop is rate limited per line, and
   await new Promise((resolve) => setTimeout(resolve, 400));
   assert.deepStrictEqual(quiet.expanded, []);
   assert.strictEqual(quiet.runtimeLogs[0].logId, undefined, 'nothing to ask to expand');
+});
+
+test('LSP + real node --inspect: a line logging faster than the rate limit still ends expanded, and every hit can be inspected', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-expand-trailing-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { conn, runtimeLogs, expanded } = await startWithLogs(t, root);
+
+  await waitFor(() => runtimeLogs.length >= 20, 'a burst of logs from the same line');
+  // A log skipped by the rate limit is dug once the interval is up — the latest of the burst, not
+  // none of it, so the Values panel's newest hit reads as a value rather than one line of text.
+  const logIds = new Set(runtimeLogs.map((l) => l.logId));
+  await waitFor(() => expanded.some((e) => e.logId !== Math.min(...logIds) && e.logId !== expanded[0].logId), 'a deferred expansion');
+
+  // A hit that was never dug for drawing still has its handles, so the panel's tree can be built.
+  const expandedIds = new Set(expanded.map((e) => e.logId));
+  const skipped = runtimeLogs.findLast((l) => l.logId !== undefined && !expandedIds.has(l.logId));
+  assert.ok(skipped, 'some log was not dug on drawing');
+  const result = await conn.sendRequest('ejsng/inspectRuntimeLog', { logId: skipped.logId });
+  assert.ok(result && !result.stale, JSON.stringify(result));
+  const rows = result.tree.find((r) => r.kind === 'array');
+  assert.ok(rows, JSON.stringify(result.tree).slice(0, 300));
+  // The objects inside the elements are dug too, not left as `{…}`.
+  const owner = rows.children[140].children.find((c) => c.name === 'owner');
+  assert.strictEqual(owner.kind, 'object', JSON.stringify(owner));
+  assert.ok(owner.children.some((c) => c.name === 'name' && c.json === 'ops'), JSON.stringify(owner));
 });
 
 test('LSP + real node --inspect: ejsng/expandRuntimeLog digs the whole value as JSON, and says when the runtime lost it', async (t) => {

@@ -31,6 +31,7 @@ Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **Int
 | Completion theo shape | `busy.` → `search`, `ingest`…; `section.` → khoá của phần tử trong `sections` |
 | File đổi ngoài editor | `git pull` / checkout / tool khác → index tự cập nhật (VSCode và IntelliJ), không cần đánh index lại |
 | Kiểu đã thấy | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + các chỗ gán; `vm.user` có lúc `= null` → chú thích nhạt `may be empty` |
+| Tô màu phần nối với JS | Trong `.ejs`/`.html`, tên nào có định nghĩa trong file `.js` được tô màu riêng và **in đậm**: biến scope và thuộc tính của nó (tím), `ng-controller`/directive/component/filter (xanh ngọc). Biến chỉ template tự khai báo (`ng-repeat`) giữ nguyên |
 
 ### Kiểu đã thấy trong hover và inline
 
@@ -153,6 +154,7 @@ dẫn cụ thể bằng biến môi trường `EJSNG_NODE`.
 | `ejsng.runtimeLog.expandValues` | `true` | Trải object/mảng trong log inline thay vì `[Object]`; hỏi app đang chạy, có chặn tần suất mỗi dòng |
 | `ejsng.logLens` | `"unknown"` | CodeLens **Log at runtime** trên dòng gán: `unknown` chỉ ở lần gán không suy ra được kiểu (~3% số dòng), `all` ở mọi lần gán (15–18%), `off` tắt |
 | `ejsng.typeHints.nullable` | `true` | Chú thích inline `may be empty` sau biến có lần gán `null`/`undefined`. Hover không có setting. Đổi xong reload window |
+| `ejsng.templateHighlight.enabled` | `true` | Tô màu + in đậm tên trong template có định nghĩa ở JS. Đổi màu bằng `workbench.colorCustomizations`: `ejsng.linkedScope.foreground`, `ejsng.linkedDeclaration.foreground` |
 | `ejsng.include` / `exclude` | | Glob quét file |
 
 ## Kiến trúc

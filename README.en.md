@@ -32,6 +32,7 @@ One language server (Node/TypeScript), two thin clients: **VSCode** and **Intell
 | Shape-based completion | `busy.` → `search`, `ingest`…; `section.` → the keys of an element in `sections` |
 | Files changed outside the editor | `git pull` / checkout / another tool → index auto-updates (VSCode and IntelliJ), no need to re-index manually |
 | Observed type | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + where it's assigned; `vm.user` sometimes `= null` → a faint `may be empty` hint |
+| JS-backed names colored | In `.ejs`/`.html`, every name a `.js` file defines is drawn in its own color and **bold**: scope variables and their properties (purple), `ng-controller`s/directives/components/filters (teal). Names only the template declares (`ng-repeat`) are left as they are |
 
 ### Observed types in hover and inline
 
@@ -160,6 +161,7 @@ inherit the shell's PATH. Force a specific path with the `EJSNG_NODE` environmen
 | `ejsng.runtimeLog.expandValues` | `true` | Expand objects and arrays in inline logs instead of `[Object]`; asks the running app, rate limited per line |
 | `ejsng.logLens` | `"unknown"` | The **Log at runtime** CodeLens above an assignment: `unknown` only where the index can't type it (~3% of lines), `all` on every assignment (15-18%), `off` for none |
 | `ejsng.typeHints.nullable` | `true` | Inline `may be empty` hint after a variable assigned `null`/`undefined` somewhere. Hover has no setting. Reload the window after changing it |
+| `ejsng.templateHighlight.enabled` | `true` | Colors and bolds template names defined in JavaScript. Change the colors in `workbench.colorCustomizations`: `ejsng.linkedScope.foreground`, `ejsng.linkedDeclaration.foreground` |
 | `ejsng.include` / `exclude` | | Glob patterns for file scanning |
 
 ## Architecture

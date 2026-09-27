@@ -21,12 +21,17 @@ export interface FormatValueLimits {
   maxLength: number;
 }
 
+/*
+ * `depth` counts an array's elements as a level of their own, where the dig (`DigLimits`) counts
+ * them as the array's — so these depths sit above what the server digs, and what was dug is what
+ * shows. A branch never dug still shows the keys its preview carries before it reads `{…}`.
+ */
 /** Beside the code: one line, short enough to read next to what it annotates (spec #1). */
-export const INLINE_VALUE_LIMITS: FormatValueLimits = { depth: 2, keys: 6, items: 6, maxString: 40, maxLength: 200 };
+export const INLINE_VALUE_LIMITS: FormatValueLimits = { depth: 3, keys: 6, items: 6, maxString: 40, maxLength: 200 };
 /** In the hover: several lines, still a glance rather than a document (spec #2). */
-export const HOVER_VALUE_LIMITS: FormatValueLimits = { depth: 3, keys: 30, items: 10, maxString: 200, maxLength: 8192 };
+export const HOVER_VALUE_LIMITS: FormatValueLimits = { depth: 8, keys: 30, items: 10, maxString: 200, maxLength: 16_384 };
 /** In the JSON tab: everything, within reason (spec #3). */
-export const JSON_VALUE_LIMITS: FormatValueLimits = { depth: 6, keys: 50, items: 200, maxString: 10_000, maxLength: 2_000_000 };
+export const JSON_VALUE_LIMITS: FormatValueLimits = { depth: 12, keys: 50, items: 200, maxString: 10_000, maxLength: 2_000_000 };
 
 /** What a scalar is, so the Values panel can color it the way a debugger's variables view does. */
 export type ScalarKind = 'string' | 'number' | 'boolean' | 'null' | 'undefined' | 'function' | 'unexpanded' | 'other';
@@ -357,9 +362,16 @@ function writeEntry([key, value]: [string, Node], budget: { left: number }): str
   return `${name}: ${writeCompact(value, budget)}`;
 }
 
+/** A nested object or array this short stays on one line in the hover, as Node's `util.inspect` does. */
+const PRETTY_LINE_WIDTH = 72;
+
 function writeIndented(n: Node, indent: string): string {
   const inner = `${indent}  `;
   if (n.kind === 'scalar') return n.text;
+  if (indent !== '') {
+    const flat = writeCompact(n, { left: Infinity });
+    if (indent.length + flat.length <= PRETTY_LINE_WIDTH) return flat;
+  }
   if (n.kind === 'array') {
     if (!n.items.length) return n.more > 0 ? `[…+${n.more}]` : '[]';
     const parts = n.items.map((item) => `${inner}${writeIndented(item, inner)}`);

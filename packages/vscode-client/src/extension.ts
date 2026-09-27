@@ -39,6 +39,7 @@ import {
 } from './browser-locator';
 import { browserProfileDir, locateBrowser, spawnBrowser } from './browser-launch';
 import { LINK_TEMPLATE_URL_COMMAND, registerTemplateGutter, UNLINK_TEMPLATE_URL_COMMAND } from './template-gutter';
+import { registerTemplateHighlight, renderedTemplateHighlights } from './template-highlight';
 
 let client: LanguageClient | undefined;
 let runtimeValuesView: RuntimeValuesViewProvider | undefined;
@@ -665,6 +666,15 @@ function colorableValue(text: string): string {
     .join('\n\n');
 }
 
+/** Lines of an earlier hit's value shown in the hover — Inspect shows any hit in full. */
+const EARLIER_HIT_LINES = 30;
+
+/** At most `max` lines of a laid-out value, the rest counted. */
+function clipLines(text: string, max: number): string {
+  const lines = text.split('\n');
+  return lines.length <= max ? text : `${lines.slice(0, max).join('\n')}\n… ${lines.length - max} more lines`;
+}
+
 /**
  * The hover for one line: where the latest value came from, what can be done with it, the value
  * laid out, then the earlier hits. The actions come first and carry icons: below a long value they
@@ -689,12 +699,19 @@ function runtimeLogHover(uri: string, line: RuntimeLogLine): vscode.MarkdownStri
   md.appendCodeblock(latest.expanded ? colorableValue(latest.expanded) : latest.value, latest.expanded ? 'javascript' : 'text');
   const earlier = line.history.slice(1);
   if (earlier.length > 0) {
-    md.appendMarkdown(`\n**Earlier hits** — most recent first:\n\n`);
+    md.appendMarkdown(`\n**Earlier hits** — most recent first:\n`);
     for (const e of earlier) {
-      md.appendMarkdown(`- ${clockTime(e.at)} `).appendText(`· ${e.source ?? 'unknown runtime'}`).appendMarkdown(` — ${inlineCode(e.inline ?? e.value)}\n`);
+      md.appendMarkdown(`\n${clockTime(e.at)} `).appendText(`· ${e.source ?? 'unknown runtime'}`);
+      // Laid out like the latest one, so an object reads the same whichever hit it came from.
+      if (e.expanded && e.expanded.includes('\n')) {
+        md.appendMarkdown('\n');
+        md.appendCodeblock(colorableValue(clipLines(e.expanded, EARLIER_HIT_LINES)), 'javascript');
+      } else {
+        md.appendMarkdown(` — ${inlineCode(e.inline ?? e.value)}\n`);
+      }
     }
     const dropped = line.count - line.history.length;
-    if (dropped > 0) md.appendMarkdown(`- _…and ${dropped} earlier not kept_\n`);
+    if (dropped > 0) md.appendMarkdown(`\n_…and ${dropped} earlier not kept_\n`);
   }
   return md;
 }
@@ -766,6 +783,8 @@ export interface EjsngTestApi {
   connectionKeys(): string[];
   /** Fetch status and checklist now instead of waiting for the next poll. */
   refreshRuntimeStatus(): Promise<void>;
+  /** The names last colored in a template as backed by JavaScript, with their kind. */
+  templateHighlights(uri: string): Array<{ kind: 'scope' | 'declaration'; text: string }>;
 }
 
 const testApi: EjsngTestApi = {
@@ -776,6 +795,7 @@ const testApi: EjsngTestApi = {
   checklist: () => runtimeChecklistSteps,
   connectionKeys: () => [...runtimeLogConnections.keys()],
   refreshRuntimeStatus: () => refreshRuntimeStatus(),
+  templateHighlights: (uri) => renderedTemplateHighlights(uri),
 };
 
 export async function activate(context: vscode.ExtensionContext): Promise<EjsngTestApi | undefined> {
@@ -965,6 +985,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<EjsngT
 
   await client.start();
   registerTemplateGutter(context, () => client);
+  registerTemplateHighlight(context, () => client);
   // Shows the checklist's "not checked yet" state. A plain request to the server — nothing is
   // probed and nothing connects until the user presses Connect (user story #38).
   void refreshRuntimeStatus();
