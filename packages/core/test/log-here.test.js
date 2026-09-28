@@ -57,6 +57,36 @@ test('cursor on nothing in particular: what the line assigns, like the CodeLens'
   assert.strictEqual(lineText(r.target.line).slice(r.target.character - 3, r.target.character), '[];');
 });
 
+test('a const/let/var is logged AFTER its declaration, never in its temporal dead zone', () => {
+  const src = `
+angular.module('app', []).controller('SearchCtrl', function ($scope, call) {
+  $scope.search = function (query) {
+    const payload = $scope.form.scope === 'uploaded'
+      ? { query: query }
+      : {
+          query: query,
+          topK: 5
+        };
+    console.log('test: ', payload);
+    for (const row of $scope.rows) { row.seen = true; }
+  };
+});
+`;
+  const f = C.extractJs(src, { ...C.DEFAULT_CONFIG, root: '/tmp' });
+  const at = (needle, offset = 0) => C.logHereAt(src, f, src.indexOf(needle) + offset);
+  const line = (n) => src.split('\n')[n];
+
+  for (const r of [at('payload ='), at('const payload')]) {
+    assert.strictEqual(r.target.expression, 'payload');
+    assert.strictEqual(r.target.logMessage, 'payload = {payload}');
+    // Right after the whole multi-line declaration, not at its first line.
+    assert.strictEqual(line(r.target.line).slice(0, r.target.character).trim(), '};');
+  }
+  // A loop variable has no "after" of its own: logged where the line is about to use it.
+  const row = at('row of');
+  assert.strictEqual(line(row.target.line).trim().slice(0, 5), 'for (');
+});
+
 test('refused, with a reason: a call, `this` in a callback, nonsense, a blank line', () => {
   assert.deepStrictEqual(ask('load())', { selection: 'load()' }), { reason: 'call' });
   assert.deepStrictEqual(ask('load())'), { reason: 'call' }, 'the chain under the cursor is a call');

@@ -812,25 +812,44 @@ function nodeAt(ast: acorn.Program, offset: number): acorn.Node | null {
   return found;
 }
 
-/** An assignment whose left side is on this line — what the line is "about". */
-function assignmentOnLine(ast: acorn.Program, lineStart: number, lineEnd: number): acorn.AssignmentExpression | null {
-  let found: acorn.AssignmentExpression | null = null;
+/**
+ * An assignment — or an initialized `const`/`let`/`var` — whose left side is on this line: what
+ * the line is "about".
+ */
+function assignmentOnLine(ast: acorn.Program, lineStart: number, lineEnd: number): { left: acorn.Node } | null {
+  let found: { left: acorn.Node } | null = null;
+  const onLine = (left: acorn.Node) => !found && left.start >= lineStart && left.start <= lineEnd;
   walkLib.simple(ast, {
     AssignmentExpression(node) {
-      if (found || node.left.start < lineStart || node.left.start > lineEnd) return;
-      found = node;
+      if (onLine(node.left as acorn.Node)) found = { left: node.left as acorn.Node };
+    },
+    VariableDeclarator(node) {
+      if (node.init && node.id.type === 'Identifier' && onLine(node.id)) found = { left: node.id };
     },
   });
   return found;
 }
 
-/** End of the statement `node` belongs to, when `node` is that statement's assignment target. */
+/**
+ * End of the statement `node` belongs to, when `node` is that statement's assignment target — or
+ * is declared by it (`const payload = …`): logging a `const`/`let` before its declaration has run
+ * reads it in its temporal dead zone (TDZ) and fails, so it must go after. A loop head
+ * (`for (const x of xs)`) has no "after" of its own: `null`.
+ */
 function statementEndFor(ast: acorn.Program, node: acorn.Node): number | null {
   let end: number | null = null;
   walkLib.ancestor(ast, {
     AssignmentExpression(assignment, _state, ancestors) {
       if (assignment.left.start !== node.start || assignment.left.end !== node.end) return;
       end = statementEnd([...(ancestors as acorn.Node[])]);
+    },
+    VariableDeclarator(declarator, _state, ancestors) {
+      if (!declarator.init || node.start < declarator.id.start || node.end > declarator.id.end) return;
+      const chain = ancestors as acorn.Node[];
+      const declaration = chain[chain.length - 2];
+      const holder = chain[chain.length - 3];
+      if (declaration?.type !== 'VariableDeclaration' || !holder || /^For/.test(holder.type)) return;
+      end = declaration.end;
     },
   });
   return end;

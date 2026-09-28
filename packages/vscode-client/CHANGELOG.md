@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1
+
+**"Log here" on a `const`/`let`/`var` logs its value.** The logpoint was placed at the start of the
+declaration, so it ran before the variable existed and showed an error
+(`<Failed to read the 'payload' property …>`). It now goes right after the whole declaration, even
+one spanning several lines. Putting the cursor on the `const` keyword logs the variable it declares.
+A logpoint already set in the wrong place stays there: remove it and use "Log here" again.
+
 ## 0.8.0
 
 **What a template gets from JavaScript stands out.** In `.ejs` and `.html` files, every name a
