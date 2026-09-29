@@ -149,3 +149,33 @@ test('logpointUrlRegex: a browser URL also matches with a cache-busting query st
   assert.ok(re.test('http://localhost:5000/js/a.js?v=3'));
   assert.ok(!re.test('http://localhost:5000/js/a.json'));
 });
+
+const C = require('../dist');
+
+test('logpointRunPosition: a logpoint on a const/let/var it reads runs after the whole declaration', () => {
+  const src = [
+    'function f(query) {',
+    '  const payload = query',
+    '    ? { query: query }',
+    '    : {',
+    '        topK: 5',
+    '      };',
+    "  console.log('test: ', payload);",
+    '  for (const row of rows) { use(row); }',
+    '  let a = 1, b = a;',
+    '}',
+  ].join('\n');
+  // The gutter (no column) and a column at the line's start both move past `};`.
+  assert.deepStrictEqual(C.logpointRunPosition(src, 1, undefined, ['payload']), { line: 5, character: 8 });
+  assert.deepStrictEqual(C.logpointRunPosition(src, 1, 2, ['payload.topK']), { line: 5, character: 8 });
+  // A message that doesn't read what the line declares, or a line with no declaration: unchanged.
+  assert.strictEqual(C.logpointRunPosition(src, 1, undefined, ['query']), null);
+  assert.strictEqual(C.logpointRunPosition(src, 1, undefined, ['other.payload']), null);
+  assert.strictEqual(C.logpointRunPosition(src, 6, undefined, ['payload']), null);
+  // Already after the declaration (log-here's column past `;`): unchanged.
+  assert.strictEqual(C.logpointRunPosition(src, 5, 8, ['payload']), null);
+  // A loop head has no "after" of its own.
+  assert.strictEqual(C.logpointRunPosition(src, 7, undefined, ['row']), null);
+  // Any of several declarators counts.
+  assert.deepStrictEqual(C.logpointRunPosition(src, 8, undefined, ['b']), { line: 8, character: 19 });
+});

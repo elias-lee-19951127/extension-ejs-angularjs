@@ -188,6 +188,43 @@ test('LSP + real node --inspect: a logpoint set at a column draws on its OWN lin
   for (const l of plainLogs()) assert.strictEqual(l.range.start.line, PLAIN_LINE);
 });
 
+test('LSP + real node --inspect: a gutter logpoint on a `const` line logs the value it declares, drawn on that line', async (t) => {
+  // The regression this pins: set from the gutter on `const payload = …`, the breakpoint ran before
+  // the declaration and read `payload` in its TDZ — `<Cannot access 'payload' from debugger>`.
+  const root = mkdtempSync(join(tmpdir(), 'ejsng-logpoints-const-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lines = [
+    'let n = 0;',
+    'setInterval(() => {',
+    '  n++;',
+    '  const payload = n < 0',
+    '    ? { none: true }',
+    '    : {',
+    '        n: n,',
+    '      };',
+    '  void payload;',
+    '}, 50);',
+    '',
+  ];
+  writeFileSync(join(root, 'app.js'), lines.join('\n'));
+  const CONST_LINE = 3;
+
+  const { port } = await startInspectedNode(t, root, 'app.js');
+  const { conn, runtimeLogs } = await startServer(t, root);
+  conn.sendNotification('ejsng/setLogpoints', {
+    logpoints: [{ uri: pathToFileURL(join(root, 'app.js')).href, line: CONST_LINE, logMessage: 'payload = {payload}' }],
+  });
+  const result = await conn.sendRequest('ejsng/connectRuntime', { host: '127.0.0.1', port });
+  assert.strictEqual(result.status, 'connected');
+
+  const logs = () => runtimeLogs.filter((l) => /^payload = /.test(l.value));
+  await waitUntil(() => logs().length >= 2);
+  for (const l of logs()) {
+    assert.match(l.value, /^payload = \{ ?n: \d+ ?\}$/, `a value, not an error: ${l.value}`);
+    assert.strictEqual(l.range.start.line, CONST_LINE, `drawn on the declaration, not on line ${l.range.start.line}`);
+  }
+});
+
 /**
  * A fake browser page that records every CDP command, answers each one, and reports one script
  * by URL — enough to see WHICH breakpoints the server sets and removes.

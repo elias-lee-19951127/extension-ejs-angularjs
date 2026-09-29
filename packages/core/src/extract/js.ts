@@ -855,6 +855,54 @@ function statementEndFor(ast: acorn.Program, node: acorn.Node): number | null {
   return end;
 }
 
+/**
+ * Where a logpoint set at `line`/`character` (0-based; no `character` = the line's first code) must
+ * actually run so it doesn't read a variable before its declaration has run: when the position
+ * sits in a `const`/`let`/`var` statement that starts on that line, and the message reads a name
+ * that statement declares, right after the statement — at the start of the line, V8 evaluates the
+ * message with the variable still in its temporal dead zone (TDZ) and logs
+ * `Cannot access 'x' from debugger`. `null` — run where it was set — otherwise, and for a loop head
+ * (`for (const x of xs)`), which has no "after" of its own.
+ *
+ * A gutter logpoint has no column and is placed on whatever line the user clicked, so this is
+ * where a logpoint set by hand on `const payload = …` gets the value the line produces.
+ */
+export function logpointRunPosition(
+  source: string,
+  line: number,
+  character: number | undefined,
+  expressions: string[],
+): { line: number; character: number } | null {
+  if (!expressions.length) return null;
+  const ast = parseJsTolerant(source);
+  if (!ast) return null;
+  let lineStart = 0;
+  for (let l = 0; l < line; l++) {
+    const nl = source.indexOf('\n', lineStart);
+    if (nl === -1) return null;
+    lineStart = nl + 1;
+  }
+  const lineEnd = source.indexOf('\n', lineStart) === -1 ? source.length : source.indexOf('\n', lineStart);
+  const at = character !== undefined ? lineStart + character : lineStart + (/^\s*/.exec(source.slice(lineStart, lineEnd))?.[0].length ?? 0);
+
+  let end: number | null = null;
+  walkLib.ancestor(ast, {
+    VariableDeclaration(decl, _state, ancestors) {
+      if (end !== null || decl.start < lineStart || decl.start > lineEnd || at >= decl.end) return;
+      const chain = ancestors as acorn.Node[];
+      const holder = chain[chain.length - 2];
+      if (holder && /^For/.test(holder.type)) return;
+      const names: string[] = [];
+      for (const d of decl.declarations) walkLib.full(d.id as acorn.Node, (n) => n.type === 'Identifier' && names.push((n as acorn.Identifier).name));
+      const reads = names.some((name) => expressions.some((e) => new RegExp(`(^|[^\\w$.])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(e)));
+      if (reads) end = decl.end;
+    },
+  });
+  if (end === null) return null;
+  const endLineStart = source.lastIndexOf('\n', end - 1) + 1;
+  return { line: countLines(source, end), character: end - endLineStart };
+}
+
 /** Is `node` the thing being called in `f()` / `a.b()`? */
 function isCallee(ast: acorn.Program, node: acorn.Node): boolean {
   let callee = false;

@@ -73,6 +73,7 @@ import {
   type FrameDiagnosticEntry,
   type RuntimeLogFrameDiagnostic,
   buildLogpointCondition,
+  logpointRunPosition,
   logpointUrlRegex,
   runtimePathCandidates,
   type TemplateUrlInfo,
@@ -1520,6 +1521,12 @@ interface Logpoint {
   line: number;
   /** 0-based column, for a logpoint placed inside a line (log-variable spec #5); absent = the line itself. */
   character?: number;
+  /**
+   * Where the breakpoint is actually set, when that is not `line`/`character`: right after a
+   * `const`/`let`/`var` the message reads, so it isn't read before its declaration runs
+   * (`logpointRunPosition`). The log is still drawn at `line`/`character`.
+   */
+  runAt?: { line: number; character: number };
   logMessage: string;
   condition?: string;
   /** The file, workspace-relative — `null` outside the workspace, where no index can say what the expressions read. */
@@ -1560,8 +1567,9 @@ function setLogpointBreakpoint(info: RuntimeLogConnectionInfo, lp: Logpoint, tar
   // `locations: []` is not a failure: V8 compiles functions lazily and binds when they run.
   const params = {
     ...target,
-    lineNumber: lp.line,
-    ...(lp.character !== undefined ? { columnNumber: lp.character } : {}),
+    ...(lp.runAt
+      ? { lineNumber: lp.runAt.line, columnNumber: lp.runAt.character }
+      : { lineNumber: lp.line, ...(lp.character !== undefined ? { columnNumber: lp.character } : {}) }),
     condition: buildLogpointCondition(lp),
   };
   void info.request('Debugger.setBreakpointByUrl', params).then((result) => {
@@ -1687,6 +1695,19 @@ function logpointTargets(relPath: string, line: number, character: number | unde
 }
 
 /**
+ * `logpointRunPosition` for a logpoint in a `.js` file: the text the editor has (the lines the
+ * logpoint's position counts), else the index's copy.
+ */
+function logpointRunAt(uri: string, relPath: string | null, line: number, character: number | undefined, logMessage: string) {
+  const path = relPath ?? URI.parse(uri).fsPath;
+  if (!path.endsWith('.js')) return null;
+  const source = documents.get(uri)?.getText() ?? (relPath ? workspace?.source(relPath) : null);
+  if (source == null) return null;
+  const exprs = parseLogMessage(logMessage).flatMap((p) => (p.kind === 'expr' ? [p.expr] : []));
+  return logpointRunPosition(source, line, character, exprs);
+}
+
+/**
  * `ejsng/setLogpoints` — the client's whole current list of logpoints (never a diff), re-applied to
  * every open connection. A connection still connecting picks the list up when it opens.
  */
@@ -1699,11 +1720,13 @@ connection.onNotification('ejsng/setLogpoints', (params: { logpoints?: LogpointP
       const relPath = rel(lp.uri);
       const character = Number.isInteger(lp.character) && lp.character! > 0 ? lp.character : undefined;
       const targets = relPath ? logpointTargets(relPath, lp.line, character, lp.logMessage) : undefined;
+      const runAt = logpointRunAt(lp.uri, relPath, lp.line, character, lp.logMessage);
       return {
         id: nextLogpointId++,
         hostPaths: real === fsPath ? [fsPath] : [fsPath, real],
         line: lp.line,
         ...(character !== undefined ? { character } : {}),
+        ...(runAt ? { runAt } : {}),
         logMessage: lp.logMessage,
         ...(typeof lp.condition === 'string' && lp.condition.trim() ? { condition: lp.condition } : {}),
         relPath,

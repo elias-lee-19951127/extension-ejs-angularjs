@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.2
+
+**A logpoint on a `const`/`let`/`var` line logs its value, however it was set.** 0.8.1 only fixed
+"Log here"; a logpoint added from the gutter on `const payload = …` still ran before the
+declaration and logged `<… Cannot access 'payload' from debugger>`. When a logpoint sits on a
+declaration and its message reads a variable declared there, it now runs right after the whole
+declaration. The value is still shown on the line you put it on.
+
 ## 0.8.1
 
 **"Log here" on a `const`/`let`/`var` logs its value.** The logpoint was placed at the start of the
