@@ -12,6 +12,7 @@ import {
   TextDocuments,
   type CompletionItem,
   CompletionItemKind,
+  InsertTextFormat,
   type Diagnostic,
   type FileSystemWatcher,
   type InitializeResult,
@@ -77,6 +78,7 @@ import {
   logpointUrlRegex,
   runtimePathCandidates,
   type TemplateUrlInfo,
+  type CompletionEntry,
 } from '@ejsng/core';
 import {
   connectRuntimeLog,
@@ -320,7 +322,7 @@ connection.onInitialize((params): InitializeResult => {
       definitionProvider: true,
       referencesProvider: true,
       hoverProvider: true,
-      completionProvider: { triggerCharacters: ['.', '{', ' '], resolveProvider: false },
+      completionProvider: { triggerCharacters: ['.', '{', ' ', '<', '|'], resolveProvider: false },
       documentSymbolProvider: true,
       workspaceSymbolProvider: true,
       renameProvider: prepareSupport ? { prepareProvider: true } : true,
@@ -663,10 +665,25 @@ connection.onCompletion((params): CompletionItem[] => {
 
   return workspace.completionAt(r, offsetOf(doc, params.position)).map((c) => ({
     label: c.name,
-    kind: c.kind === 'variable' ? CompletionItemKind.Variable : CompletionItemKind.Property,
+    kind: COMPLETION_KINDS[c.kind],
     detail: c.detail,
+    ...(c.snippet ? { insertText: c.snippet, insertTextFormat: InsertTextFormat.Snippet } : {}),
+    ...(c.sortText ? { sortText: `${c.sortText}_${c.name}` } : {}),
   }));
 });
+
+/** How each kind of suggestion is drawn in the editor's list (template-completion spec #11). */
+const COMPLETION_KINDS: Record<CompletionEntry['kind'], CompletionItemKind> = {
+  variable: CompletionItemKind.Variable,
+  property: CompletionItemKind.Property,
+  method: CompletionItemKind.Method,
+  alias: CompletionItemKind.Variable,
+  filter: CompletionItemKind.Function,
+  component: CompletionItemKind.Class,
+  directive: CompletionItemKind.Interface,
+  binding: CompletionItemKind.Field,
+  service: CompletionItemKind.Module,
+};
 
 /**
  * A refused rename returns a ResponseError with a reason, NOT null: with null, the IDE only shows

@@ -28,7 +28,7 @@ Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **Int
 | Trục EJS | `<%= denyMessage %>` → locals của `res.render` |
 | Dead code | controller / directive / filter / property không ai dùng |
 | Rename | `$scope.busy` → đổi đồng bộ mọi lượt đọc/ghi trong JS và mọi template; từ chối kèm lý do khi xung đột |
-| Completion theo shape | `busy.` → `search`, `ingest`…; `section.` → khoá của phần tử trong `sections` |
+| Completion hiểu AngularJS | `busy.` → `search`, `ingest`…; `section.` → khoá của phần tử trong `sections`; kế thừa scope từ controller cha; `vm.`/`$ctrl.` (cả binding của component); sau `\|` chỉ gợi ý filter; `<user-` → component/directive, trong thẻ → binding và directive dạng attribute; trong `.js`: `$scope.`, `vm.`, `this.` và service được inject (`UserService.` → các key factory trả về) |
 | File đổi ngoài editor | `git pull` / checkout / tool khác → index tự cập nhật (VSCode và IntelliJ), không cần đánh index lại |
 | Kiểu đã thấy | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + các chỗ gán; `vm.user` có lúc `= null` → chú thích nhạt `may be empty` |
 | Tô màu phần nối với JS | Trong `.ejs`/`.html`, tên nào có định nghĩa trong file `.js` được tô màu riêng và **in đậm**: biến scope và thuộc tính của nó (tím), `ng-controller`/directive/component/filter (xanh ngọc). Biến chỉ template tự khai báo (`ng-repeat`) giữ nguyên |

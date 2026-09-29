@@ -7,7 +7,7 @@ import { consoleCallAt, extractJs, logHereAt, logTargetsIn, scopeTargetAt, type 
 import { extractTemplate } from '../extract/template';
 import { hashContent, IndexStore, type SymbolRow } from '../index/store';
 import { INDEX_FILENAME, PARSER_VERSION } from '../index/schema';
-import { aliasOf, controllerOf, findLocal, type RefInput } from './rows';
+import { aliasOf, controllerOf, type RefInput } from './rows';
 import { nearestRows, preferNearest } from './rename';
 import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
@@ -27,7 +27,8 @@ import {
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { resolveDefinition } from './definition';
-import { type FactSource, shapeAtPath, shapeOf } from './shape';
+import { jsCompletions, templateCompletions, type CompletionEntry } from './completion';
+import { type FactSource } from './shape';
 import {
   prepareRenameAt as doPrepareRenameAt,
   renameAt as doRenameAt,
@@ -97,11 +98,7 @@ export interface RenameResult {
   reason?: string;
 }
 
-export interface CompletionEntry {
-  name: string;
-  kind: 'variable' | 'property';
-  detail: string;
-}
+export type { CompletionEntry } from './completion';
 
 export type PrepareRenameResult = { span: Span; placeholder: string } | { reason: string };
 
@@ -837,115 +834,19 @@ export class Workspace implements FactSource, RenameSource {
     return null;
   }
 
-  /** Suggestions at a position in a template. */
+  /** Suggestions at a position: in a template, or after a member access in a `.js` file. */
   completionAt(relPath: string, offset: number): CompletionEntry[] {
-    const facts = this.facts(relPath);
-    const source = this.source(relPath);
-    if (!facts || facts.kind !== 'template' || source === null) return [];
-
-    // An expression still being typed (`{{ busy. }}`) can't be parsed, so the extractor
-    // drops it entirely. Insert a dummy identifier right at the cursor and re-extract:
-    // the expression becomes valid, and the node containing the dummy tells us which
-    // property chain the user is typing after.
-    const patched = source.slice(0, offset) + COMPLETION_DUMMY + source.slice(offset);
-    const binding = this.templateLinks?.bindings.get(relPath);
-    const hit = expressionAt(this.bindTemplate(relPath, extractTemplate(patched, this.config)), offset);
-    if (hit) {
-      if (hit.node.type === 'Literal') return []; // typing inside a string
-      const { root, path } = unwind(hit.node);
-      if (root && path.at(-1)?.includes(COMPLETION_DUMMY)) {
-        return this.memberCompletions(relPath, root.name, path.slice(0, -1), hit.expr.scopeChain);
-      }
-      return this.rootCompletions(relPath, hit.expr.scopeChain);
-    }
-
-    // Still unparseable after inserting the dummy (`{{ a | }}`): use the scope chain of
-    // the original expression.
-    for (const expr of facts.expressions) {
-      if (offset >= expr.span.start && offset <= expr.span.end + 1) {
-        return this.rootCompletions(relPath, expr.scopeChain);
-      }
-    }
-
-    // No expression yet (just typed '{{', not closed): use the nearest controller — an
-    // ng-controller around the cursor, else the one a templateUrl binds to this template.
-    const enclosing = facts.controllers
-      .filter((c) => inSpan(c.elementSpan, offset))
-      .sort((a, b) => b.elementSpan.start - a.elementSpan.start)[0];
-    if (!enclosing) {
-      if (!binding) return [];
-      return this.rootCompletions(relPath, [
-        {
-          kind: 'controller',
-          controllerName: binding.controller,
-          ...(binding.alias ? { alias: binding.alias } : {}),
-          locals: [],
-          elementSpan: { start: 0, end: source.length },
-        },
-      ]);
-    }
-    return this.rootCompletions(relPath, [
-      {
-        kind: 'controller',
-        controllerName: enclosing.name,
-        alias: enclosing.alias,
-        locals: [],
-        elementSpan: enclosing.elementSpan,
-      },
-    ]);
+    return JS_EXT.test(relPath) ? jsCompletions(this, relPath, offset) : templateCompletions(this, relPath, offset);
   }
 
-  /** Suggestions at a root-identifier position: local variables of the template + properties on scope. */
-  private rootCompletions(from: string, chain: ScopeFrame[]): CompletionEntry[] {
-    const out: CompletionEntry[] = [];
-    for (const frame of chain) {
-      for (const local of frame.locals) {
-        out.push({ name: local.name, kind: 'variable', detail: `${frame.kind} variable of the template` });
-      }
-    }
-    const container = controllerOf(chain);
-    if (container) {
-      for (const row of this.membersOf(container, from)) {
-        out.push({ name: row.name, kind: 'property', detail: `on the $scope of ${container}` });
-      }
-    }
-    const seen = new Set<string>();
-    return out.filter((c) => (seen.has(c.name) ? false : (seen.add(c.name), true)));
+  /** CompletionSource.symbolsOfKind — every symbol of one kind (`filter`, `component`…). */
+  symbolsOfKind(kind: string): SymbolRow[] {
+    return this.store.findSymbolsByKind(kind);
   }
 
-  /**
-   * Suggestions after a dot, following the shape inferred from an object literal:
-   *   `busy.`    -> keys of $scope.busy
-   *   `section.` -> keys of an ELEMENT in $scope.sections (an ng-repeat variable)
-   */
-  private memberCompletions(
-    from: string,
-    rootName: string,
-    path: string[],
-    chain: ScopeFrame[],
-  ): CompletionEntry[] {
-    const container = controllerOf(chain);
-    if (!container) return [];
-
-    const local = findLocal(rootName, chain);
-    if (local && !local.collection) return [];
-    const member = local?.collection?.root ?? rootName;
-    const owner = [rootName, ...path].join('.');
-
-    const out = new Map<string, CompletionEntry>();
-    for (const row of nearestRows(from, this.store.findSymbols(member, container))) {
-      let shape = shapeOf(this, row) ?? undefined;
-      if (local?.collection) {
-        shape = shapeAtPath(shape, local.collection.path);
-        shape = shape?.kind === 'array' ? shape.element : undefined;
-      }
-      shape = shapeAtPath(shape, path);
-      if (shape?.kind !== 'object' || !shape.props) continue;
-      for (const [name, prop] of Object.entries(shape.props)) {
-        out.set(name, { name, kind: 'property', detail: `key of ${owner} (${prop.kind})` });
-      }
-    }
-    return [...out.values()];
+  /** CompletionSource.templateBinding — the controller a `templateUrl` binds to this template. */
+  templateBinding(relPath: string): { controller: string; alias: string | null } | null {
+    return this.templateLinks?.bindings.get(relPath) ?? null;
   }
 
   /** Properties on the $scope of a controller. `from`: keep only the copy nearest that file (Appendix K). */
@@ -956,9 +857,6 @@ export class Workspace implements FactSource, RenameSource {
     return from === undefined ? rows : nearestRows(from, rows);
   }
 }
-
-/** Placeholder identifier inserted at the cursor so an in-progress expression can be parsed (see completionAt). */
-const COMPLETION_DUMMY = '__ejsngCursor__';
 
 /** Find the expression containing an offset, and the smallest node within it. */
 export function expressionAt(

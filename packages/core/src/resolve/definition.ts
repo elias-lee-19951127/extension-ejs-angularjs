@@ -3,7 +3,8 @@ import type { SymbolRow } from '../index/store';
 import type { DefinitionResult } from './workspace';
 import { ANGULAR_DECL_KINDS, expressionAt, inSpan, wordAt } from './workspace';
 import { type FactSource, walkShape } from './shape';
-import { aliasOf, controllerOf, findLocal } from './rows';
+import { controllerOf, findLocal } from './rows';
+import { controllerFrames, frameHolding } from './completion';
 import { JS_GLOBALS, resolveBinding } from '../extract/bindings';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { tryParseExpression } from '../ng/parser';
@@ -88,8 +89,12 @@ function templateDefinition(
 
   // Is the cursor on the root identifier itself, or on a property further along?
   const onRoot = inSpan(root.span, offset);
-  const alias = aliasOf(expr.scopeChain);
-  const container = controllerOf(expr.scopeChain);
+  // Every enclosing controller, nearest first: a scope inherits its parents' (template-completion
+  // spec #1, #5), and an alias names the one frame that declares it, not just the nearest one.
+  const frames = controllerFrames(expr.scopeChain);
+  const aliasFrame = frames.find((f) => f.alias === root.name);
+  const alias = aliasFrame?.alias;
+  const container = aliasFrame?.controllerName ?? frameHolding(deps, root.name, frames)?.controllerName ?? controllerOf(expr.scopeChain);
 
   // 1. A local variable of the template (ng-repeat / ng-init)
   const local = findLocal(root.name, expr.scopeChain);
@@ -115,10 +120,11 @@ function templateDefinition(
     //     shape, then look up the key. Without this branch, `{{ section.icon }}`
     //     wouldn't jump anywhere — yet that's one of the most common expression shapes
     //     in an Angular template.
-    if (local.collection && container) {
+    const owner = local.collection ? (frameHolding(deps, local.collection.root, frames)?.controllerName ?? container) : null;
+    if (local.collection && owner) {
       const depth = depthAt(node, offset, false);
       const rest = path.slice(0, Math.max(depth - 1, 1));
-      const members = deps.findSymbols(local.collection.root, container);
+      const members = deps.findSymbols(local.collection.root, owner);
 
       if (members.length) {
         // `sections` is an array -> walkShape automatically steps into the element shape.

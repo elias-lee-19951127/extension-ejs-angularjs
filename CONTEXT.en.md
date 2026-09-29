@@ -20,7 +20,7 @@ a name is declared in more than one file (see `preferNearest` on `Workspace`, wh
 
 The logic for walking a property path over a `ValueShape` inferred from Layer 2 (e.g.
 `$scope.sections = [...]` and then asking about `section.icon` in a template) — shared by both
-**Definition Resolution** and completion (`Workspace.memberCompletions`).
+**Definition Resolution** and completion (`resolve/completion.ts`, see `.scratch/template-completion/spec.md`).
 
 - File: `packages/core/src/resolve/shape.ts`
 - Main functions: `walkShape`, `shapeOf`, `shapeAtPath`

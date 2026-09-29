@@ -29,7 +29,7 @@ One language server (Node/TypeScript), two thin clients: **VSCode** and **Intell
 | EJS axis | `<%= denyMessage %>` → locals from `res.render` |
 | Dead code | controller / directive / filter / property that nobody uses |
 | Rename | `$scope.busy` → renames every read/write in sync across JS and every template; refuses with a reason on conflict |
-| Shape-based completion | `busy.` → `search`, `ingest`…; `section.` → the keys of an element in `sections` |
+| AngularJS-aware completion | `busy.` → `search`, `ingest`…; `section.` → the keys of an element in `sections`; members inherited from a parent controller; `vm.`/`$ctrl.` (a component's bindings too); only filters after `\|`; `<user-` → components/directives, inside a tag → bindings and attribute directives; in `.js`: `$scope.`, `vm.`, `this.` and an injected service (`UserService.` → the keys the factory returns) |
 | Files changed outside the editor | `git pull` / checkout / another tool → index auto-updates (VSCode and IntelliJ), no need to re-index manually |
 | Observed type | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + where it's assigned; `vm.user` sometimes `= null` → a faint `may be empty` hint |
 | JS-backed names colored | In `.ejs`/`.html`, every name a `.js` file defines is drawn in its own color and **bold**: scope variables and their properties (purple), `ng-controller`s/directives/components/filters (teal). Names only the template declares (`ng-repeat`) are left as they are |

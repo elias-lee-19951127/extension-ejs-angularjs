@@ -15,7 +15,7 @@ to every template that reads it, rename across both, and dead-code detection.
 | Custom directive / isolate binding | `pick-file="onPick($file)"` → `.directive('pickFile', …)` |
 | Filter | `{{ x \| money }}` → `.filter('money', …)` |
 | Rename | `$scope.busy` → renames every read/write across JS and templates; refuses with a reason on conflict |
-| Shape-based completion | `busy.` → the keys actually assigned on that object |
+| AngularJS-aware completion | `busy.` → the keys actually assigned on that object; parent-controller scopes, `vm.`/`$ctrl.` with component bindings, filters after `\|`, component/directive tags and attributes; in `.js`, `$scope.`/`vm.`/`this.` and injected services (`UserService.`) |
 | Dead code | controller / directive / filter / property nobody uses |
 | Live sync | files changed outside the editor (`git pull`, checkout, another tool) re-index automatically |
 | Inline runtime log | `console.log`/`warn`/`error` from a running Node process or browser tab, shown inline next to the line that logged it — color-coded by severity; drawn like IntelliJ's inline debugger values (muted italic after the code); a line hit many times shows its count (`42 (×3)`); hover the line to see which container or tab it came from, when, the full value, and the last few values before it |

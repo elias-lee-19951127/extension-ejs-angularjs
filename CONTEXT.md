@@ -19,7 +19,7 @@ khai bao trung o nhieu file (xem `preferNearest` trong `Workspace`, van con o
 
 Logic di theo duong dan property tren mot `ValueShape` da suy luan tu Layer 2 (vi du:
 `$scope.sections = [...]` roi hoi `section.icon` trong template) — dung chung boi ca
-**Definition Resolution** lan completion (`Workspace.memberCompletions`).
+**Definition Resolution** lan completion (`resolve/completion.ts`, xem `.scratch/template-completion/spec.md`).
 
 - File: `packages/core/src/resolve/shape.ts`
 - Ham chinh: `walkShape`, `shapeOf`, `shapeAtPath`

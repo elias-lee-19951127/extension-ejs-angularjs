@@ -1,0 +1,8 @@
+<div ng-controller="OuterCtrl">
+  <div ng-controller="InnerCtrl">
+    <span>{{ user.name }}</span>
+  </div>
+  <form ng-controller="FormCtrl as vm">
+    <span>{{ vm.model.email }}</span>
+  </form>
+</div>

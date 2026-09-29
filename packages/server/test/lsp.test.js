@@ -176,6 +176,37 @@ test('LSP: completion after `busy.` returns shape-based keys, kind Property', as
   assert.ok(items.every((i) => i.kind === 10), 'CompletionItemKind.Property');
 });
 
+test('LSP: completion in a .js file after an injected service, and a call snippet for a method in ng-click', async (t) => {
+  // .scratch/template-completion spec #10, #11: `Api.` in the controller lists what the factory
+  // returns; in a template a scope function is inserted as a call.
+  const { conn, open } = await startServer(t);
+  const js = open('js/app.js', 'javascript');
+  const cut = js.text.indexOf('s.total = 0;') + 's.total = 0;'.length;
+  const text = js.text.slice(0, cut) + '\n  Api.' + js.text.slice(cut);
+  conn.sendNotification('textDocument/didChange', { textDocument: { uri: js.uri, version: 2 }, contentChanges: [{ text }] });
+  const res = await conn.sendRequest('textDocument/completion', {
+    textDocument: { uri: js.uri },
+    position: positionOf(text, '\n  Api.', '\n  Api.'.length),
+    context: { triggerKind: 2, triggerCharacter: '.' },
+  });
+  const items = Array.isArray(res) ? res : res.items;
+  assert.deepStrictEqual(items.map((i) => i.label), ['list']);
+  assert.strictEqual(items[0].kind, 2, 'CompletionItemKind.Method');
+
+  const tpl = open('views/page.ejs', 'html');
+  const at = tpl.text.indexOf('<span>') + '<span>'.length;
+  const html = tpl.text.slice(0, at) + '<a data-ng-click=""></a>' + tpl.text.slice(at);
+  conn.sendNotification('textDocument/didChange', { textDocument: { uri: tpl.uri, version: 2 }, contentChanges: [{ text: html }] });
+  const tres = await conn.sendRequest('textDocument/completion', {
+    textDocument: { uri: tpl.uri },
+    position: positionOf(html, '<a data-ng-click=""', '<a data-ng-click="'.length),
+  });
+  const pick = (Array.isArray(tres) ? tres : tres.items).find((i) => i.label === 'pick');
+  assert.ok(pick, 'pick is offered');
+  assert.strictEqual(pick.insertText, 'pick($1)');
+  assert.strictEqual(pick.insertTextFormat, 2, 'InsertTextFormat.Snippet');
+});
+
 test('LSP: a client that doesn\'t declare prepareSupport only gets renameProvider: true', async (t) => {
   // LSP 3.17: RenameOptions is only sent when the client declares textDocument.rename.prepareSupport.
   const { init } = await startServer(t, {});

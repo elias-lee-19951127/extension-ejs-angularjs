@@ -1571,7 +1571,7 @@ From then on, every replacement command uses the function form: `s.replace(from,
   object that happens to share the same key name.
 - **Strings inside `$watch('busy.search', …)`:** not renamed. `smart-city` only uses the function
   form.
-- **Completion inside `.js` files** (`$scope.busy.`): not implemented.
+- ~~**Completion inside `.js` files** (`$scope.busy.`): not implemented.~~ — **done, see Appendix N.**
 - **Completion still merges every copy** of a same-named controller. Go-to-definition already
   uses the nearest-group approach like rename does — see Appendix K.
 - **VSCode with `.js` files:** the built-in TypeScript server also offers rename, and VSCode may
@@ -2097,3 +2097,36 @@ from `workspace.ts` and imported back. A CommonJS-style circular import, but saf
 sides only call each other inside function bodies, never at module top level; verified with a
 real build plus real tests (including the stdio LSP tests) to confirm nothing breaks at runtime,
 not just at compile time.
+
+---
+
+# APPENDIX N — AngularJS-aware completion: scope inheritance, aliases, filters, tags, and the JS side (2026-09-29)
+
+Spec: `.scratch/template-completion/spec.md`. Code: `packages/core/src/resolve/completion.ts`
+(split out of `workspace.ts` like definition in Appendix M), plus `jsMemberContextAt` /
+`serviceShapeIn` in `extract/js.ts`.
+
+- **Scope inheritance:** the scope chain is read inside-out across every controller frame
+  (`controllerFrames`), stopping at an isolate scope; `frameHolding` picks the nearest frame that
+  has the member. Shared with **go-to-definition**, where `{{ user.name }}` in a child controller
+  used to report "not found".
+- **An alias names its own frame:** `vm.`/`$ctrl.`/`outer.` match the frame that declares that
+  alias. Under controller-as, the root only offers the alias plus members assigned via `$scope`
+  (`this.` members are not on the scope). `alias.` on a component/directive also offers its bindings.
+- **By position:** only filters after `|`; a tag name offers components/directives (`restrict`
+  containing `E`, `EA` by default); an attribute name offers the tag's bindings plus attribute
+  directives, inserting `name="…"`. Outside Angular expressions (plain text, `class="…"`, EJS code)
+  scope variables are no longer offered.
+- **The JS side:** the buffer is patched with a placeholder identifier at the cursor so `$scope.`
+  parses; the file being typed is read from the **buffer**, not the index (`withBuffer`) — the index
+  holds the file as last saved, with drifted spans and without members assigned after the cursor.
+  Services: `return {…}`, `var svc = {…}; svc.x = …; return svc`, a function declared in the body
+  and returned by name, a `.service`'s `this.x`, a `.value`/`.constant`'s value. Computed at query
+  time, so no `PARSER_VERSION` bump.
+- **A bug the LSP test exposed:** a JS file open with unsaved edits has index rows (old spans) that
+  no longer match its buffer facts, so shapes were lost (`pick` no longer a function). Member and
+  declaration lookups now fall back to matching by name and owner when spans drift.
+- **Not done:** `$parent.`/`$root.`, provider `$get`, references/rename following scope inheritance
+  (`rows.ts` still attaches a ref to the nearest controller).
+- Tests: `packages/core/test/completion-angular.test.js` (17), one stdio LSP test, two e2e tests in a
+  real VS Code (`test-e2e/suite/completion.e2e.js`).

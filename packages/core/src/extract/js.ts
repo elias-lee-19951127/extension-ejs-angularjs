@@ -1575,3 +1575,160 @@ function tryExtractRender(node: acorn.CallExpression, facts: JsFacts): void {
 }
 
 export type { Span };
+
+/** Placeholder identifier put at the cursor so a member access still being typed (`$scope.`) parses. */
+const MEMBER_CURSOR = '__ejsngCursor__';
+
+/** What a `.` in a JS file is a member access on, for completion (template-completion spec #9, #10). */
+export type JsMemberContext =
+  /** `$scope.form.` / `this.` / `vm.` in a controller, directive or component: `path` is `['form']`. */
+  | { kind: 'scope'; owner: string; via: '$scope' | 'this'; path: string[] }
+  /** `UserService.cache.` where `UserService` is injected: `name` is the service as registered. */
+  | { kind: 'service'; name: string; path: string[] };
+
+/**
+ * The member access being typed at `offset` — right after a `.`, or inside the name after one —
+ * and what it is on. `null` for anything else, including `this.` inside a nested non-arrow
+ * function, whose `this` is not the controller.
+ */
+export function jsMemberContextAt(
+  source: string,
+  offset: number,
+  config: Config,
+): (JsMemberContext & { buffer: { source: string; facts: JsFacts } }) | null {
+  if (!/\.\s*[\w$]*$/.test(source.slice(Math.max(0, offset - 200), offset))) return null;
+  const patched = source.slice(0, offset) + MEMBER_CURSOR + source.slice(offset);
+  const ast = parseJsTolerant(patched);
+  if (!ast) return null;
+
+  let member: acorn.MemberExpression | null = null;
+  walkLib.simple(ast, {
+    MemberExpression(node) {
+      const p = node.property;
+      if (!node.computed && p.type === 'Identifier' && p.name.includes(MEMBER_CURSOR) && p.start <= offset && offset <= p.end) member = node;
+    },
+  });
+  if (!member) return null;
+  const facts = extractJs(patched, config);
+  // The buffer as typed, the member access parsed: what completion reads this file's own members from.
+  const buffer = { source: patched, facts };
+
+  let best: { decl: NgDeclaration; fn: FnNode; scopeParam: string | null } | null = null;
+  for (const decl of facts.declarations) {
+    for (const { fn, scopeParam } of scopeFunctionsFor(ast, decl)) {
+      if (offset < fn.body.start || offset >= fn.body.end) continue;
+      if (!best || fn.start >= best.fn.start) best = { decl, fn, scopeParam };
+    }
+  }
+  if (!best) return null;
+
+  const path: string[] = [];
+  let cur = (member as acorn.MemberExpression).object as acorn.Node;
+  while (cur.type === 'MemberExpression') {
+    const m = cur as acorn.MemberExpression;
+    if (m.computed || m.property.type !== 'Identifier') return null;
+    path.unshift(m.property.name);
+    cur = m.object;
+  }
+
+  const { decl, fn, scopeParam } = best;
+  if (cur.type === 'ThisExpression') {
+    let ownThis = true;
+    walkLib.simple(fn.body as acorn.Node, {
+      Function(node) {
+        if (node.type !== 'ArrowFunctionExpression' && node.body.start <= offset && offset < node.body.end) ownThis = false;
+      },
+    });
+    return ownThis ? { kind: 'scope', owner: decl.name, via: 'this', path, buffer } : null;
+  }
+  if (thisAliasTest(fn, facts.bindings)(cur)) return { kind: 'scope', owner: decl.name, via: 'this', path, buffer };
+  if (cur.type !== 'Identifier') return null;
+  const name = (cur as acorn.Identifier).name;
+  if (scopeParam && name === scopeParam) return { kind: 'scope', owner: decl.name, via: '$scope', path, buffer };
+
+  // An injected service: a parameter of the declaration's own function, named by the DI array at
+  // its position (`['UserService', function (us) {…}]`) or, with implicit DI, by itself.
+  const binding = resolveBinding(facts.bindings, name, cur.start);
+  if (binding?.kind !== 'param') return null;
+  const main = findFunctionFor(ast, decl);
+  const idx = main ? main.params.findIndex((p) => p.start === binding.span.start) : -1;
+  if (idx !== -1) return { kind: 'service', name: decl.deps[idx]?.name ?? name, path, buffer };
+  const own = scopeFunctionsFor(ast, decl).some(({ fn: f }) => f.params.some((p) => p.start === binding.span.start));
+  return own ? { kind: 'service', name, path, buffer } : null;
+}
+
+/**
+ * The shape of what a service-like declaration hands out when injected: the object a `.factory`
+ * returns (`return {…}`, or `var svc = {…}; svc.x = …; return svc`), what a `.service` puts on
+ * `this`, the value of a `.value`/`.constant`. `null` when it can't be read statically.
+ */
+export function serviceShapeIn(source: string, decl: NgDeclaration): ValueShape | null {
+  const ast = parseJsTolerant(source);
+  if (!ast) return null;
+  if (decl.kind === 'value' || decl.kind === 'constant') {
+    let value: acorn.Node | null = null;
+    walkLib.simple(ast, {
+      CallExpression(node) {
+        if (node.start === decl.bodySpan.start && node.end === decl.bodySpan.end) value = (node.arguments[1] as acorn.Node) ?? null;
+      },
+    });
+    return value ? inferShape(value) : null;
+  }
+  const fn = findFunctionFor(ast, decl);
+  if (!fn || fn.body.type !== 'BlockStatement') return fn ? inferShape(fn.body as acorn.Node) : null;
+  const body = fn.body;
+
+  /** `function fetch() {}` declared in the body — what `return { fetch: fetch }` hands out. */
+  const localFn = (id: acorn.Node): ValueShape | null => {
+    if (id.type !== 'Identifier') return null;
+    for (const stmt of body.body) {
+      if (stmt.type === 'FunctionDeclaration' && stmt.id?.name === (id as acorn.Identifier).name) return inferShape({ ...stmt, type: 'FunctionExpression' } as unknown as acorn.Node);
+    }
+    return null;
+  };
+  const props: Record<string, ValueShape> = {};
+  const fromObject = (obj: acorn.ObjectExpression) => {
+    const shape = inferShape(obj);
+    Object.assign(props, shape.props ?? {});
+    for (const p of obj.properties) {
+      if (p.type !== 'Property') continue;
+      const key = propName(p);
+      const fnShape = key ? localFn(p.value as acorn.Node) : null;
+      if (key && fnShape && props[key]?.kind === 'unknown') props[key] = fnShape;
+    }
+  };
+  /** Assignments `<obj>.x = …` in the body itself, not in a nested function. */
+  const assignedOnto = (isTarget: (node: acorn.Node) => boolean) => {
+    walkLib.ancestor(body as acorn.Node, {
+      AssignmentExpression(node, _state, ancestors) {
+        const left = node.left;
+        if (left.type !== 'MemberExpression' || left.computed || left.property.type !== 'Identifier') return;
+        if ((ancestors as acorn.Node[]).some((a) => a !== node && a !== (body as acorn.Node) && /Function/.test(a.type) && a.type !== 'ArrowFunctionExpression')) return;
+        if (!isTarget(left.object as acorn.Node)) return;
+        props[left.property.name] ??= inferShape(node.right);
+      },
+    });
+  };
+
+  if (decl.kind === 'service') {
+    const isThisAlias = thisAliasTest(fn, extractBindings(ast));
+    assignedOnto((n) => n.type === 'ThisExpression' || isThisAlias(n));
+  } else {
+    for (const stmt of body.body) {
+      if (stmt.type !== 'ReturnStatement' || !stmt.argument) continue;
+      const arg = stmt.argument as acorn.Node;
+      if (arg.type === 'ObjectExpression') fromObject(arg as acorn.ObjectExpression);
+      else if (arg.type === 'Identifier') {
+        const name = (arg as acorn.Identifier).name;
+        for (const other of body.body) {
+          if (other.type !== 'VariableDeclaration') continue;
+          for (const d of other.declarations) {
+            if (d.id.type === 'Identifier' && d.id.name === name && d.init?.type === 'ObjectExpression') fromObject(d.init);
+          }
+        }
+        assignedOnto((n) => n.type === 'Identifier' && (n as acorn.Identifier).name === name);
+      }
+    }
+  }
+  return Object.keys(props).length ? { kind: 'object', props } : null;
+}

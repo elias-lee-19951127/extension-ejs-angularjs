@@ -1464,7 +1464,7 @@ Từ đó mọi lệnh thay thế đều dùng hàm: `s.replace(from, () => to)`
 - **Đổi tên khoá lồng nhau** (`busy.search`): chưa làm — phải đổi khoá trong object literal và mọi
   đường dẫn tới nó, rất dễ nhầm với object khác có khoá cùng tên.
 - **Chuỗi trong `$watch('busy.search', …)`:** không được đổi. `smart-city` chỉ dùng dạng hàm.
-- **Completion trong file `.js`** (`$scope.busy.`): chưa làm.
+- ~~**Completion trong file `.js`** (`$scope.busy.`): chưa làm.~~ — **đã làm, xem phụ lục N.**
 - **Completion vẫn gộp mọi bản** của controller trùng tên. Go-to-definition đã dùng nhóm gần nhất
   như rename — xem phụ lục K.
 - **VSCode với file `.js`:** TypeScript server có sẵn cũng cung cấp rename, và VSCode có thể hỏi
@@ -1940,3 +1940,33 @@ mới và phần ở lại `workspace.ts` (`inSpan`, `wordAt`, `ANGULAR_DECL_KIN
 `TEMPLATE_EXT`, `JS_EXT`) — export từ `workspace.ts`, import ngược lại. Circular import kiểu
 CommonJS nhưng an toàn vì hai bên chỉ gọi nhau trong thân hàm, không ở top-level; đã build + chạy
 test thật (kể cả test LSP qua stdio) để xác nhận không vỡ ở runtime, không chỉ ở compile-time.
+
+---
+
+# PHỤ LỤC N — Completion hiểu AngularJS: kế thừa scope, alias, filter, tag, và phía JS (2026-09-29)
+
+Spec: `.scratch/template-completion/spec.md`. Code: `packages/core/src/resolve/completion.ts`
+(tách khỏi `workspace.ts` như definition ở phụ lục M), `jsMemberContextAt` / `serviceShapeIn` trong
+`extract/js.ts`.
+
+- **Kế thừa scope:** chuỗi scope được đọc từ trong ra ngoài qua mọi frame controller
+  (`controllerFrames`), dừng ở isolate; `frameHolding` chọn frame gần nhất có member đó. Dùng chung
+  cho **go-to-definition** — trước đây `{{ user.name }}` trong controller con báo "not found".
+- **Alias theo đúng frame:** `vm.`/`$ctrl.`/`outer.` khớp với frame khai báo alias đó. Dưới
+  controller-as, gốc chỉ gợi ý alias + member gán qua `$scope` (member `this.` không nằm trên scope).
+  `alias.` của component/directive gợi ý thêm binding.
+- **Theo vị trí:** sau `|` chỉ filter; tên tag → component/directive (`restrict` có `E`, mặc định
+  `EA`); tên attribute → binding của thẻ + directive dạng attribute, chèn `name="…"`. Ngoài biểu thức
+  Angular (văn bản, `class="…"`, code EJS) không còn gợi ý biến scope.
+- **Phía JS:** buffer được vá bằng một identifier giả tại con trỏ để parse được `$scope.`; members của
+  file đang gõ đọc từ **buffer** chứ không từ index (`withBuffer`) — index giữ bản đã lưu, span lệch
+  và thiếu member gán sau con trỏ. Service: `return {…}`, `var svc = {…}; svc.x = …; return svc`,
+  hàm khai báo trong thân rồi trả theo tên, `this.x` của `.service`, giá trị của `.value`/`.constant`.
+  Tính lúc truy vấn → không bump `PARSER_VERSION`.
+- **Lỗi lộ ra khi viết test LSP:** file JS đang mở có sửa chưa lưu → row trong index (span cũ) không
+  khớp facts của buffer → mất shape (`pick` không còn là hàm). Tra member/declaration giờ lùi về khớp
+  theo tên + owner khi span lệch.
+- **Chưa làm:** `$parent.`/`$root.`, provider `$get`, refs/rename theo kế thừa scope (`rows.ts` vẫn
+  gắn ref vào controller gần nhất).
+- Test: `packages/core/test/completion-angular.test.js` (17), một test LSP qua stdio, hai test e2e
+  trong VS Code thật (`test-e2e/suite/completion.e2e.js`).
