@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.8.2
+## 0.9.0
+
+**Completion that understands AngularJS**, in templates and in JavaScript:
+
+- **Parent scopes:** a nested `ng-controller` sees what its parents put on the scope. Suggestions
+  from the nearest scope come first, and inherited ones say where they come from. Ctrl+Click
+  follows the same chain: `{{ user.name }}` in a child controller no longer reports "not found".
+- **`vm.` and `$ctrl.`:** a controller-as alias lists the controller's members; in a component's
+  template `$ctrl.` also lists its bindings. At the root, only the alias is offered, not its members.
+- **By position:** after `|` only filters (yours and the built-in ones). On a tag name: components
+  and element directives (`<user-card>`). Inside a tag: that component's bindings and attribute
+  directives, inserted as `name=""`. Plain text, `class="…"` and EJS code no longer pop up scope
+  variables.
+- **In `.js` files:** after `$scope.`, `this.` or `vm.` in a controller, directive or component,
+  the members it assigns, including ones assigned further down. After an injected service
+  (`UserService.`, even renamed by the DI array): what the factory returns, what a `.service` puts
+  on `this`, the keys of a `.value`/`.constant`.
+- Functions show as methods and are inserted as calls in templates (`load()`).
 
 **A logpoint on a `const`/`let`/`var` line logs its value, however it was set.** 0.8.1 only fixed
 "Log here"; a logpoint added from the gutter on `const payload = …` still ran before the
