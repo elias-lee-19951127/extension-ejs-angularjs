@@ -7,7 +7,7 @@ import { consoleCallAt, extractJs, logHereAt, logTargetsIn, scopeTargetAt, type 
 import { extractTemplate } from '../extract/template';
 import { hashContent, IndexStore, type SymbolRow } from '../index/store';
 import { INDEX_FILENAME, PARSER_VERSION } from '../index/schema';
-import { aliasOf, controllerOf, type RefInput } from './rows';
+import { aliasOf, controllerOf, isLocal, type RefInput } from './rows';
 import { nearestRows, preferNearest } from './rename';
 import { collectReferenceOffsets } from '../extract/bindings';
 import { parseJsTolerant } from '../extract/js-common';
@@ -27,7 +27,8 @@ import {
 import { tryParseExpression } from '../ng/parser';
 import { nodeAt, unwind, type Expr } from '../ng/ast';
 import { resolveDefinition } from './definition';
-import { jsCompletions, templateCompletions, type CompletionEntry } from './completion';
+import { controllerFrames, frameHolding, jsCompletions, templateCompletions, type CompletionEntry } from './completion';
+import { SCOPE_BUILTINS } from '../ng/normalize';
 import { type FactSource } from './shape';
 import {
   prepareRenameAt as doPrepareRenameAt,
@@ -263,12 +264,15 @@ export class Workspace implements FactSource, RenameSource {
   link(): number {
     const all = this.store.allFacts();
     this.linker.loadDirectives(all);
+    // First: which controller each templateUrl hands its template to — the scope refs below need it.
+    this.templateLinks = linkTemplates(all, this.config);
 
     const entries: Array<{ path: string; refs: ReturnType<Linker['resolveCandidates']> }> = [];
     let total = 0;
     for (const { path, facts } of all) {
       if (facts.kind !== 'template') continue;
       const refs = this.linker.resolveCandidates(facts.attrCandidates);
+      refs.push(...this.scopeChainRefs(path, facts));
       // A custom element matching a known directive's name -> a real reference.
       for (const el of facts.customElements) {
         if (this.linker.resolveElement(el.tag)) {
@@ -281,8 +285,48 @@ export class Workspace implements FactSource, RenameSource {
       }
     }
     this.store.replaceLinkedRefs(entries);
-    this.templateLinks = linkTemplates(all, this.config);
     return total;
+  }
+
+  /**
+   * The member a template identifier refers to, following AngularJS's scope chain: an alias names
+   * its own controller (`main.user` -> MainCtrl's `user`, even inside a nested controller), a bare
+   * name belongs to the nearest controller whose scope holds it (`tasks` inside TaskListCtrl ->
+   * BoardCtrl's, when only BoardCtrl assigns it), else to the nearest controller.
+   */
+  private scopeMemberOf(chain: ScopeFrame[], root: { name: string; path: string[] }): { name: string; container: string } | null {
+    const frames = controllerFrames(chain);
+    if (!frames.length) return null;
+    const aliasFrame = frames.find((f) => f.alias === root.name);
+    if (aliasFrame) return root.path[0] ? { name: root.path[0], container: aliasFrame.controllerName } : null;
+    return { name: root.name, container: (frameHolding(this, root.name, frames) ?? frames[0]!).controllerName };
+  }
+
+  /**
+   * Scope refs a template's own facts can't attribute: to a parent controller, to an outer
+   * controller-as alias, or to the controller a `templateUrl` elsewhere binds the template to.
+   * `factsToRows` gave each the nearest `ng-controller` of the same file (or none); these add the
+   * controller that really holds the member, so find-references and dead-code detection see it.
+   */
+  private scopeChainRefs(path: string, raw: TemplateFacts): RefInput[] {
+    const bound = this.facts(path);
+    if (bound?.kind !== 'template') return [];
+    const out: RefInput[] = [];
+    bound.expressions.forEach((expr, i) => {
+      const rawChain = raw.expressions[i]?.scopeChain ?? [];
+      const rawContainer = controllerOf(rawChain);
+      const rawAlias = aliasOf(rawChain);
+      for (const root of expr.roots) {
+        if (isLocal(root.name, expr.scopeChain) || SCOPE_BUILTINS.includes(root.name)) continue;
+        const member = this.scopeMemberOf(expr.scopeChain, root);
+        if (!member) continue;
+        // What factsToRows already recorded for this root — no need to say it twice.
+        const rawName = rawAlias && root.name === rawAlias && root.path[0] ? root.path[0] : root.name;
+        if (member.container === rawContainer && member.name === rawName) continue;
+        out.push({ name: member.name, container: member.container, axis: 'ng-scope', span: root.span });
+      }
+    });
+    return out;
   }
 
   /**
@@ -694,9 +738,13 @@ export class Workspace implements FactSource, RenameSource {
       const hit = expressionAt(facts, offset);
       if (hit) {
         const { root, path } = unwind(hit.node);
-        const alias = aliasOf(hit.expr.scopeChain);
-        container = controllerOf(hit.expr.scopeChain);
-        name = root ? (alias && root.name === alias ? (path[0] ?? root.name) : root.name) : null;
+        const member = root ? this.scopeMemberOf(hit.expr.scopeChain, { name: root.name, path }) : null;
+        if (member) ({ name, container } = member);
+        else if (root) {
+          const alias = aliasOf(hit.expr.scopeChain);
+          container = controllerOf(hit.expr.scopeChain);
+          name = alias && root.name === alias ? (path[0] ?? root.name) : root.name;
+        }
       } else {
         const c = facts.controllers.find((x) => inSpan(x.span, offset));
         if (c) name = c.name;

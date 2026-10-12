@@ -312,11 +312,16 @@ function extractDdo(obj: acorn.ObjectExpression): NgDeclaration['ddo'] {
       case 'bindToController': {
         if (prop.value.type !== 'ObjectExpression') break;
         ddo.scopeBindings = {};
+        ddo.scopeBindingSpans = {};
         for (const b of prop.value.properties) {
           if (b.type !== 'Property') continue;
           const bk = propName(b);
           const bv = stringOf(b.value);
-          if (bk && bv !== null) ddo.scopeBindings[bk] = bv;
+          if (!bk || bv === null) continue;
+          ddo.scopeBindings[bk] = bv;
+          // A quoted key (`'user': '<'`) points at the name, not its quotes.
+          const quoted = b.key.type === 'Literal' ? 1 : 0;
+          ddo.scopeBindingSpans[bk] = { start: b.key.start + quoted, end: b.key.end - quoted };
         }
         break;
       }

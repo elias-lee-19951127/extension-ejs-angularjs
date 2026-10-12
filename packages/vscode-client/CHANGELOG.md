@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.1
+
+- **Component bindings resolve:** `$ctrl.task` in a component's template goes to `task` in its
+  `bindings: { task: '<' }` (and a directive's isolate `scope` keys likewise), instead of reporting
+  "not found on the scope".
+- **References and dead code follow the scope chain:** a parent controller's member used inside a
+  nested `ng-controller`, a member reached through a controller-as alias in a component attribute
+  (`on-toggle="vm.toggle(task)"`), and a member used in a template that a `templateUrl` binds to
+  its controller now all count. Find References lists them, and they are no longer reported as
+  unused.
+- **JS completion comes first:** after `TaskService.`, `$scope.` or `vm.` in a `.js` file, this
+  extension's suggestions now lead the list instead of sinking below every identifier
+  TypeScript offers for an untyped value.
+- `ejsng unused` (CLI) indexes and links before reporting, like the editor does.
+
 ## 0.9.0
 
 **Completion that understands AngularJS**, in templates and in JavaScript:

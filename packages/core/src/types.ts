@@ -69,6 +69,8 @@ export interface NgDeclaration {
     controllerAs?: string;
     controllerName?: string;
     scopeBindings?: Record<string, string>;
+    /** Where each key of `scopeBindings` is written, for go-to-definition (`bindings: { user: '<' }`). */
+    scopeBindingSpans?: Record<string, Span>;
     templateUrl?: string;
     templateInline?: boolean;
     restrict?: string;
@@ -301,6 +303,8 @@ export interface AttrCandidate {
   attrSpan: Span;
   /** The enclosing controller, if declared in this same file. */
   container: string | null;
+  /** controllerAs aliases in scope here -> their controller, nearest first wins (`vm` -> 'ListCtrl'). */
+  aliases?: Record<string, string>;
   /** Local variables of the template at this position — to avoid mistaking one for a ref. */
   locals: string[];
 }

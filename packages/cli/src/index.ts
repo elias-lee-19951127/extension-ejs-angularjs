@@ -305,6 +305,9 @@ function main(): void {
     case 'unused': {
       if (opts.rest[0]) opts.root = opts.rest[0];
       const ws = makeWorkspace(opts);
+      // Usages through a templateUrl, a parent scope or a directive attribute are only known once
+      // the index is fresh and linked — index() does both.
+      ws.index();
       const rows = ws.unused();
       if (opts.json) console.log(JSON.stringify(rows, null, 2));
       else {

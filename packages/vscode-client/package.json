@@ -2,7 +2,7 @@
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
   "description": "Go to definition, references, rename and completion between EJS templates and AngularJS 1.x controllers — plus console.log values shown inline from a running Node app or browser tab.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "publisher": "phule",
   "license": "MIT",
   "author": {

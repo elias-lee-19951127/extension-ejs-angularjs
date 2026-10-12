@@ -663,14 +663,39 @@ connection.onCompletion((params): CompletionItem[] => {
   const r = rel(params.textDocument.uri);
   if (!workspace || !doc || !r) return [];
 
-  return workspace.completionAt(r, offsetOf(doc, params.position)).map((c) => ({
+  const offset = offsetOf(doc, params.position);
+  const dot = memberDotBefore(doc, offset);
+  return workspace.completionAt(r, offset).map((c) => ({
     label: c.name,
     kind: COMPLETION_KINDS[c.kind],
     detail: c.detail,
-    ...(c.snippet ? { insertText: c.snippet, insertTextFormat: InsertTextFormat.Snippet } : {}),
-    ...(c.sortText ? { sortText: `${c.sortText}_${c.name}` } : {}),
+    ...(c.snippet ? { insertTextFormat: InsertTextFormat.Snippet } : {}),
+    // After `TaskService.` in a .js file, replace from the dot, as TypeScript's own suggestions do
+    // (`.list` over `.`). The editor scores each item against the text its range covers: an item
+    // covering only the empty word after the dot scores lowest and sinks under all of TypeScript's,
+    // whatever its sortText.
+    ...(dot
+      ? {
+          filterText: `.${c.name}`,
+          textEdit: { range: { start: doc.positionAt(dot), end: params.position }, newText: `.${c.snippet ?? c.name}` },
+        }
+      : c.snippet
+        ? { insertText: c.snippet }
+        : {}),
+    // Leading `0`: the editor merges these with other providers' items and orders by sortText.
+    // TypeScript's JS suggestions sort as `11`…`18`, so a bare `1_list` (`_` > `8`) would sink
+    // below every identifier of the file instead of leading the list.
+    sortText: `0${c.sortText ?? '9'}_${c.name}`,
   }));
 });
+
+/** Offset of the `.` right before the member being typed in a .js file (`Api.li|`), or null. */
+function memberDotBefore(doc: TextDocument, offset: number): number | null {
+  if (doc.languageId !== 'javascript') return null;
+  const before = doc.getText({ start: doc.positionAt(Math.max(0, offset - 200)), end: doc.positionAt(offset) });
+  const m = /\.([\w$]*)$/.exec(before);
+  return m ? offset - m[0].length : null;
+}
 
 /** How each kind of suggestion is drawn in the editor's list (template-completion spec #11). */
 const COMPLETION_KINDS: Record<CompletionEntry['kind'], CompletionItemKind> = {

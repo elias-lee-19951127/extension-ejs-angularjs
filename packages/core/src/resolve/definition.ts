@@ -197,6 +197,11 @@ function templateDefinition(
 
   // Walk the shape to jump straight into a nested key when it's known.
   const targets = members.map((m) => {
+    // A component/directive binding (`bindings: { task: '<' }`): its value comes from the parent
+    // template, so there is no shape to walk — the binding's declaration is the answer.
+    if (m.kind === 'binding') {
+      return { path: m.path, span: m.span, kind: 'binding', detail: `binding '${rootMember}' of ${container}`, confidence: m.confidence };
+    }
     const walked = walkShape(deps, m, fullPath.slice(1, Math.max(depth, 1)));
     return {
       path: m.path,

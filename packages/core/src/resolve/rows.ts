@@ -45,6 +45,11 @@ function jsRows(facts: Extract<FileFacts, { kind: 'js' }>) {
       if (dep.name.startsWith('$')) continue; // built-in Angular service
       refs.push({ name: dep.name, container: null, axis: 'ng-di', span: dep.span });
     }
+    // A binding is a member of the controller that owns the template's scope: `$ctrl.user` in a
+    // component's template, `user` in an isolate directive's.
+    for (const [name, span] of Object.entries(d.ddo?.scopeBindingSpans ?? {})) {
+      symbols.push({ kind: 'binding', name, container: d.ddo?.controllerName ?? d.name, confidence: 'high', span });
+    }
     if (d.ddo?.controllerName) {
       refs.push({
         name: d.ddo.controllerName,

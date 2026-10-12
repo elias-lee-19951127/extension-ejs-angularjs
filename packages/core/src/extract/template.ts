@@ -99,6 +99,17 @@ function controllerNameOf(chain: ScopeFrame[]): string | null {
   return null;
 }
 
+/** controllerAs aliases in scope -> their controller; the nearest frame wins a name used twice. */
+function aliasesOf(chain: ScopeFrame[]): Record<string, string> | undefined {
+  let out: Record<string, string> | undefined;
+  for (const f of chain) {
+    if (f.kind !== 'controller' || !f.alias || !f.controllerName) continue;
+    out ??= {};
+    out[f.alias] ??= f.controllerName;
+  }
+  return out;
+}
+
 function localsOf(chain: ScopeFrame[]): string[] {
   const out: string[] = [];
   for (const f of chain) {
@@ -314,6 +325,7 @@ function visit(node: Node, chain: ScopeFrame[], facts: TemplateFacts, config: Co
           end: attr.sourceSpan.start.offset + attr.name.length,
         },
         container: controllerNameOf(activeChain),
+        aliases: aliasesOf(activeChain),
         locals: localsOf(activeChain),
       });
     }

@@ -35,6 +35,8 @@ In `views/index.ejs`:
 - `tasks` inside `<section ng-controller="TaskListCtrl as vm">` still resolves to `BoardCtrl`: a
   nested controller sees its parents' scope.
 - In `app.js`, `Shift+F12` on `$scope.reload` → every template that uses it.
+- In `public/views/task-card.html`, `F12` on `$ctrl.task` → `task` in the component's `bindings`.
+- `Shift+F12` on `$scope.tasks` in `BoardCtrl` finds `tasks` inside the nested `TaskListCtrl` too.
 
 ### Completion
 
@@ -44,6 +46,9 @@ On an empty line inside `<main ng-controller="BoardCtrl">`, type `{{ ` and:
 - `stats.` → `total`, `updatedAt` — the keys actually assigned;
 - `stats.updatedAt | ` → filters only: `ago` (yours) and the built-in ones;
 - `<task-` on a tag → the `taskCard` component; inside the tag → its bindings `task`, `on-toggle`.
+
+In `app.js`, inside `BoardCtrl`: `TaskService.` → `list`, `save`, `cache` — the members the factory
+returns, listed ahead of TypeScript's guesses.
 
 ### Rename
 
@@ -68,3 +73,15 @@ Then **EJS/NG: Connect to Runtime** → `127.0.0.1:9229` (or the app port, `3000
 and load <http://localhost:3000/api/tasks> a few times. The `console.log` on line 23 shows its value
 right after the line, with a hit count (`×3`); `Cmd/Ctrl+K Cmd/Ctrl+I` at the end of the line shows
 where it came from, when, and the full value.
+
+### Dead code
+
+With the CLI, from the repo root:
+
+```bash
+node packages/cli/dist/index.js unused examples/task-board
+```
+
+This app has none: every member is used somewhere — through a parent scope (`tasks`), a
+controller-as alias in a component attribute (`vm.toggle`) or a `templateUrl` (`$ctrl.expanded`).
+Delete `{{ $ctrl.priorityLabel() }}` from `task-card.html` and `priorityLabel` shows up.

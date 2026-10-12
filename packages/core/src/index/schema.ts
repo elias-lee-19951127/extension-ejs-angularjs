@@ -15,8 +15,9 @@
  * 15: JsFacts.consoleCalls (observed-types-r1 ticket 02).
  * 16: ScopeWrite.lhsText and ScopeWrite.after (log-variable ticket 01).
  * 17: JsFacts.serverRoots; templateUrl read from functions, concatenation and any object literal; inline controllers.
+ * 18: DDO scopeBindingSpans (bindings become symbols); AttrCandidate.aliases.
  */
-export const PARSER_VERSION = 17;
+export const PARSER_VERSION = 18;
 
 /** Cache file name inside the .ejsng-cache/ directory. */
 export const INDEX_FILENAME = 'index.ndjson';

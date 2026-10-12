@@ -77,6 +77,12 @@ export class Linker {
       if (!program) continue;
 
       for (const root of collectRoots(program)) {
+        // `on-toggle="vm.toggle(task)"`: the member is `toggle` of the controller `vm` names.
+        const aliased = cand.aliases?.[root.name];
+        if (aliased) {
+          if (root.path[0]) refs.push({ name: root.path[0], container: aliased, axis: 'ng-scope', span: root.span });
+          continue;
+        }
         if (cand.locals.includes(root.name)) continue;
         if (SCOPE_BUILTINS.includes(root.name)) continue;
         // `$file`, `$event` are variables injected by the directive itself, not scope.

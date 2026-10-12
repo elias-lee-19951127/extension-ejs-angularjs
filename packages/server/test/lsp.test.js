@@ -192,6 +192,13 @@ test('LSP: completion in a .js file after an injected service, and a call snippe
   const items = Array.isArray(res) ? res : res.items;
   assert.deepStrictEqual(items.map((i) => i.label), ['list']);
   assert.strictEqual(items[0].kind, 2, 'CompletionItemKind.Method');
+  // VS Code merges these with TypeScript's suggestions, which replace from the dot (`.list`) and sort
+  // as `11`…`18`. Covering the same text and sorting lower is what puts ours first.
+  assert.ok(items[0].sortText < '11', `sortText ${items[0].sortText} sorts after TypeScript's`);
+  assert.strictEqual(items[0].filterText, '.list');
+  assert.strictEqual(items[0].textEdit.newText, '.list');
+  const dotAt = positionOf(text, '\n  Api.', '\n  Api'.length);
+  assert.deepStrictEqual(items[0].textEdit.range.start, dotAt);
 
   const tpl = open('views/page.ejs', 'html');
   const at = tpl.text.indexOf('<span>') + '<span>'.length;
