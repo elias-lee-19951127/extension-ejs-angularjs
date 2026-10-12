@@ -1,0 +1,13 @@
+{
+  "name": "ejsng-example-task-board",
+  "private": true,
+  "description": "Small Express + EJS + AngularJS 1.x app to try EJS + AngularJS Navigator on",
+  "scripts": {
+    "start": "node server.js",
+    "debug": "node --inspect server.js"
+  },
+  "dependencies": {
+    "ejs": "^3.1.10",
+    "express": "^4.21.2"
+  }
+}

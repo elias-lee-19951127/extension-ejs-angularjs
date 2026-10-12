@@ -8,6 +8,21 @@ Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **Int
 
 > Thiết kế đầy đủ và số liệu đo từ codebase thật: [docs/kien-truc.md](docs/kien-truc.md)
 
+> 🇬🇧 English: [README.en.md](README.en.md)
+
+## Demo
+
+▶️ **[Xem video demo 1 phút rưỡi](docs/media/demo.mp4)** — gồm mọi đoạn bên dưới, quay trong VS Code trên
+[`examples/task-board`](examples/task-board/README.md).
+
+| Template → controller và ngược lại | Completion hiểu AngularJS |
+|---|---|
+| ![Hover, Go to Definition và Peek References từ template](docs/media/goto.gif) | ![Gợi ý biến scope, khoá object và filter](docs/media/completion.gif) |
+| **Rename đồng bộ JS và template** | **`templateUrl` ↔ template** |
+| ![Đổi tên biến scope cập nhật cả controller lẫn template](docs/media/rename.gif) | ![Hover templateUrl và Go to Related](docs/media/related.gif) |
+| **Log runtime hiện inline** | **Tên nối với JS nổi bật** |
+| ![Giá trị console.log hiện ngay cạnh dòng đã log](docs/media/runtime.gif) | ![Tên trong template có định nghĩa JS được tô màu và in đậm](docs/media/template-highlight.png) |
+
 ## Hiện đã làm được
 
 | | Ví dụ |
@@ -112,7 +127,8 @@ node packages/cli/dist/probe.js <file> "\$scope.busy = " --offset 7 --rename isB
 ## Chạy thử trên VSCode
 
 Mở thư mục này trong VSCode, F5 để chạy Extension Development Host, rồi mở repo AngularJS của bạn
-trong cửa sổ mới.
+trong cửa sổ mới — hoặc [`examples/task-board`](examples/task-board/README.md), một app Express + EJS +
+AngularJS nhỏ kèm hướng dẫn thử từng tính năng.
 
 ## Chạy thử trên IntelliJ
 

@@ -1,0 +1,5 @@
+body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 640px; padding: 24px 16px; }
+header { display: flex; justify-content: space-between; align-items: baseline; }
+.card { border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+.card.done label { text-decoration: line-through; color: #888; }
+.summary, .empty, small { color: #666; }

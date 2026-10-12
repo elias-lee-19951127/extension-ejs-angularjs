@@ -1,16 +1,52 @@
 {
   "name": "ejs-angularjs-navigator",
   "displayName": "EJS + AngularJS Navigator",
-  "description": "Tracks variables/functions between EJS templates and AngularJS 1.x controllers",
+  "description": "Go to definition, references, rename and completion between EJS templates and AngularJS 1.x controllers — plus console.log values shown inline from a running Node app or browser tab.",
   "version": "0.9.0",
   "publisher": "phule",
   "license": "MIT",
+  "author": {
+    "name": "Elias Lee"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elias-lee-19951127/extension-ejs-angularjs.git",
+    "directory": "packages/vscode-client"
+  },
+  "bugs": {
+    "url": "https://github.com/elias-lee-19951127/extension-ejs-angularjs/issues"
+  },
+  "homepage": "https://github.com/elias-lee-19951127/extension-ejs-angularjs#readme",
   "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1f1f1f",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "angularjs",
+    "angular.js",
+    "angular 1",
+    "ejs",
+    "express",
+    "template",
+    "go to definition",
+    "find references",
+    "rename",
+    "completion",
+    "dead code",
+    "inline values",
+    "console.log",
+    "runtime log",
+    "logpoint",
+    "legacy"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [

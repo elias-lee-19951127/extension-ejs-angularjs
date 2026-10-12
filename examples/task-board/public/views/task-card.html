@@ -1,0 +1,9 @@
+<article class="card" ng-class="{ done: $ctrl.task.done }">
+  <label>
+    <input type="checkbox" ng-checked="$ctrl.task.done" ng-click="$ctrl.onToggle()">
+    {{ $ctrl.task.title }}
+  </label>
+  <small>{{ $ctrl.task.owner.name }} · {{ $ctrl.priorityLabel() }}</small>
+  <button ng-click="$ctrl.expanded = !$ctrl.expanded">details</button>
+  <pre ng-if="$ctrl.expanded">{{ $ctrl.task | json }}</pre>
+</article>

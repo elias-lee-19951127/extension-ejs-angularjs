@@ -9,6 +9,21 @@ One language server (Node/TypeScript), two thin clients: **VSCode** and **Intell
 > Full design and measurements from a real codebase: [docs/architecture.md](docs/architecture.md)
 > (English) / [docs/kien-truc.md](docs/kien-truc.md) (Vietnamese, canonical)
 
+> 🇻🇳 Tiếng Việt: [README.md](README.md)
+
+## Demo
+
+▶️ **[Watch the 1½-minute demo video](docs/media/demo.mp4)** — every clip below, recorded in VS Code on
+[`examples/task-board`](examples/task-board/README.md).
+
+| Template → controller and back | AngularJS-aware completion |
+|---|---|
+| ![Hover, Go to Definition and Peek References from a template](docs/media/goto.gif) | ![Completion of scope members, object keys and filters](docs/media/completion.gif) |
+| **Rename across JS and templates** | **`templateUrl` ↔ template** |
+| ![Renaming a scope variable updates the controller and the template](docs/media/rename.gif) | ![templateUrl hover and Go to Related](docs/media/related.gif) |
+| **Inline runtime log** | **JS-backed names stand out** |
+| ![console.log values shown inline next to the line that logged them](docs/media/runtime.gif) | ![Template names backed by JavaScript drawn in color and bold](docs/media/template-highlight.png) |
+
 ## What already works
 
 | | Example |
@@ -118,7 +133,8 @@ node packages/cli/dist/probe.js <file> "\$scope.busy = " --offset 7 --rename isB
 ## Trying it in VSCode
 
 Open this folder in VSCode, press F5 to launch the Extension Development Host, then open your
-AngularJS repo in the new window.
+AngularJS repo in the new window — or [`examples/task-board`](examples/task-board/README.md), a small
+Express + EJS + AngularJS app with a guided tour of every feature.
 
 ## Trying it in IntelliJ
 

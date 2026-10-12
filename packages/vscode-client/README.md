@@ -4,6 +4,37 @@ Tracks variables and functions between **EJS** templates and **AngularJS 1.x** (
 go-to-definition from `{{ expression }}` straight to `$scope`, find-usages back from a controller
 to every template that reads it, rename across both, and dead-code detection.
 
+![Go to Definition and Peek References between an EJS template and its AngularJS controller](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/goto.gif)
+
+▶️ [Watch the full demo video](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/demo.mp4) · Try it on the
+[example app](https://github.com/elias-lee-19951127/extension-ejs-angularjs/tree/main/examples/task-board)
+
+## Demo
+
+**AngularJS-aware completion** — scope members, the keys of an object, filters after `|`:
+
+![Completion of scope members, object keys and filters](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/completion.gif)
+
+**Rename** a scope variable once — the controller and every template follow:
+
+![Renaming a scope variable updates the controller and the template](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/rename.gif)
+
+**`templateUrl`** — see which file it loads and how it was found; **Go to Related** jumps between them:
+
+![templateUrl hover and Go to Related](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/related.gif)
+
+**Inline runtime log** — `console.log` from a running Node process, drawn next to the line:
+
+![console.log values shown inline next to the line that logged them](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/runtime.gif)
+
+**Runtime Log panel** — one Connect button and a checklist of what works:
+
+![The EJS/NG Runtime panel](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/runtime-panel.png)
+
+**JS-backed names stand out** in `.ejs`/`.html`:
+
+![Template names backed by JavaScript drawn in color and bold](https://raw.githubusercontent.com/elias-lee-19951127/extension-ejs-angularjs/main/docs/media/template-highlight.png)
+
 ## Features
 
 | | Example |

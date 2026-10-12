@@ -1,0 +1,32 @@
+<!doctype html>
+<html ng-app="taskBoard">
+<head>
+  <meta charset="utf-8">
+  <title><%= appTitle %></title>
+  <link rel="stylesheet" href="/css/board.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.8.3/angular.min.js"></script>
+  <script src="/js/app.js"></script>
+</head>
+<body>
+  <header>
+    <h1><%= appTitle %></h1>
+    <span class="who">Signed in as <%= user.name %></span>
+  </header>
+
+  <main ng-controller="BoardCtrl">
+    <p class="summary">
+      {{ openCount() }} open of {{ stats.total }} · updated {{ stats.updatedAt | ago }}
+    </p>
+
+    <input type="search" ng-model="query" placeholder="Filter tasks">
+    <button ng-click="reload()" ng-disabled="busy">Reload</button>
+
+    <section ng-controller="TaskListCtrl as vm">
+      <task-card ng-repeat="task in tasks | filter:query"
+                 task="task"
+                 on-toggle="vm.toggle(task)"></task-card>
+      <p ng-if="!tasks.length" class="empty">Nothing to do 🎉</p>
+    </section>
+  </main>
+</body>
+</html>
