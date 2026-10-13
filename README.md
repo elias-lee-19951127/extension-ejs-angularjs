@@ -1,142 +1,149 @@
 # EJS + AngularJS Navigator
 
-Track biến và hàm giữa template **EJS** và controller **AngularJS 1.x** (ES5) — go-to-definition
-từ `{{ biểu thức }}` sang `$scope`, find-usages ngược lại từ controller ra template, và phát hiện
-code chết.
+Tracks variables and functions between **EJS** templates and **AngularJS 1.x** (ES5) controllers —
+go-to-definition from `{{ expression }}` to `$scope`, find-usages back from controller to
+template, and dead-code detection.
 
-Một language server (Node/TypeScript), hai client mỏng: **VSCode** và **IntelliJ**.
+One language server (Node/TypeScript), two thin clients: **VSCode** and **IntelliJ**.
 
-> Thiết kế đầy đủ và số liệu đo từ codebase thật: [docs/kien-truc.md](docs/kien-truc.md)
+> Full design and measurements from a real codebase: [docs/architecture.md](docs/architecture.md)
+> (English) / [docs/kien-truc.md](docs/kien-truc.md) (Vietnamese, canonical)
 
-> 🇬🇧 English: [README.en.md](README.en.md)
+> 🇻🇳 Tiếng Việt: [README.vi.md](README.vi.md)
 
 ## Demo
 
-▶️ **[Xem video demo 1 phút rưỡi](docs/media/demo.mp4)** — gồm mọi đoạn bên dưới, quay trong VS Code trên
+▶️ **[Watch the 1½-minute demo video](docs/media/demo.mp4)** — every clip below, recorded in VS Code on
 [`examples/task-board`](examples/task-board/README.md).
 
-| Template → controller và ngược lại | Completion hiểu AngularJS |
+| Template → controller and back | AngularJS-aware completion |
 |---|---|
-| ![Hover, Go to Definition và Peek References từ template](docs/media/goto.gif) | ![Gợi ý biến scope, khoá object và filter](docs/media/completion.gif) |
-| **Rename đồng bộ JS và template** | **`templateUrl` ↔ template** |
-| ![Đổi tên biến scope cập nhật cả controller lẫn template](docs/media/rename.gif) | ![Hover templateUrl và Go to Related](docs/media/related.gif) |
-| **Log runtime hiện inline** | **Tên nối với JS nổi bật** |
-| ![Giá trị console.log hiện ngay cạnh dòng đã log](docs/media/runtime.gif) | ![Tên trong template có định nghĩa JS được tô màu và in đậm](docs/media/template-highlight.png) |
+| ![Hover, Go to Definition and Peek References from a template](docs/media/goto.gif) | ![Completion of scope members, object keys and filters](docs/media/completion.gif) |
+| **Rename across JS and templates** | **`templateUrl` ↔ template** |
+| ![Renaming a scope variable updates the controller and the template](docs/media/rename.gif) | ![templateUrl hover and Go to Related](docs/media/related.gif) |
+| **Inline runtime log** | **JS-backed names stand out** |
+| ![console.log values shown inline next to the line that logged them](docs/media/runtime.gif) | ![Template names backed by JavaScript drawn in color and bold](docs/media/template-highlight.png) |
 
-## Hiện đã làm được
+## What already works
 
-| | Ví dụ |
+| | Example |
 |---|---|
 | Template → JS | `data-ng-click="selectSection(section)"` → `$scope.selectSection` |
-| Property của biến `ng-repeat` | `section.icon` → khoá `icon:` trong object literal của `$scope.sections` |
-| Property lồng nhau | `busy.stats` → nhảy đúng vào khoá `stats:` trong object literal |
-| Biến cục bộ | `section` trong `ng-repeat="section in sections"` → khai báo tại chỗ |
-| `ng-controller` → khai báo | kể cả tên có gạch ngang: `cityos-demo-dha-management-view-controller` |
-| JS → Template | `$scope.busy` → mọi chỗ dùng trong mọi template |
-| Directive tự viết | `pick-file="onPick($file)"` → `.directive('pickFile', …)` |
+| Property of an `ng-repeat` variable | `section.icon` → the `icon:` key in the object literal of `$scope.sections` |
+| Nested property | `busy.stats` → jumps straight into the `stats:` key in the object literal |
+| Local variable | `section` in `ng-repeat="section in sections"` → declaration at that spot |
+| `ng-controller` → declaration | even with hyphenated names: `cityos-demo-dha-management-view-controller` |
+| JS → Template | `$scope.busy` → every usage in every template |
+| Custom directive | `pick-file="onPick($file)"` → `.directive('pickFile', …)` |
 | Isolate binding | `<my-widget data="form">` → `bindings: { data: '<' }` |
 | Filter | `{{ x | money }}` → `.filter('money', …)` |
-| DI | `function ($scope, Api)` → `.factory('Api', …)` (khai báo Angular trước, tham số sau) |
-| Biến JS thuần | `const`/`let`/`var`/`function`/tham số, theo đúng phạm vi và che bóng |
-| Global liên file | `DHA_STATUS` khai báo ở `dha.const.js` → dùng ở `dha.controller.js` |
-| Biến toàn cục | `window`, `JSON`, `$event` → báo "dựng sẵn", không phải lỗi |
-| Trục EJS | `<%= denyMessage %>` → locals của `res.render` |
-| Dead code | controller / directive / filter / property không ai dùng |
-| Rename | `$scope.busy` → đổi đồng bộ mọi lượt đọc/ghi trong JS và mọi template; từ chối kèm lý do khi xung đột |
-| Completion hiểu AngularJS | `busy.` → `search`, `ingest`…; `section.` → khoá của phần tử trong `sections`; kế thừa scope từ controller cha; `vm.`/`$ctrl.` (cả binding của component); sau `\|` chỉ gợi ý filter; `<user-` → component/directive, trong thẻ → binding và directive dạng attribute; trong `.js`: `$scope.`, `vm.`, `this.` và service được inject (`UserService.` → các key factory trả về) |
-| File đổi ngoài editor | `git pull` / checkout / tool khác → index tự cập nhật (VSCode và IntelliJ), không cần đánh index lại |
-| Kiểu đã thấy | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + các chỗ gán; `vm.user` có lúc `= null` → chú thích nhạt `may be empty` |
-| Tô màu phần nối với JS | Trong `.ejs`/`.html`, tên nào có định nghĩa trong file `.js` được tô màu riêng và **in đậm**: biến scope và thuộc tính của nó (tím), `ng-controller`/directive/component/filter (xanh ngọc). Biến chỉ template tự khai báo (`ng-repeat`) giữ nguyên |
+| DI | `function ($scope, Api)` → `.factory('Api', …)` (Angular declaration first, parameter second) |
+| Plain JS variable | `const`/`let`/`var`/`function`/parameter, following correct scope and shadowing |
+| Cross-file global | `DHA_STATUS` declared in `dha.const.js` → used in `dha.controller.js` |
+| Global variable | `window`, `JSON`, `$event` → reported as "built-in", not an error |
+| EJS axis | `<%= denyMessage %>` → locals from `res.render` |
+| Dead code | controller / directive / filter / property that nobody uses |
+| Rename | `$scope.busy` → renames every read/write in sync across JS and every template; refuses with a reason on conflict |
+| AngularJS-aware completion | `busy.` → `search`, `ingest`…; `section.` → the keys of an element in `sections`; members inherited from a parent controller; `vm.`/`$ctrl.` (a component's bindings too); only filters after `\|`; `<user-` → components/directives, inside a tag → bindings and attribute directives; in `.js`: `$scope.`, `vm.`, `this.` and an injected service (`UserService.` → the keys the factory returns) |
+| Files changed outside the editor | `git pull` / checkout / another tool → index auto-updates (VSCode and IntelliJ), no need to re-index manually |
+| Observed type | hover `vm.rows` → `{ id: number, tags?: string[] }[]` + where it's assigned; `vm.user` sometimes `= null` → a faint `may be empty` hint |
+| JS-backed names colored | In `.ejs`/`.html`, every name a `.js` file defines is drawn in its own color and **bold**: scope variables and their properties (purple), `ng-controller`s/directives/components/filters (teal). Names only the template declares (`ng-repeat`) are left as they are |
 
-### Kiểu đã thấy trong hover và inline
+### Observed types in hover and inline
 
-Hover trên một biến scope trong template (`vm.rows`, `vm.form.name`, phần tử `row` của `ng-repeat`) —
-hoặc trên `$scope.x = …` / `this.x = …` trong file JS — có thêm mục **Observed type**: kiểu gộp từ
-**mọi** lần gán trong controller (key không có ở mọi lần gán thành `id?`, khác loại thành `A | B`),
-tối đa 5 chỗ gán dạng link, và hai dòng lưu ý khi có: *Can be empty when rendered* (có lần gán
-`null`/`undefined`) và *Only assigned in a callback* (chưa có giá trị ở lần render đầu). Không suy
-ra được thì ghi lý do và nguồn (`res.data` ở `list.controller.js:30`), không bao giờ ghi `unknown` trơn.
+Hovering a scope variable in a template (`vm.rows`, `vm.form.name`, an `ng-repeat` item `row`) —
+or a `$scope.x = …` / `this.x = …` in a JS file — adds an **Observed type** section: the type merged
+from **every** assignment in the controller (a key missing from some assignments becomes `id?`,
+different kinds become `A | B`), up to 5 assignment sites as links, and two notes when they apply:
+*Can be empty when rendered* (some assignment is `null`/`undefined`) and *Only assigned in a callback*
+(no value at the first render). When nothing can be inferred it says why and where from (`res.data`
+at `list.controller.js:30`) — never a bare `unknown`.
 
-Chú thích **inline** thì cố ý hiếm: chỉ `may be empty` sau biến trong biểu thức Angular khi biến đó
-có lần gán tường minh `null`/`undefined`/`void 0`. Không inline cho biến chỉ gán trong callback
-(gần như mọi dữ liệu tải async), không inline ở file JS hay EJS local. Tắt bằng
+**Inline** hints are deliberately rare: only `may be empty`, after a variable in an Angular expression
+that is explicitly assigned `null`/`undefined`/`void 0` somewhere. No inline hint for a variable only
+assigned in a callback (nearly all async-loaded data), in JS files, or for EJS locals. Turn it off with
 `ejsng.typeHints.nullable`.
 
-**Kiểu thấy lúc chạy.** Chỗ index bó tay (`$scope.rows = res.data`) thì cho runtime xem: bấm
-**Log at runtime** — trên **CodeLens** ngay trên dòng gán trong file controller, hoặc trong hover (cạnh dòng "Could not be inferred — assigned from `res.data`") — VS Code
-đặt một logpoint bình thường ngay sau câu gán đó, kể cả khi nó nằm trong callback viết một dòng; bấm lại
-không sinh logpoint thứ hai, xoá bằng giao diện breakpoint sẵn có. Cũng có thể tự đặt logpoint `{vm.rows}`
-hoặc có sẵn `console.log($scope.rows)`. Khi đang nối Runtime Log, lần sau dòng đó chạy, hover trên `vm.rows` trong template có kiểu thật, kèm dòng *Seen at runtime* (bao nhiêu lần, lúc
-nào, từ kết nối nào). Chỉ giữ kiểu, không giữ giá trị; ngắt kết nối là mất. Thanh trạng thái đếm
-`N types seen`. Chú thích inline không đổi theo runtime. Chi tiết: `docs/kien-truc.md` mục 5.3.2.
+**Types seen at runtime.** Where the index can't tell (`$scope.rows = res.data`), let the runtime show
+it: click **Log at runtime** — on the **CodeLens** above the assignment in the controller, or in the hover (beside "Could not be inferred — assigned from
+`res.data`") — VS Code sets an ordinary logpoint right after that assignment, even inside a one-line
+callback; clicking again never adds a second one, and it's removed through the usual breakpoint UI. A
+logpoint `{vm.rows}` of your own, or an existing `console.log($scope.rows)`, works too. While Runtime Log
+is connected, next time that line runs, hovering `vm.rows` in the template shows the real
+type, with a *Seen at runtime* line (how often, when, from which connection). Only the type is kept,
+never the value; disconnecting drops it. The status bar counts `N types seen`. Inline hints never change
+because of the runtime. Details: `docs/architecture.md` section 5.3.2.
 
-## Bắt đầu
+## Getting started
 
 ```bash
 npm install && npm run build
 ```
 
-CLI (chạy được ngay, không cần IDE):
+CLI (runs right away, no IDE needed):
 
 ```bash
-node packages/cli/dist/index.js index --root /duong/dan/toi/repo
+node packages/cli/dist/index.js index --root /path/to/your/repo
 ```
 
 ```bash
-node packages/cli/dist/index.js def /duong/dan/view.ejs 41 38 --root /duong/dan/toi/repo
+node packages/cli/dist/index.js def /path/to/view.ejs 41 38 --root /path/to/your/repo
 ```
 
 ```bash
-node packages/cli/dist/index.js refs /duong/dan/controller.js 53 11 --root /duong/dan/toi/repo
+node packages/cli/dist/index.js refs /path/to/controller.js 53 11 --root /path/to/your/repo
 ```
 
 ```bash
-node packages/cli/dist/index.js unused --root /duong/dan/toi/repo
+node packages/cli/dist/index.js unused --root /path/to/your/repo
 ```
 
-Quét độ phủ — thử resolve **mọi** định danh trong **mọi** template, báo chỗ còn sót:
+Coverage sweep — try to resolve **every** identifier in **every** template, and report what's
+still missing:
 
 ```bash
-node packages/cli/dist/index.js sweep --root /duong/dan/toi/repo
+node packages/cli/dist/index.js sweep --root /path/to/your/repo
 ```
 
-Cuối output là danh sách `templateUrl` chưa nối được (biểu thức động, không khớp file nào, hoặc một
-template bị gán nhiều controller). Khai `templateRoots` qua CLI bằng
-`--template-root /views/=src/views=.ejs,.html` (lặp lại được) và `--views-dir src/views`.
-Server Express cũng được đọc (`express.static`, `app.set('views')`, route `/partials/:name` →
-`res.render(...)`), `.html` được tìm cả sang `.ejs`, và liên kết đặt tay ở `.vscode/settings.json`
-(`ejsng.templateUrlMap`, hoặc `--template-map url=file`) luôn được dùng trước.
-Thường không cần: một `templateUrl` viết đúng kiểu Angular (tương đối theo trang, ví dụ
-`'views/list.html'` trong `public/js/app.js`) được tìm dưới các thư mục cha của file JS, rồi theo
-đuôi đường dẫn. `templateRoots` chỉ cần khi URL khác đường dẫn đĩa (prefix riêng, `.html` → `.ejs`).
+The end of the output lists every `templateUrl` that could not be linked (a dynamic expression, no
+matching file, or one template given several controllers). Pass `templateRoots` on the CLI with
+`--template-root /views/=src/views=.ejs,.html` (repeatable) and `--views-dir src/views`.
+The Express server code is read too (`express.static`, `app.set('views')`, a `/partials/:name` route
+calling `res.render(...)`), `.html` is also looked for as `.ejs`, and links set by hand in
+`.vscode/settings.json` (`ejsng.templateUrlMap`, or `--template-map url=file`) always come first.
+Usually not needed: a `templateUrl` written the way Angular reads it (relative to the page, e.g.
+`'views/list.html'` in `public/js/app.js`) is looked up under the directories above the JS file, then
+by the end of its path. `templateRoots` is only for a URL that differs from the path on disk (its own
+prefix, `.html` served from `.ejs`).
 
-Định vị bằng chuỗi thay vì đếm cột (dùng khi soi một biểu thức cụ thể):
+Locate by string instead of counting columns (use this to inspect one specific expression):
 
 ```bash
-node packages/cli/dist/probe.js <file> "section.enabled" --offset 8 --root /duong/dan/toi/repo
+node packages/cli/dist/probe.js <file> "section.enabled" --offset 8 --root /path/to/your/repo
 ```
 
-Xem trước rename — liệt kê mọi chỗ sẽ sửa, **không ghi file**:
+Preview a rename — list every location that would be edited, **without writing any file**:
 
 ```bash
-node packages/cli/dist/probe.js <file> "\$scope.busy = " --offset 7 --rename isBusy --root /duong/dan/toi/repo
+node packages/cli/dist/probe.js <file> "\$scope.busy = " --offset 7 --rename isBusy --root /path/to/your/repo
 ```
 
-`ejsng scan <file>` in ra toàn bộ fact trích được từ một file — công cụ debug chính.
+`ejsng scan <file>` prints every fact extracted from one file — the main debugging tool.
 
-## Chạy thử trên VSCode
+## Trying it in VSCode
 
-Mở thư mục này trong VSCode, F5 để chạy Extension Development Host, rồi mở repo AngularJS của bạn
-trong cửa sổ mới — hoặc [`examples/task-board`](examples/task-board/README.md), một app Express + EJS +
-AngularJS nhỏ kèm hướng dẫn thử từng tính năng.
+Open this folder in VSCode, press F5 to launch the Extension Development Host, then open your
+AngularJS repo in the new window — or [`examples/task-board`](examples/task-board/README.md), a small
+Express + EJS + AngularJS app with a guided tour of every feature.
 
-## Chạy thử trên IntelliJ
+## Trying it in IntelliJ
 
-`packages/intellij-client` là plugin Gradle dùng **LSP4IJ** (open-source, Red Hat) chứ không
-dùng API LSP sẵn của JetBrains — API đó chỉ chạy trên IDE trả phí. Chi tiết license:
-[docs/kien-truc.md phụ lục B](docs/kien-truc.md).
+`packages/intellij-client` is a Gradle plugin that uses **LSP4IJ** (open-source, Red Hat) instead
+of JetBrains' built-in LSP API — that API only runs on paid IDE tiers. Licensing details:
+[docs/architecture.md, Appendix B](docs/architecture.md).
 
-Cần một JDK bất kỳ ≥ 17 để chạy Gradle; JDK 21 dùng để biên dịch sẽ được foojay tự tải về.
+Any JDK ≥ 17 is needed to run Gradle; JDK 21, used for compilation, is fetched automatically by
+foojay.
 
 ```bash
 cd packages/intellij-client && ./gradlew verifyPluginProjectConfiguration verifyPluginStructure
@@ -150,94 +157,96 @@ cd packages/intellij-client && ./gradlew buildPlugin verifyPlugin
 cd packages/intellij-client && ./gradlew runIde
 ```
 
-Artifact cài được: `packages/intellij-client/build/distributions/ejsng-intellij-0.1.0.zip`
+Installable artifact: `packages/intellij-client/build/distributions/ejsng-intellij-0.1.0.zip`
 (Settings → Plugins → ⚙ → Install Plugin from Disk).
 
-**Node:** plugin tự tìm Node qua `NodeLocator` — hỗ trợ nvm, fnm, volta, asdf, nodenv, và
-đường dẫn hệ thống. Cần thiết vì IDE khởi động từ Dock không kế thừa PATH của shell. Ép đường
-dẫn cụ thể bằng biến môi trường `EJSNG_NODE`.
+**Node:** the plugin locates Node itself via `NodeLocator` — supporting nvm, fnm, volta, asdf,
+nodenv, and system paths. This is necessary because an IDE launched from the Dock does not
+inherit the shell's PATH. Force a specific path with the `EJSNG_NODE` environment variable.
 
-## Cấu hình
+## Configuration
 
-| Khoá | Mặc định | Ghi chú |
+| Key | Default | Notes |
 |---|---|---|
-| `ejsng.moduleAliases` | `["myApp","app","appModule"]` | Biến giữ angular module nhưng khai báo ở file khác |
-| `ejsng.ejsDelimiter` | `"%"` | Đổi thành `"?"` cho `<? ?>` |
-| `ejsng.customDirectives` | `{}` | `{"myOn": "statement"}` — directive tự viết của công ty |
-| `ejsng.templateRoots` | `[]` | Map `templateUrl` sang file: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — template được nối với controller của directive/component/route/state dùng nó |
-| `ejsng.expressViewsDir` | `"views"` | Thư mục view của Express cho `res.render('user/profile')` |
-| `ejsng.diagnostics.enabled` | `false` | **Mặc định tắt** để tránh hàng nghìn cảnh báo giả trên code cũ |
-| `ejsng.runtimeLog.expandValues` | `true` | Trải object/mảng trong log inline thay vì `[Object]`; hỏi app đang chạy, có chặn tần suất mỗi dòng |
-| `ejsng.logLens` | `"unknown"` | CodeLens **Log at runtime** trên dòng gán: `unknown` chỉ ở lần gán không suy ra được kiểu (~3% số dòng), `all` ở mọi lần gán (15–18%), `off` tắt |
-| `ejsng.typeHints.nullable` | `true` | Chú thích inline `may be empty` sau biến có lần gán `null`/`undefined`. Hover không có setting. Đổi xong reload window |
-| `ejsng.templateHighlight.enabled` | `true` | Tô màu + in đậm tên trong template có định nghĩa ở JS. Đổi màu bằng `workbench.colorCustomizations`: `ejsng.linkedScope.foreground`, `ejsng.linkedDeclaration.foreground` |
-| `ejsng.include` / `exclude` | | Glob quét file |
+| `ejsng.moduleAliases` | `["myApp","app","appModule"]` | Variables holding the Angular module but declared in another file |
+| `ejsng.ejsDelimiter` | `"%"` | Change to `"?"` for `<? ?>` |
+| `ejsng.customDirectives` | `{}` | `{"myOn": "statement"}` — the company's own custom directives |
+| `ejsng.templateRoots` | `[]` | Maps `templateUrl` to files: `[{"urlPrefix": "/views/", "fsPath": "src/views", "extensions": [".ejs", ".html"]}]` — the template is then linked to the controller of the directive/component/route/state using it |
+| `ejsng.expressViewsDir` | `"views"` | Express views directory for `res.render('user/profile')` |
+| `ejsng.diagnostics.enabled` | `false` | **Off by default** to avoid thousands of false warnings on legacy code |
+| `ejsng.runtimeLog.expandValues` | `true` | Expand objects and arrays in inline logs instead of `[Object]`; asks the running app, rate limited per line |
+| `ejsng.logLens` | `"unknown"` | The **Log at runtime** CodeLens above an assignment: `unknown` only where the index can't type it (~3% of lines), `all` on every assignment (15-18%), `off` for none |
+| `ejsng.typeHints.nullable` | `true` | Inline `may be empty` hint after a variable assigned `null`/`undefined` somewhere. Hover has no setting. Reload the window after changing it |
+| `ejsng.templateHighlight.enabled` | `true` | Colors and bolds template names defined in JavaScript. Change the colors in `workbench.colorCustomizations`: `ejsng.linkedScope.foreground`, `ejsng.linkedDeclaration.foreground` |
+| `ejsng.include` / `exclude` | | Glob patterns for file scanning |
 
-## Kiến trúc
+## Architecture
 
 ```
-packages/core/            Toàn bộ logic — không dính LSP, test độc lập được
-  src/ejs/scanner.ts        Quét region EJS, dựng virtual HTML/JS
-  src/ng/lexer,parser,ast   Parser biểu thức Angular (KHÔNG phải JS)
+packages/core/            All the logic — no LSP dependency, testable standalone
+  src/ejs/scanner.ts        Scans EJS regions, builds the virtual HTML/JS
+  src/ng/lexer,parser,ast   Angular expression parser (NOT JavaScript)
   src/ng/microsyntax.ts     ng-repeat / ng-options
-  src/ng/normalize.ts       data-ng-* → ngX, bảng cú pháp directive
-  src/extract/js.ts         Layer 2: fact từ .js (thuần theo file)
-  src/extract/template.ts   Layer 2: fact từ .ejs (thuần theo file)
-  src/index/store.ts        Layer 3: NDJSON + bảng tra trong bộ nhớ (phụ lục D)
-  src/resolve/linker.ts     Layer 4: nối liên file
-  src/resolve/workspace.ts  Truy vấn: definition / references / completion / rename
-  src/resolve/rename.ts     Rename: quét $scope, phạm vi khi controller trùng tên
+  src/ng/normalize.ts       data-ng-* → ngX, directive syntax table
+  src/extract/js.ts         Layer 2: facts from .js (pure per-file)
+  src/extract/template.ts   Layer 2: facts from .ejs (pure per-file)
+  src/index/store.ts        Layer 3: NDJSON + in-memory lookup tables (Appendix D)
+  src/resolve/linker.ts     Layer 4: cross-file linking
+  src/resolve/workspace.ts  Queries: definition / references / completion / rename
+  src/resolve/rename.ts     Rename: scans $scope, scoping when controllers share a name
 packages/server/          LSP server
-  test/lsp.test.js          Test qua stdio: server thật, JSON-RPC như IDE
-packages/cli/             CLI — debug và benchmark không cần IDE
-packages/vscode-client/   Extension VSCode
-packages/intellij-client/ Plugin IntelliJ (Kotlin + LSP4IJ)
-fixtures/mini/            Repo thu nhỏ cho test
+  test/lsp.test.js          Tests over stdio: the real server, JSON-RPC like an IDE
+packages/cli/             CLI — debugging and benchmarking without an IDE
+packages/vscode-client/   VSCode extension
+packages/intellij-client/ IntelliJ plugin (Kotlin + LSP4IJ)
+fixtures/mini/            A scaled-down repo for tests
 ```
 
-**Ràng buộc quan trọng nhất của codebase này:** fact ở Layer 2 phải là **hàm thuần của nội dung
-một file** — không được đọc file khác, không được tra index. Đó là điều kiện để cache đúng.
-Mọi kết luận cần thông tin liên file phải nằm ở Layer 4 (`linker.ts`). Khi đổi logic extractor,
-**bắt buộc tăng `PARSER_VERSION`** trong `src/index/schema.ts`, nếu không index cũ sẽ bị dùng lại
-và cho kết quả sai.
+**The most important constraint of this codebase:** a Layer 2 fact must be a **pure function of
+the content of a single file** — it must not read another file, and must not query the index.
+That's the condition that makes caching correct. Any conclusion that needs cross-file information
+must live in Layer 4 (`linker.ts`). Whenever extractor logic changes, you **must bump
+`PARSER_VERSION`** in `src/index/schema.ts` — otherwise the old index gets reused and produces
+wrong results.
 
-## Test
+## Tests
 
 ```bash
 npm test
 ```
 
-Chạy test core và test LSP qua stdio (khởi động server thật). Các test trên repo `smart-city` tự
-bỏ qua nếu máy không có repo đó. `spans.test.js` giữ bất biến "mọi span trỏ đúng vào chữ nó đại
-diện" — xem [phụ lục I](docs/kien-truc.md).
+Runs the core tests and the LSP tests over stdio (spinning up a real server). Tests against the
+`smart-city` repo skip themselves automatically if that repo isn't present on the machine.
+`spans.test.js` enforces the invariant "every span points exactly at the text it represents" — see
+[Appendix I](docs/architecture.md).
 
-## Log hiện rõ object
+## Logged objects, shown as objects
 
-Giá trị object/mảng trong log inline hiện ra **thật**, không còn `[Object]`: extension hỏi app đang chạy các
-thuộc tính của giá trị đó (`Runtime.getProperties`), tối đa 1 lần mỗi dòng mỗi 300 ms. Hover cho bản trải ra
-nhiều dòng; bấm **Open as JSON** (trong hover, cạnh **Inspect** và **Copy**) mở một tab JSON chỉ đọc với toàn bộ giá trị — gập/mở, tìm kiếm, copy đều là
-sẵn có của VS Code. Đo trên Chrome thật: app log 33 lần/giây chạy **y như khi tắt** tính năng này.
-Tắt bằng `ejsng.runtimeLog.expandValues`.
+Objects and arrays in inline logs read as themselves instead of `[Object]`: the extension asks the running app
+for the value's properties (`Runtime.getProperties`), at most once per line per 300 ms. The hover lays the value
+out; **Open as JSON** (in the hover, next to **Inspect** and **Copy**) opens a read-only JSON tab with the whole thing, where folding, search and copy are VS
+Code's own. Measured against a real Chrome page logging 33 times a second: the app runs **exactly as fast** as
+with the feature off. Turn it off with `ejsng.runtimeLog.expandValues`.
 
-**Runtime Values** — một tab ở bottom panel, cạnh Terminal — đọc như cửa sổ debugger: mọi dòng đã log, mới nhất lên
-đầu, và giá trị của lần chạy đang chọn dạng cây (`name = {Type} preview`), tô màu theo kiểu, mở/đóng bằng chuột hoặc
-phím mũi tên. Bấm **Inspect** trong hover để mở tab đúng dòng đó.
+**Runtime Values** — a tab in the bottom panel, next to Terminal — reads like a debugger: every line that logged,
+newest first, and the selected hit's value as a tree (`name = {Type} preview`), colored by kind, expandable with the
+mouse or the arrow keys. **Inspect** in the hover opens it on that line.
 
-### Ba cách đặt logpoint, không cách nào phải gõ
+### Three ways to set a logpoint, none of them typing
 
-| Cách | Dùng khi |
+| Way | When |
 |---|---|
-| **CodeLens** trên dòng gán | đang đọc controller, muốn xem biến vừa được gán |
-| **Chuột phải → EJS/NG: Log This at Runtime** | mọi dòng, mọi biểu thức: biến cục bộ, tham số, `res.data` |
-| **`Cmd+Alt+L`** (`Ctrl+Alt+L` trên Windows/Linux) | như trên, khi đã quen tay |
+| The **CodeLens** above an assignment | reading a controller, after the value it just assigned |
+| **Right-click → EJS/NG: Log This at Runtime** | any line, any expression: a local, a parameter, `res.data` |
+| **`Cmd+Alt+L`** (`Ctrl+Alt+L` on Windows/Linux) | the same, once it's in your fingers |
 
-Cả ba tạo ra **cùng một** logpoint: nội dung `rows = {$scope.rows}`, đặt ngay sau câu gán (để thấy giá trị mới)
-hoặc ở đầu dòng (để thấy giá trị dòng sắp dùng). Bấm lại chỗ cũ thì gỡ. Extension **từ chối kèm lý do** khi bạn
-trỏ vào một lời gọi hàm (log nó sẽ gọi hàm thật mỗi lần dòng chạy) hay `this` trong callback (không còn là
-controller).
+All three produce the **same** logpoint: the message `rows = {$scope.rows}`, placed right after the assignment
+(so the value is the new one) or at the start of the line (so it is the value the line is about to use). Doing it
+again in the same place removes it. The extension **refuses, with a reason**, to log a function call (which would
+run on every hit) or `this` inside a callback (which is no longer the controller).
 
-## Thử nhanh "Log at runtime"
+## Trying "Log at runtime"
 
-[`examples/log-at-runtime/`](examples/log-at-runtime/README.md) là một controller chạy được bằng `node --inspect`
-(không cần trình duyệt): hover một biến index không suy ra được kiểu → bấm **Log at runtime** → nối runtime →
-hover lại thấy kiểu thật. Bảy bước trong README của thư mục đó.
+[`examples/log-at-runtime/`](examples/log-at-runtime/README.md) is a controller that runs under plain
+`node --inspect` (no browser needed): hover a variable the index can't type, click **Log at runtime**, connect
+the runtime, hover again to see the real type. Seven steps in that folder's README.

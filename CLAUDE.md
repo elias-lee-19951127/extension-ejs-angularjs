@@ -13,11 +13,14 @@ Vietnamese is welcome only as a secondary aid for readability — e.g. a short V
 in parentheses next to a tricky English term, never as the primary language of a comment or
 string.
 
-**Exception — long-form project docs** (`README.md`, `CONTEXT.md`, `docs/kien-truc.md`): these
+**Exception — long-form project docs** (`CONTEXT.md`, `docs/kien-truc.md`): these
 keep their existing Vietnamese version as the primary/canonical one (richer historical detail,
 written for this project's Vietnamese-speaking maintainer). Add an English counterpart alongside
-instead of replacing them — `README.en.md`, `CONTEXT.en.md`, `docs/architecture.md` (English
+instead of replacing them — `CONTEXT.en.md`, `docs/architecture.md` (English
 translation of `docs/kien-truc.md`). Keep both in sync when one changes meaningfully.
+
+**README is the reverse:** `README.md` is English (it is what visitors see first on GitHub), and
+`README.vi.md` is the Vietnamese version, linked from the top of `README.md`. Keep both in sync.
 
 This policy governs artifacts written INTO the repository. It does not change what language
 Claude uses when talking with the user in chat — follow the user's own language there as usual.
